@@ -13,6 +13,9 @@ export default async function ConfigPage() {
       process.env.SUPABASE_SERVICE_ROLE_KEY ? "definida" : "(no definida)",
     ],
     ["SCRAPERAPI_KEY", process.env.SCRAPERAPI_KEY ? "definida" : "(no definida)"],
+    ["EMAIL_PROVIDER", process.env.EMAIL_PROVIDER || "(no definido)"],
+    ["EMAIL_FROM", process.env.EMAIL_FROM || "(no definido)"],
+    ["EMAIL_API_KEY", process.env.EMAIL_API_KEY ? "definida" : "(no definida)"],
     ["CHROME_PATH", process.env.CHROME_PATH || "(auto)"],
     ["PORT", process.env.PORT || "3000"],
   ];

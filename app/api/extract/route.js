@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { extractProduct } from "@/lib/scraper";
 import { saveProduct } from "@/lib/db";
 
+const ALIEXPRESS_RE = /^https?:\/\/([a-z0-9-]+\.)*aliexpress\.(com|ru|es|de|fr|it|pt|co\.uk|in|br|id|mx|jp|kr)\//i;
+
 export async function POST(request) {
   let body;
   try {
@@ -11,8 +13,14 @@ export async function POST(request) {
   }
 
   const url = (body?.url || "").trim();
-  if (!/^https?:\/\/.+/i.test(url)) {
-    return NextResponse.json({ error: "URL invalida" }, { status: 400 });
+  if (!ALIEXPRESS_RE.test(url)) {
+    return NextResponse.json(
+      { error: "URL invalida. Solo se aceptan enlaces de AliExpress." },
+      { status: 400 }
+    );
+  }
+  if (url.length > 2048) {
+    return NextResponse.json({ error: "URL demasiado larga" }, { status: 400 });
   }
 
   try {

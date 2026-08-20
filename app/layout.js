@@ -1,9 +1,9 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "AliProbe - Analizador de productos AliExpress",
+  title: "AliProbe - Encuentra el fabricante de cualquier producto de AliExpress",
   description:
-    "Extrae la ficha del producto, el precio y la informacion de conformidad del fabricante de cualquier enlace de AliExpress.",
+    "Pega un enlace de AliExpress y AliProbe encuentra el producto, el fabricante y te prepara el contacto con un mensaje personalizado.",
 };
 
 export default function RootLayout({ children }) {
