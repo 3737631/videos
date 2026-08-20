@@ -3,17 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AliProbe - Analizador de productos AliExpress</title>
+    <title>AliProbe - Encuentra el fabricante de cualquier producto AliExpress</title>
     <meta
       name="description"
-      content="Extrae la ficha, el precio y la informacion de conformidad del fabricante de cualquier producto de AliExpress."
+      content="Pega un enlace de AliExpress, pulsa ANALIZAR y AliProbe encuentra el producto, identifica el fabricante real y te prepara el contacto con vídeo."
     />
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
       body {
         font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-        background: radial-gradient(1200px 600px at 50% -100px, #1e3a8a33, transparent),
-          #0b0d12;
+        background: radial-gradient(1200px 600px at 50% -100px, #1e3a8a33, transparent), #0b0d12;
         color: #e7e9ee;
         min-height: 100vh;
         display: flex;
@@ -22,9 +21,9 @@
         justify-content: center;
         padding: 2rem 1rem;
       }
-      main { max-width: 640px; text-align: center; }
+      main { max-width: 560px; width: 100%; text-align: center; }
       .logo {
-        font-size: 2.6rem;
+        font-size: 2.4rem;
         font-weight: 800;
         letter-spacing: -0.03em;
         background: linear-gradient(90deg, #60a5fa, #22d3ee);
@@ -32,18 +31,42 @@
         background-clip: text;
         color: transparent;
       }
-      p.sub { color: #9ca3af; margin-top: 0.5rem; }
-      .cta {
-        display: inline-block;
+      p.sub { color: #9ca3af; margin-top: 0.6rem; font-size: 0.95rem; }
+      form {
         margin-top: 2rem;
-        padding: 0.8rem 1.6rem;
+        display: flex;
+        gap: 0.6rem;
+        flex-direction: column;
+      }
+      input[type="url"] {
+        width: 100%;
+        padding: 0.9rem 1rem;
         border-radius: 0.75rem;
+        border: 1px solid #1f2937;
+        background: #111827cc;
+        color: #e7e9ee;
+        font-size: 1rem;
+        outline: none;
+      }
+      input[type="url"]:focus { border-color: #2563eb; }
+      input[type="url"]::placeholder { color: #6b7280; }
+      button {
+        padding: 0.9rem 1rem;
+        border-radius: 0.75rem;
+        border: 0;
         background: #2563eb;
         color: #fff;
-        font-weight: 600;
-        text-decoration: none;
+        font-size: 1rem;
+        font-weight: 700;
+        cursor: pointer;
       }
-      .cta:hover { background: #1d4ed8; }
+      button:hover { background: #1d4ed8; }
+      button:disabled { background: #1f2937; cursor: wait; }
+      .note {
+        margin-top: 1rem;
+        font-size: 0.8rem;
+        color: #6b7280;
+      }
       .card {
         margin-top: 2rem;
         border: 1px solid #1f2937;
@@ -52,7 +75,7 @@
         padding: 1.5rem;
         text-align: left;
       }
-      .card h2 { font-size: 1.1rem; margin-bottom: 0.75rem; }
+      .card h2 { font-size: 1.05rem; margin-bottom: 0.75rem; }
       .card ul { list-style: none; }
       .card li {
         padding: 0.4rem 0;
@@ -75,30 +98,54 @@
   <body>
     <main>
       <div class="logo">AliProbe</div>
-      <p class="sub">
-        Ficha, precio y conformidad del fabricante de cualquier producto AliExpress
-      </p>
+      <p class="sub">Encuentra el fabricante real y contacta con vídeo</p>
 
-      <a class="cta" href="https://supplements-strategies-releases-decreased.trycloudflare.com">
-        Abrir la app en vivo
-      </a>
+      <form id="analizador">
+        <input
+          type="url"
+          id="url"
+          placeholder="Pega el enlace de AliExpress"
+          required
+          pattern="https?://(www\.|es\.|m\.|ru\.|de\.|fr\.|it\.)?aliexpress\.(com|ru|es)/.+"
+          title="Introduce un enlace válido de AliExpress"
+        />
+        <button type="submit" id="btn">ANALIZAR</button>
+      </form>
+      <p class="note" id="note">La app abrirá en una ventana nueva con el análisis del producto.</p>
 
       <div class="card">
-        <h2>Sobre el proyecto</h2>
+        <h2>Cómo funciona</h2>
         <ul>
-          <li>Next.js 15 + Tailwind CSS</li>
-          <li>Puppeteer con Chromium: captura la API interna <code>mtop.aliexpress.pdp.pc.query</code></li>
-          <li>Extrae titulo, precio, imagenes, vendedor, atributos y conformidad del fabricante</li>
-          <li>Base de datos SQLite local (<code>data/app.db</code>) o Supabase en remoto</li>
-          <li>Desplegable con Dockerfile en cualquier hosting (Railway, Render, Fly.io)</li>
+          <li><b>1.</b> Pega un enlace de AliExpress y pulsa ANALIZAR</li>
+          <li><b>2.</b> AliProbe extrae el producto y busca al fabricante real</li>
+          <li><b>3.</b> Prepara tu mensaje personalizado y adjunta tu vídeo</li>
+          <li><b>4.</b> Envía o copia el email de contacto al fabricante</li>
         </ul>
       </div>
 
       <footer>
-        Codigo fuente en
+        Código en
         <a href="https://github.com/3737631/videos">github.com/3737631/videos</a>
-        &middot; App en vivo via tunel de Cloudflare
+        &middot; AliProbe
       </footer>
     </main>
+    <script>
+      var APP = "https://matrix-radios-adjustments-pendant.trycloudflare.com";
+      document.getElementById("analizador").addEventListener("submit", function (e) {
+        e.preventDefault();
+        var url = document.getElementById("url").value.trim();
+        if (!url) return;
+        var btn = document.getElementById("btn");
+        btn.disabled = true;
+        btn.textContent = "ANALIZANDO...";
+        document.getElementById("note").textContent =
+          "Abriendo AliProbe con tu enlace...";
+        window.open(APP + "/?url=" + encodeURIComponent(url), "_blank");
+        setTimeout(function () {
+          btn.disabled = false;
+          btn.textContent = "ANALIZAR";
+        }, 3000);
+      });
+    </script>
   </body>
 </html>

@@ -43,17 +43,23 @@ export default function Home() {
   const videoInput = useRef(null);
 
   useEffect(() => {
-    const id = new URLSearchParams(window.location.search).get("id");
-    if (!id) return;
-    fetch(`/api/history/${id}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => data && setProduct(data))
-      .catch(() => {});
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get("id");
+    if (id) {
+      fetch(`/api/history/${id}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => data && setProduct(data))
+        .catch(() => {});
+      return;
+    }
+    const u = params.get("url");
+    if (u) {
+      setUrl(u);
+      analyze(u);
+    }
   }, []);
 
-  async function handleAnalyze(e) {
-    e.preventDefault();
-    if (!url.trim()) return;
+  async function analyze(targetUrl) {
     setLoading(true);
     setError("");
     setProduct(null);
@@ -63,7 +69,7 @@ export default function Home() {
       const res = await fetch("/api/extract", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url: targetUrl }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Error al analizar");
@@ -73,6 +79,12 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleAnalyze(e) {
+    e.preventDefault();
+    if (!url.trim()) return;
+    analyze(url.trim());
   }
 
   function resetVideo() {
