@@ -211,13 +211,81 @@
           state.sendResult = null;
           renderProduct();
         } catch (err) {
-          document.getElementById("result").innerHTML =
-            '<div class="error">' + esc(err.message) + "</div>";
-          document.getElementById("note").textContent = "Inténtalo de nuevo con otro enlace";
+          var html = '<div class="error">' + esc(err.message) + "</div>";
+          html +=
+            '<div class="card"><h2>¿No encuentras el producto?</h2>' +
+            '<p style="font-size:0.85rem;color:#9ca3af;margin-bottom:0.5rem;">AliExpress a veces bloquea el análisis. Puedes crear el producto manualmente y seguir igualmente: subir tu vídeo y preparar el contacto.</p>' +
+            '<button type="button" class="btn primary" id="btn-manual">CREAR MANUALMENTE</button></div>';
+          document.getElementById("result").innerHTML = html;
+          document.getElementById("note").textContent =
+            "Análisis falló. Puedes crear el producto manualmente.";
+          document.getElementById("btn-manual").addEventListener("click", function () {
+            renderManual(url);
+          });
         } finally {
           btn.disabled = false;
           btn.innerHTML = "ANALIZAR";
         }
+      }
+
+      function renderManual(url) {
+        var html = "";
+        html += '<div class="card"><h2>Crear producto manualmente</h2>';
+        html += '<label>Enlace del producto</label><input type="text" id="m-url" value="' + esc(url) + '" />';
+        html += '<label>Título del producto</label><input type="text" id="m-title" placeholder="Ej: Router WiFi 4G" />';
+        html += '<label>Marca</label><input type="text" id="m-marca" placeholder="Ej: LB-LINK" />';
+        html += '<label>Modelo</label><input type="text" id="m-modelo" placeholder="Ej: BL-B4G" />';
+        html += '<label>Vendedor (tienda AliExpress)</label><input type="text" id="m-seller" placeholder="Ej: LB-LINK Official Store" />';
+        html += '<label>Fabricante</label><input type="text" id="m-fab" placeholder="Ej: LB-LINK Technology Co., Ltd" />';
+        html += '<label>Email del fabricante</label><input type="email" id="m-email" placeholder="contacto@fabricante.com" />';
+        html += '<label>País del fabricante</label><input type="text" id="m-pais" placeholder="Ej: China" />';
+        html += '<p style="margin-top:0.9rem;"><button type="button" class="btn green" id="m-save">GUARDAR Y CONTACTAR</button></p>';
+        html += '<p style="margin-top:0.5rem;"><button type="button" class="link-btn" id="m-cancel">← Volver</button></p>';
+        html += "</div>";
+
+        document.getElementById("result").innerHTML = html;
+        document.getElementById("m-cancel").addEventListener("click", renderEmpty);
+
+        document.getElementById("m-save").addEventListener("click", async function () {
+          var data = {
+            url: document.getElementById("m-url").value.trim(),
+            title: document.getElementById("m-title").value.trim(),
+            marca: document.getElementById("m-marca").value.trim(),
+            modelo: document.getElementById("m-modelo").value.trim(),
+            seller: document.getElementById("m-seller").value.trim(),
+            fabricante: document.getElementById("m-fab").value.trim(),
+            fabricante_email: document.getElementById("m-email").value.trim(),
+            fabricante_pais: document.getElementById("m-pais").value.trim(),
+          };
+          if (!data.url || !data.title) {
+            document.getElementById("m-save").disabled = false;
+            return alert("El enlace y el título son obligatorios");
+          }
+          var btn = document.getElementById("m-save");
+          btn.disabled = true;
+          btn.textContent = "GUARDANDO...";
+          try {
+            var saved = await api("/api/products", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(data),
+            });
+            state.product = saved;
+            state.prepared = null;
+            state.sendResult = null;
+            renderProduct();
+          } catch (err) {
+            btn.disabled = false;
+            btn.textContent = "GUARDAR Y CONTACTAR";
+            document.getElementById("result").innerHTML +=
+              '<div class="error">' + esc(err.message) + "</div>";
+          }
+        });
+      }
+
+      function renderEmpty() {
+        document.getElementById("result").innerHTML = "";
+        document.getElementById("note").textContent = "Pega un enlace de AliExpress y pulsa ANALIZAR";
       }
 
       function renderProduct() {
