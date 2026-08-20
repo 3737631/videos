@@ -3,6 +3,7 @@ node_modules
 out
 data/*.db
 data/*.db-*
+data/uploads/
 .env
 .env.local
 .env.*.local

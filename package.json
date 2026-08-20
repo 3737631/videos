@@ -1,23 +1,28 @@
 {
-  "name": "videos-app",
+  "name": "clipcraft",
   "version": "1.0.0",
   "private": true,
-  "description": "Analizador de productos AliExpress: extrae fichas, precio e informacion de conformidad del fabricante con Puppeteer + API interna mtop.",
+  "description": "ClipCraft - App completa de edición y generación automática de vídeos verticales con IA",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "lint": "next lint"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.112.3",
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
     "next": "^15.3.4",
-    "puppeteer-core": "^24.10.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.11",
+    "@types/node": "^22.13.10",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
     "postcss": "^8.5.3",
-    "tailwindcss": "^4.1.11"
+    "tailwindcss": "^4.1.11",
+    "typescript": "^5.8.2"
   }
 }
