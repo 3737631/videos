@@ -15,29 +15,21 @@
         background: radial-gradient(1200px 600px at 50% -100px, #1e3a8a33, transparent), #0b0d12;
         color: #e7e9ee;
         min-height: 100vh;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        padding: 2rem 1rem;
       }
-      main { max-width: 560px; width: 100%; text-align: center; }
+      main { max-width: 620px; margin: 0 auto; padding: 2.5rem 1rem 3rem; }
       .logo {
-        font-size: 2.4rem;
+        font-size: 2.2rem;
         font-weight: 800;
         letter-spacing: -0.03em;
         background: linear-gradient(90deg, #60a5fa, #22d3ee);
         -webkit-background-clip: text;
         background-clip: text;
         color: transparent;
+        text-align: center;
       }
-      p.sub { color: #9ca3af; margin-top: 0.6rem; font-size: 0.95rem; }
-      form {
-        margin-top: 2rem;
-        display: flex;
-        gap: 0.6rem;
-        flex-direction: column;
-      }
+      p.sub { color: #9ca3af; text-align: center; margin-top: 0.4rem; font-size: 0.95rem; }
+
+      form.analizar { margin-top: 1.8rem; display: flex; gap: 0.6rem; flex-direction: column; }
       input[type="url"] {
         width: 100%;
         padding: 0.9rem 1rem;
@@ -50,49 +42,95 @@
       }
       input[type="url"]:focus { border-color: #2563eb; }
       input[type="url"]::placeholder { color: #6b7280; }
-      button {
+      button.btn {
         padding: 0.9rem 1rem;
         border-radius: 0.75rem;
         border: 0;
-        background: #2563eb;
-        color: #fff;
         font-size: 1rem;
         font-weight: 700;
         cursor: pointer;
+        width: 100%;
       }
-      button:hover { background: #1d4ed8; }
-      button:disabled { background: #1f2937; cursor: wait; }
-      .note {
-        margin-top: 1rem;
-        font-size: 0.8rem;
-        color: #6b7280;
-      }
+      button.primary { background: #2563eb; color: #fff; }
+      button.primary:hover { background: #1d4ed8; }
+      button.green { background: #059669; color: #fff; }
+      button.green:hover { background: #047857; }
+      button:disabled { background: #1f2937; color: #6b7280; cursor: wait; }
+
+      .note { margin-top: 1rem; font-size: 0.85rem; color: #6b7280; text-align: center; }
+
       .card {
-        margin-top: 2rem;
+        margin-top: 1.2rem;
         border: 1px solid #1f2937;
         background: #111827cc;
         border-radius: 1rem;
-        padding: 1.5rem;
-        text-align: left;
+        padding: 1.2rem;
       }
-      .card h2 { font-size: 1.05rem; margin-bottom: 0.75rem; }
-      .card ul { list-style: none; }
-      .card li {
-        padding: 0.4rem 0;
-        border-bottom: 1px solid #1f2937;
-        font-size: 0.9rem;
-        color: #d1d5db;
+      .card h2 { font-size: 0.8rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #9ca3af; margin-bottom: 0.7rem; }
+      .card.danger { border-color: #7f1d1d; }
+      .card h2.green { color: #34d399; }
+
+      .product-head { display: flex; gap: 0.9rem; }
+      .product-head img { width: 84px; height: 84px; object-fit: cover; border-radius: 0.6rem; flex-shrink: 0; }
+      .product-head h3 { font-size: 1rem; line-height: 1.35; color: #f3f4f6; }
+      .price { display: inline-block; margin-top: 0.4rem; background: #064e3b; color: #34d399; font-weight: 600; padding: 0.15rem 0.5rem; border-radius: 0.4rem; font-size: 0.9rem; }
+
+      dl.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 1rem; margin-top: 0.9rem; font-size: 0.85rem; }
+      dl.grid div { display: flex; gap: 0.5rem; }
+      dt { color: #6b7280; flex-shrink: 0; }
+      dd { color: #d1d5db; }
+
+      .confianza { display: inline-block; padding: 0.15rem 0.55rem; border-radius: 0.4rem; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; }
+      .alta { background: #064e3b; color: #34d399; }
+      .media { background: #78350f; color: #fbbf24; }
+      .baja { background: #7c2d12; color: #fdba74; }
+      .no-verificado { background: #7f1d1d; color: #fca5a5; }
+
+      label { display: block; font-size: 0.85rem; color: #9ca3af; margin-top: 0.8rem; }
+      input[type="email"], input[type="text"], textarea {
+        width: 100%;
+        margin-top: 0.3rem;
+        padding: 0.7rem 0.85rem;
+        border-radius: 0.6rem;
+        border: 1px solid #1f2937;
+        background: #0b0d12;
+        color: #e7e9ee;
+        font-size: 0.95rem;
+        outline: none;
+        font-family: inherit;
       }
-      .card li:last-child { border-bottom: 0; }
-      code {
-        background: #1f2937;
-        padding: 0.15rem 0.4rem;
-        border-radius: 0.375rem;
+      input:focus, textarea:focus { border-color: #059669; }
+      textarea { min-height: 130px; resize: vertical; }
+
+      .link-btn { background: none; border: 1px solid #1f2937; color: #60a5fa; padding: 0.55rem 0.85rem; border-radius: 0.6rem; font-size: 0.85rem; cursor: pointer; }
+      .link-btn:hover { background: #1f2937; }
+
+      .video-box { margin-top: 0.6rem; }
+      .video-drop {
+        margin-top: 0.4rem;
+        border: 1px dashed #374151;
+        border-radius: 0.6rem;
+        padding: 1rem;
+        text-align: center;
+        color: #9ca3af;
         font-size: 0.85rem;
-        color: #93c5fd;
+        cursor: pointer;
       }
-      footer { margin-top: 3rem; font-size: 0.8rem; color: #6b7280; }
+      .video-drop:hover { border-color: #6b7280; }
+      .video-box video { max-height: 220px; width: 100%; border-radius: 0.6rem; background: #000; margin-top: 0.4rem; }
+
+      .error { margin-top: 0.8rem; border: 1px solid #7f1d1d; background: #450a0a80; color: #fca5a5; padding: 0.7rem 0.9rem; border-radius: 0.6rem; font-size: 0.85rem; }
+      .ok { margin-top: 0.8rem; border: 1px solid #065f46; background: #022c2280; color: #6ee7b7; padding: 0.7rem 0.9rem; border-radius: 0.6rem; font-size: 0.85rem; }
+      .warn { margin-top: 0.8rem; border: 1px solid #78350f; background: #451a0380; color: #fcd34d; padding: 0.7rem 0.9rem; border-radius: 0.6rem; font-size: 0.85rem; }
+
+      .row { display: flex; gap: 0.6rem; margin-top: 1rem; }
+      .row button { flex: 1; }
+
+      footer { margin-top: 2.5rem; text-align: center; font-size: 0.8rem; color: #6b7280; }
       footer a { color: #60a5fa; }
+      .hidden { display: none; }
+      .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #374151; border-top-color: #60a5fa; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -2px; margin-right: 6px; }
+      @keyframes spin { to { transform: rotate(360deg); } }
     </style>
   </head>
   <body>
@@ -100,52 +138,330 @@
       <div class="logo">AliProbe</div>
       <p class="sub">Encuentra el fabricante real y contacta con vídeo</p>
 
-      <form id="analizador">
-        <input
-          type="url"
-          id="url"
-          placeholder="Pega el enlace de AliExpress"
-          required
-          pattern="https?://(www\.|es\.|m\.|ru\.|de\.|fr\.|it\.)?aliexpress\.(com|ru|es)/.+"
-          title="Introduce un enlace válido de AliExpress"
-        />
-        <button type="submit" id="btn">ANALIZAR</button>
+      <form class="analizar" id="form">
+        <input type="url" id="url" placeholder="Pega el enlace de AliExpress" required
+          pattern="https?://[a-z0-9-.]*aliexpress\.(com|ru|es|de|fr|it|pt|co\.uk|in|br|id|mx|jp|kr)/.+"
+          title="Introduce un enlace válido de AliExpress" />
+        <button type="submit" class="btn primary" id="btn">ANALIZAR</button>
       </form>
-      <p class="note" id="note">La app abrirá en una ventana nueva con el análisis del producto.</p>
+      <p class="note" id="note">Pega un enlace de AliExpress y pulsa ANALIZAR</p>
 
-      <div class="card">
-        <h2>Cómo funciona</h2>
-        <ul>
-          <li><b>1.</b> Pega un enlace de AliExpress y pulsa ANALIZAR</li>
-          <li><b>2.</b> AliProbe extrae el producto y busca al fabricante real</li>
-          <li><b>3.</b> Prepara tu mensaje personalizado y adjunta tu vídeo</li>
-          <li><b>4.</b> Envía o copia el email de contacto al fabricante</li>
-        </ul>
-      </div>
+      <div id="result"></div>
 
       <footer>
-        Código en
-        <a href="https://github.com/3737631/videos">github.com/3737631/videos</a>
-        &middot; AliProbe
+        AliProbe · Código en
+        <a href="https://github.com/3737631/videos" target="_blank" rel="noopener">github.com/3737631/videos</a>
       </footer>
     </main>
+
     <script>
       var APP = "https://matrix-radios-adjustments-pendant.trycloudflare.com";
-      document.getElementById("analizador").addEventListener("submit", function (e) {
+      var MAX_VIDEO = 25 * 1024 * 1024;
+      var VIDEO_TYPES = ["video/mp4", "video/quicktime", "video/webm"];
+
+      var state = {
+        product: null,
+        emailTo: "",
+        subject: "",
+        message: "",
+        messageIndex: 0,
+        variants: [],
+        video: null,
+        videoPreview: null,
+        videoError: "",
+        prepared: null,
+        sendResult: null,
+        sending: false,
+      };
+
+      function esc(s) {
+        return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      }
+
+      document.getElementById("form").addEventListener("submit", async function (e) {
         e.preventDefault();
         var url = document.getElementById("url").value.trim();
         if (!url) return;
+        await analyze(url);
+      });
+
+      async function api(path, opts) {
+        var res = await fetch(APP + path, opts);
+        var text = await res.text();
+        var data;
+        try { data = JSON.parse(text); } catch { data = null; }
+        if (!res.ok) throw new Error((data && data.error) || "Error del servidor (" + res.status + ")");
+        return data;
+      }
+
+      async function analyze(url) {
         var btn = document.getElementById("btn");
         btn.disabled = true;
-        btn.textContent = "ANALIZANDO...";
-        document.getElementById("note").textContent =
-          "Abriendo AliProbe con tu enlace...";
-        window.open(APP + "/?url=" + encodeURIComponent(url), "_blank");
-        setTimeout(function () {
+        btn.innerHTML = '<span class="spinner"></span>ANALIZANDO...';
+        document.getElementById("note").textContent = "Buscando el producto y al fabricante...";
+        document.getElementById("result").innerHTML = "";
+        try {
+          var data = await api("/api/extract", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: url }),
+          });
+          state.product = data;
+          state.prepared = null;
+          state.sendResult = null;
+          renderProduct();
+        } catch (err) {
+          document.getElementById("result").innerHTML =
+            '<div class="error">' + esc(err.message) + "</div>";
+          document.getElementById("note").textContent = "Inténtalo de nuevo con otro enlace";
+        } finally {
           btn.disabled = false;
-          btn.textContent = "ANALIZAR";
-        }, 3000);
-      });
+          btn.innerHTML = "ANALIZAR";
+        }
+      }
+
+      function renderProduct() {
+        var p = state.product;
+        var confianza = p.confianza === "no-verificado" || !p.fabricante ? "no-verificado" : p.confianza;
+        var noVerif = confianza === "no-verificado";
+
+        var conformidad = "";
+        if (p.conformity && p.conformity.length) {
+          conformidad = p.conformity.slice(0, 3).map(function (c) {
+            return "<div><dt>Conformidad</dt><dd>" + esc(c.name) + ": " + esc(c.value) + "</dd></div>";
+          }).join("");
+        }
+
+        var html = "";
+        html += '<div class="card"><h2>Producto</h2><div class="product-head">';
+        if (p.image) html += '<img src="' + esc(p.image) + '" alt="" />';
+        html += '<div><h3>' + esc(p.title) + "</h3>";
+        if (p.price) html += '<span class="price">' + esc(p.currency ? p.currency + " " : "") + esc(p.price) + "</span>";
+        if (p.seller) html += '<div style="color:#6b7280;font-size:0.8rem;margin-top:0.3rem;">' + esc(p.seller) + "</div>";
+        html += "</div></div>";
+        html += '<dl class="grid">';
+        if (p.marca) html += "<div><dt>Marca</dt><dd>" + esc(p.marca) + "</dd></div>";
+        if (p.modelo) html += "<div><dt>Modelo</dt><dd>" + esc(p.modelo) + "</dd></div>";
+        if (p.product_id) html += "<div><dt>SKU / ID</dt><dd>" + esc(p.product_id) + "</dd></div>";
+        html += conformidad;
+        html += "</dl></div>";
+
+        html += '<div class="card' + (noVerif ? " danger" : "") + '"><h2>Fabricante</h2>';
+        html += '<span class="confianza ' + esc(confianza) + '">' + esc(confianza.toUpperCase()) + "</span>";
+        if (noVerif) {
+          html += '<p style="margin-top:0.6rem;font-size:0.9rem;color:#9ca3af;">Fabricante no verificado. Esta tienda vende este producto pero no hay datos confirmados del fabricante en la página.</p>';
+        } else {
+          html += "<dl class='grid'>";
+          if (p.fabricante) html += "<div><dt>Nombre</dt><dd>" + esc(p.fabricante) + "</dd></div>";
+          if (p.fabricante_email) html += "<div><dt>Email</dt><dd style='color:#60a5fa;'>" + esc(p.fabricante_email) + "</dd></div>";
+          if (p.fabricante_direccion) html += "<div><dt>Dirección</dt><dd>" + esc(p.fabricante_direccion) + "</dd></div>";
+          if (p.fabricante_pais) html += "<div><dt>País</dt><dd>" + esc(p.fabricante_pais) + "</dd></div>";
+          html += "</dl>";
+        }
+        html += '<p style="margin-top:0.7rem;font-size:0.75rem;color:#6b7280;">Fuente: ' + esc(p.source) + "</p>";
+        html += '<button class="btn green" style="margin-top:0.8rem;" id="btn-contact">CONTACTAR</button>';
+        html += "</div>";
+
+        document.getElementById("result").innerHTML = html;
+        document.getElementById("note").textContent = "Producto encontrado. Pulsa CONTACTAR para preparar el mensaje.";
+        document.getElementById("btn-contact").addEventListener("click", openContact);
+      }
+
+      async function openContact() {
+        var p = state.product;
+        var target = state.emailTo || p.fabricante_email || "";
+        state.emailTo = target;
+        try {
+          var data = await api("/api/messages/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ productId: p.id }),
+          });
+          state.subject = data.subject;
+          state.variants = data.variants;
+          state.messageIndex = 0;
+          state.message = data.variants[0];
+        } catch (err) {
+          state.subject = "";
+          state.message = "";
+          state.variants = [];
+        }
+        renderContact();
+      }
+
+      function regenerate() {
+        if (!state.variants.length) return;
+        state.messageIndex = (state.messageIndex + 1) % state.variants.length;
+        state.message = state.variants[state.messageIndex];
+        renderContact();
+      }
+
+      function onVideoChange(file) {
+        state.videoError = "";
+        if (!file) return;
+        if (!VIDEO_TYPES.includes(file.type)) {
+          state.videoError = "Formato de vídeo no compatible.";
+          return renderContact();
+        }
+        if (file.size > MAX_VIDEO) {
+          state.videoError = "El vídeo es demasiado grande.";
+          return renderContact();
+        }
+        if (state.videoPreview) URL.revokeObjectURL(state.videoPreview);
+        state.video = file;
+        state.videoPreview = URL.createObjectURL(file);
+        renderContact();
+      }
+
+      function resetVideo() {
+        if (state.videoPreview) URL.revokeObjectURL(state.videoPreview);
+        state.video = null;
+        state.videoPreview = null;
+        state.videoError = "";
+        renderContact();
+      }
+
+      function renderContact() {
+        var c = state;
+        var html = "";
+        html += '<div class="card"><h2 class="green">Contactar con el fabricante</h2>';
+
+        html += '<label>Para</label><input type="email" id="c-email" value="' + esc(c.emailTo) + '" placeholder="email@fabricante.com" />';
+        html += '<label>Asunto</label><input type="text" id="c-subject" value="' + esc(c.subject) + '" />';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;"><label style="margin-top:0.8rem;">Mensaje</label>' +
+          '<button type="button" class="link-btn" onclick="regenerate()">Regenerar mensaje</button></div>';
+        html += '<textarea id="c-message">' + esc(c.message) + "</textarea>";
+
+        html += '<label>Vídeo del producto</label>';
+        if (c.videoPreview) {
+          html += '<div class="video-box"><video src="' + esc(c.videoPreview) + '" controls></video>' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:0.4rem;font-size:0.8rem;color:#9ca3af;">' +
+            '<span>' + esc(c.video.name) + " · " + Math.round(c.video.size / 1024 / 1024) + " MB</span>" +
+            '<button type="button" class="link-btn" style="color:#f87171;" onclick="resetVideo()">Quitar</button></div></div>';
+        } else {
+          html += '<div class="video-drop" id="vdrop">Subir vídeo (MP4, MOV, WEBM · máx. 25 MB)</div>';
+        }
+        if (c.videoError) html += '<div class="error">' + esc(c.videoError) + "</div>";
+        html += '<input type="file" id="vinput" accept="video/mp4,video/quicktime,video/webm" class="hidden" />';
+
+        if (c.sendResult && !c.sendResult.ok) html += '<div class="error">' + esc(c.sendResult.error) + "</div>";
+        if (c.sendResult && c.sendResult.code === "EMAIL_NOT_CONFIGURED") {
+          html += '<div class="warn">Email no configurado. Puedes copiar el mensaje o abrirlo en tu correo.' +
+            '<div style="display:flex;gap:0.5rem;margin-top:0.6rem;">' +
+            '<button type="button" class="link-btn" id="copy-btn">Copiar mensaje</button>' +
+            '<a class="link-btn" style="display:inline-block;text-decoration:none;" href="' + esc(c.sendResult.mailto || "#") + '">Abrir en mi correo</a>' +
+            "</div></div>";
+        }
+        if (c.sendResult && c.sendResult.ok) {
+          html += '<div class="ok">Email enviado al fabricante.</div>';
+        }
+
+        html += '<div class="row">' +
+          '<button type="button" class="btn primary" id="btn-prepare"' + (c.sending ? " disabled" : "") + '>PREPARAR EMAIL</button>' +
+          (c.prepared
+            ? '<button type="button" class="btn green" id="btn-send"' + (c.sending ? " disabled" : "") + ">" +
+              (c.sending ? "Enviando..." : "ENVIAR EMAIL") + "</button>"
+            : "") +
+          "</div>";
+
+        html += '<p style="margin-top:0.9rem;"><button type="button" class="link-btn" id="btn-back">← Volver al producto</button></p>';
+        html += "</div>";
+
+        document.getElementById("result").innerHTML = html;
+
+        document.getElementById("c-email").addEventListener("input", function () { c.emailTo = this.value; });
+        document.getElementById("c-subject").addEventListener("input", function () { c.subject = this.value; });
+        document.getElementById("c-message").addEventListener("input", function () { c.message = this.value; });
+        document.getElementById("btn-back").addEventListener("click", renderProduct);
+
+        var vdrop = document.getElementById("vdrop");
+        if (vdrop) {
+          vdrop.addEventListener("click", function () { document.getElementById("vinput").click(); });
+        }
+        document.getElementById("vinput").addEventListener("change", function () {
+          onVideoChange(this.files[0]);
+          this.value = "";
+        });
+
+        document.getElementById("btn-prepare").addEventListener("click", prepare);
+
+        var btnSend = document.getElementById("btn-send");
+        if (btnSend) btnSend.addEventListener("click", sendEmail);
+
+        var copyBtn = document.getElementById("copy-btn");
+        if (copyBtn) {
+          copyBtn.addEventListener("click", function () {
+            var txt = "Para: " + c.emailTo + "\n\nAsunto: " + c.subject + "\n\n" + c.message;
+            if (navigator.clipboard) navigator.clipboard.writeText(txt);
+          });
+        }
+      }
+
+      async function prepare() {
+        var c = state;
+        if (!c.emailTo.trim() || !c.message.trim()) return;
+        var btn = document.getElementById("btn-prepare");
+        btn.disabled = true;
+        btn.textContent = "Preparando...";
+        try {
+          var vid = null;
+          if (c.video) {
+            var form = new FormData();
+            form.append("video", c.video);
+            var up = await api("/api/videos", {
+              method: "POST",
+              headers: { "x-product-id": c.product.id },
+              body: form,
+            });
+            vid = up;
+          }
+          var data = await api("/api/contact/prepare", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              productId: c.product.id,
+              email_to: c.emailTo.trim(),
+              subject: c.subject,
+              message: c.message,
+              video_id: (vid && vid.id) || "",
+            }),
+          });
+          c.prepared = data.message;
+          c.sendResult = null;
+          renderContact();
+        } catch (err) {
+          c.sendResult = { ok: false, error: err.message };
+          renderContact();
+        }
+      }
+
+      async function sendEmail() {
+        var c = state;
+        if (!c.prepared) return;
+        c.sending = true;
+        renderContact();
+        try {
+          var data = await api("/api/contact/send", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ productId: c.product.id, message_id: c.prepared.id }),
+          });
+          c.sendResult = data;
+          c.sending = false;
+          renderContact();
+        } catch (err) {
+          c.sendResult = { ok: false, error: err.message };
+          c.sending = false;
+          renderContact();
+        }
+      }
+
+      var qs = new URLSearchParams(window.location.search);
+      var autoUrl = qs.get("url");
+      if (autoUrl) {
+        document.getElementById("url").value = autoUrl;
+        analyze(autoUrl);
+      }
     </script>
   </body>
 </html>

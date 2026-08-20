@@ -292,6 +292,7 @@ export default function Home() {
               uploading={uploading}
               onVideoChange={onVideoChange}
               resetVideo={resetVideo}
+              videoInput={videoInput}
               preparing={preparing}
               onPrepare={handlePrepare}
               prepared={prepared}
@@ -483,6 +484,7 @@ function ContactCard({
   uploading,
   onVideoChange,
   resetVideo,
+  videoInput,
   preparing,
   onPrepare,
   prepared,
