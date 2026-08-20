@@ -1,0 +1,31 @@
+{
+  "url": "https://www.aliexpress.com/item/1005006120248822.html",
+  "title": "Enrutador WiFi inteligente de alta velocidad LB-LINK 4G - EJEMPLO DE FIXTURE",
+  "price": "23.99",
+  "currency": "USD",
+  "image": "https://ae-pic-a1.aliexpress-media.com/kf/S5e02c7b234304041ad6bc44777b7db1fb.jpg",
+  "images": [
+    "https://ae-pic-a1.aliexpress-media.com/kf/S5e02c7b234304041ad6bc44777b7db1fb.jpg"
+  ],
+  "seller": "LB-LINK Official Store",
+  "attributes": [
+    { "name": "Fabricante", "value": "LB-LINK Technology Co., Ltd" },
+    { "name": "Dirección del fabricante", "value": "Shenzhen, China" },
+    { "name": "Marca", "value": "LB-LINK" },
+    { "name": "Nombre del modelo", "value": "BL-B4G" },
+    { "name": "Certificación CE", "value": "Si, CE" },
+    { "name": "RoHS", "value": "Cumple RoHS" },
+    { "name": "Material", "value": "ABS" },
+    { "name": "Color", "value": "Negro" },
+    { "name": "Garantía", "value": "24 meses" }
+  ],
+  "conformity": [
+    { "name": "Fabricante", "value": "LB-LINK Technology Co., Ltd" },
+    { "name": "Dirección del fabricante", "value": "Shenzhen, China" },
+    { "name": "Marca", "value": "LB-LINK" },
+    { "name": "Nombre del modelo", "value": "BL-B4G" },
+    { "name": "Certificación CE", "value": "Si, CE" },
+    { "name": "RoHS", "value": "Cumple RoHS" }
+  ],
+  "source": "fixture"
+}
