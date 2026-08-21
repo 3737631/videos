@@ -10,6 +10,10 @@ export interface RenderOptions {
   onStage?: (stage: string, pct: number) => void;
 }
 
+function stage(options: RenderOptions, s: string, pct: number) {
+  options.onStage?.(s, pct);
+}
+
 export async function renderProject(
   ffmpeg: FFmpeg,
   project: Project,
@@ -27,6 +31,16 @@ export async function renderProject(
   const inBlob = await (await fetch(source.url)).blob();
   await readFile(ffmpeg, inName, inBlob);
   const meta = await ffprobeInfo(ffmpeg, inName);
+
+  // Dimensiones raw de FFmpeg (sin rotar) + rotación detectada
+  const rawW = meta.width || source.width || 1920;
+  const rawH = meta.height || source.height || 1080;
+  const rotation = meta.rotation || 0;
+
+  // Dimensiones efectivas después de rotar
+  const isRotated = rotation === 90 || rotation === 270;
+  const effectiveW = isRotated ? rawH : rawW;
+  const effectiveH = isRotated ? rawW : rawH;
 
   stage(options, "Procesando clips", 15);
   let voiceName: string | null = null;
@@ -55,8 +69,9 @@ export async function renderProject(
 
   stage(options, "Aplicando edición", 40);
   const graph = buildFilterGraph({
-    inW: source.width || meta.width,
-    inH: source.height || meta.height,
+    rawW,
+    rawH,
+    rotation,
     hasOriginalAudio: meta.hasAudio,
     voiceName,
     musicName,
@@ -70,7 +85,10 @@ export async function renderProject(
 
   stage(options, "Renderizando", 65);
   const outName = "final.mp4";
-  const args: string[] = ["-i", inName];
+
+  // -noautorotate: manejamos la rotación en el filter graph
+  // -map 0:v:0 -map 0:a:0: primer stream de vídeo y audio (evita streams múltiples de TikTok)
+  const args: string[] = ["-noautorotate", "-i", inName];
   if (voiceName) args.push("-i", voiceName);
   if (musicName) args.push("-i", musicName);
   for (const f of subFiles) args.push("-i", f);
@@ -111,13 +129,10 @@ export async function renderProject(
   return { blob: outBlob, url, validation };
 }
 
-function stage(options: RenderOptions, stage: string, pct: number) {
-  options.onStage?.(stage, pct);
-}
-
 interface GraphInput {
-  inW: number;
-  inH: number;
+  rawW: number;
+  rawH: number;
+  rotation: number;
   hasOriginalAudio: boolean;
   voiceName: string | null;
   musicName: string | null;
@@ -131,36 +146,59 @@ interface GraphInput {
 
 function buildFilterGraph(input: GraphInput): string {
   const parts: string[] = [];
-  const { inW, inH } = input;
+  const { rawW, rawH, rotation } = input;
   const aspect = input.targetWidth / input.targetHeight;
 
-  // --- VÍDEO: reencuadre 9:16 centrado + zoom suave ---
-  let vChain: string;
-  if (inW / inH > aspect) {
-    const cropW = Math.round(inH * aspect);
-    const cropX = Math.max(0, Math.round((inW - cropW) / 2));
-    vChain = `crop=${cropW}:${inH}:${cropX}:0,scale=${input.targetWidth}:${input.targetHeight}`;
-  } else {
-    const cropH = Math.round(inW / aspect);
-    const cropY = Math.max(0, Math.round((inH - cropH) / 2));
-    vChain = `crop=${inW}:${cropH}:0:${cropY},scale=${input.targetWidth}:${input.targetHeight}`;
-  }
-  vChain += `,zoompan=z='min(1.0+0.0006*on,1.05)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${input.targetWidth}x${input.targetHeight}:fps=${input.fps}`;
-  parts.push(`[0:v]${vChain}[vbase]`);
+  // Paso 1: rotación (si needed)
+  let rotateFilter = "";
+  let effW = rawW;
+  let effH = rawH;
 
-  // --- SUBTÍTULOS (PNG overlay) ---
+  if (rotation === 90) {
+    rotateFilter = "transpose=1,";
+    effW = rawH;
+    effH = rawW;
+  } else if (rotation === 270) {
+    rotateFilter = "transpose=2,";
+    effW = rawH;
+    effH = rawW;
+  } else if (rotation === 180) {
+    rotateFilter = "hflip,vflip,";
+    effW = rawW;
+    effH = rawH;
+  }
+  // rotation 0 o 360: sin filtro
+
+  // Paso 2: crop centrado 9:16 basado en dimensiones efectivas
+  let cropScale: string;
+  if (effW / effH > aspect) {
+    const cropW = Math.round(effH * aspect);
+    const cropX = Math.max(0, Math.round((effW - cropW) / 2));
+    cropScale = `crop=${cropW}:${effH}:${cropX}:0,scale=${input.targetWidth}:${input.targetHeight}`;
+  } else {
+    const cropH = Math.round(effW / aspect);
+    const cropY = Math.max(0, Math.round((effH - cropH) / 2));
+    cropScale = `crop=${effW}:${cropH}:0:${cropY},scale=${input.targetWidth}:${input.targetHeight}`;
+  }
+
+  // Paso 3: zoom dinámico suave (105% máximo)
+  const zoom = `zoompan=z='min(1.0+0.0006*on,1.05)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${input.targetWidth}x${input.targetHeight}:fps=${input.fps}`;
+
+  parts.push(`[0:v]${rotateFilter}${cropScale},${zoom}[vbase]`);
+
+  // Paso 4: subtítulos overlay
   let cur = "vbase";
-  input.subFiles.forEach((f, i) => {
-    const idx = i + (input.voiceName ? 1 : 0) + (input.musicName ? 1 : 0) + 1;
+  input.subFiles.forEach((_f, i) => {
+    const inputIdx = i + 1 + (input.voiceName ? 1 : 0) + (input.musicName ? 1 : 0);
     const [s, e] = input.cueTimes[i] || [0, 0];
     const label = `vsub${i}`;
-    parts.push(`[${idx}:v]format=rgba[sub${i}]`);
+    parts.push(`[${inputIdx}:v]format=rgba[sub${i}]`);
     parts.push(`[${cur}][sub${i}]overlay=x=0:y=0:enable='between(t,${s.toFixed(2)},${e.toFixed(2)})'[${label}]`);
     cur = label;
   });
   parts.push(`[${cur}]format=yuv420p[vout]`);
 
-  // --- AUDIO: voz (prioridad) + música (baja) + original (ajustable) ---
+  // Paso 5: audio con ducking
   const audioNodes: string[] = [];
   if (input.voiceName) {
     parts.push(`[1:a]aresample=48000,aformat=channel_layouts=stereo[vo]`);

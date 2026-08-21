@@ -78,13 +78,13 @@ export function saveSettings(settings: AppSettings) {
 
 export function defaultSettings(): AppSettings {
   return {
-    llmProvider: "openai",
+    llmProvider: "groq",
     llmApiKey: "",
-    llmModel: "gpt-4o-mini",
-    ttsProvider: "openai",
+    llmModel: "llama-3.3-70b-versatile",
+    ttsProvider: "elevenlabs",
     ttsApiKey: "",
     ttsVoiceId: "alloy",
-    sttProvider: "openai",
+    sttProvider: "groq",
     sttApiKey: "",
   };
 }

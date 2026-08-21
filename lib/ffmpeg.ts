@@ -63,21 +63,21 @@ export async function ffprobeInfo(
   fps: number;
   hasAudio: boolean;
   hasVideo: boolean;
+  rotation: number;
 }> {
   const logLines: string[] = [];
   const onLog = ({ message }: { message: string }) => logLines.push(message);
   ffmpeg.on("log", onLog);
   let returnCode = -1;
   try {
-    returnCode = await ffmpeg.exec(["-i", filename]);
+    returnCode = await ffmpeg.exec(["-noautorotate", "-i", filename]);
   } catch (e) {
-    // ffprobe -i normalmente termina con código no-cero; ignorar si hay log útil
     void e;
   } finally {
     ffmpeg.off("log", onLog);
   }
   const log = logLines.join("\n");
-  if (!log && returnCode === 0) return { duration: 0, width: 0, height: 0, fps: 0, hasAudio: false, hasVideo: false };
+  if (!log && returnCode === 0) return { duration: 0, width: 0, height: 0, fps: 0, hasAudio: false, hasVideo: false, rotation: 0 };
   const durationMatch = log.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
   const duration =
     durationMatch
@@ -93,7 +93,16 @@ export async function ffprobeInfo(
   const fps = videoMatch ? parseFloat(videoMatch[3]) : 0;
   const hasAudio = /Audio:/.test(log);
   const hasVideo = /Video:/.test(log);
-  return { duration, width, height, fps, hasAudio, hasVideo };
+
+  let rotation = 0;
+  const rotateMatch = log.match(/rotate\s*:\s*(\d+)/i);
+  if (rotateMatch) rotation = parseInt(rotateMatch[1]) % 360;
+  if (!rotation) {
+    const sideMatch = log.match(/displaymatrix.*?rotation\s*[=:]\s*(-?\d+)/i);
+    if (sideMatch) rotation = (parseInt(sideMatch[1]) + 360) % 360;
+  }
+
+  return { duration, width, height, fps, hasAudio, hasVideo, rotation };
 }
 
 export async function extractThumbnail(
