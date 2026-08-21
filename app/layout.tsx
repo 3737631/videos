@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { ClientOnly } from "@/components/ClientOnly";
 
 export const metadata: Metadata = {
   title: "ClipCraft - Editor de vídeo vertical con IA",
@@ -14,7 +15,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="es">
-      <body className="bg-[#0b0d12] text-gray-100 antialiased">{children}</body>
+      <body className="bg-[#0b0d12] text-gray-100 antialiased">
+        <ClientOnly>{children}</ClientOnly>
+      </body>
     </html>
   );
 }

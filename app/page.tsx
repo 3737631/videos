@@ -57,11 +57,7 @@ export default function HomePage() {
                 >
                   <div className="aspect-video bg-[#131722] flex items-center justify-center text-3xl">
                     {p.thumbnail ? (
-                      <img
-                        src={p.thumbnail}
-                        alt=""
-                        className="h-full w-full object-cover"
-                      />
+                      <img src={p.thumbnail} alt="" className="h-full w-full object-cover" />
                     ) : (
                       <span>🎬</span>
                     )}
