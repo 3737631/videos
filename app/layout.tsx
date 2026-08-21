@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import ErrorReporter from "@/components/ErrorReporter";
 
 export const metadata: Metadata = {
   title: "ClipCraft - Editor de vídeo vertical con IA",
@@ -15,8 +14,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="es">
-      <body className="bg-[#0b0d12] text-gray-100 antialiased">
-        <ErrorReporter />
+      <body
+        className="bg-[#0b0d12] text-gray-100 antialiased"
+        suppressHydrationWarning
+      >
         {children}
       </body>
     </html>
