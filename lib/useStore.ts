@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import type { AppSettings, Project } from "@/types";
-import { loadSettings, saveSettings, loadProjects, saveProjects } from "@/lib/storage";
+import { loadSettings, saveSettings, loadProjects, saveProjects, defaultSettings } from "@/lib/storage";
 
 const listeners = new Set<() => void>();
 
@@ -18,15 +18,26 @@ function subscribe(fn: () => void) {
 }
 
 function getSettingsSnapshot(): AppSettings {
+  if (typeof window === "undefined") return defaultSettings();
   return loadSettings();
 }
 
 function getProjectsSnapshot(): Project[] {
+  if (typeof window === "undefined") return [];
   return loadProjects();
 }
 
+// Server snapshots: never touch localStorage
+function serverSettingsSnapshot(): AppSettings {
+  return defaultSettings();
+}
+
+function serverProjectsSnapshot(): Project[] {
+  return [];
+}
+
 export function useSettings(): [AppSettings, (patch: Partial<AppSettings>) => void] {
-  const settings = useSyncExternalStore(subscribe, getSettingsSnapshot, getSettingsSnapshot);
+  const settings = useSyncExternalStore(subscribe, getSettingsSnapshot, serverSettingsSnapshot);
   const update = useCallback((patch: Partial<AppSettings>) => {
     saveSettings({ ...loadSettings(), ...patch });
     emit();
@@ -35,7 +46,7 @@ export function useSettings(): [AppSettings, (patch: Partial<AppSettings>) => vo
 }
 
 export function useProjects(): [Project[], (projects: Project[]) => void] {
-  const projects = useSyncExternalStore(subscribe, getProjectsSnapshot, getProjectsSnapshot);
+  const projects = useSyncExternalStore(subscribe, getProjectsSnapshot, serverProjectsSnapshot);
   const update = useCallback((next: Project[]) => {
     saveProjects(next);
     emit();
@@ -44,7 +55,11 @@ export function useProjects(): [Project[], (projects: Project[]) => void] {
 }
 
 export function useNow(): number {
-  return useSyncExternalStore(subscribe, () => Date.now(), () => Date.now());
+  return useSyncExternalStore(
+    subscribe,
+    () => Date.now(),
+    () => 0
+  );
 }
 
 export function useCurrentProject(id: string | null) {
@@ -98,12 +113,6 @@ export function useProjectActions() {
   );
 
   return { projects, saveProject, deleteProject, duplicateProject, getProject };
-}
-
-export function useHydrated(): boolean {
-  const [projects] = useProjects();
-  void projects;
-  return true;
 }
 
 export function formatDuration(seconds: number): string {
