@@ -31,7 +31,7 @@ export function Sidebar() {
           <span className="text-xl">🎬</span>
           <span className="font-bold text-lg tracking-tight">ClipCraft</span>
         </div>
-        <p className="text-xs text-gray-400 mt-0.5">Edición vertical con IA</p>
+        <p className="text-xs text-gray-400 mt-0.5">Edición vertical IA</p>
       </div>
 
       <nav className="flex-1 px-3 py-3 space-y-0.5 overflow-y-auto">
