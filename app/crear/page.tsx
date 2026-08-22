@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { useProjectActions, useSettings } from "@/lib/useStore";
@@ -73,6 +73,71 @@ export default function CrearPage() {
   const [voiceMode, setVoiceMode] = useState<"voz" | "musica">("voz");
   const [finalUrl, setFinalUrl] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [voiceWarning, setVoiceWarning] = useState<string | null>(null);
+  const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
+  const keepAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Mantiene la pestaña activa durante la creación: wake lock + audio silencioso
+  async function startKeepAlive() {
+    try {
+      const nav = navigator as Navigator & {
+        wakeLock?: { request: (t: "screen") => Promise<{ release: () => Promise<void> }> };
+      };
+      if (nav.wakeLock) wakeLockRef.current = await nav.wakeLock.request("screen");
+    } catch {
+      /* sin wake lock */
+    }
+    try {
+      if (!keepAudioRef.current) {
+        const sr = 8000;
+        const buf = new ArrayBuffer(44 + sr * 2);
+        const dv = new DataView(buf);
+        const ws = (o: number, s: string) => {
+          for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i));
+        };
+        ws(0, "RIFF");
+        dv.setUint32(4, 36 + sr * 2, true);
+        ws(8, "WAVE");
+        ws(12, "fmt ");
+        dv.setUint32(16, 16, true);
+        dv.setUint16(20, 1, true);
+        dv.setUint16(22, 1, true);
+        dv.setUint32(24, sr, true);
+        dv.setUint32(28, sr * 2, true);
+        dv.setUint16(32, 2, true);
+        dv.setUint16(34, 16, true);
+        ws(36, "data");
+        dv.setUint32(40, sr * 2, true);
+        const url = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+        const a = new Audio(url);
+        a.loop = true;
+        a.volume = 0.02;
+        keepAudioRef.current = a;
+      }
+      await keepAudioRef.current.play().catch(() => {});
+    } catch {
+      /* sin audio keep-alive */
+    }
+  }
+
+  function stopKeepAlive() {
+    try {
+      keepAudioRef.current?.pause();
+    } catch {}
+    try {
+      wakeLockRef.current?.release();
+    } catch {}
+    wakeLockRef.current = null;
+  }
+
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === "visible" && busy === "creating") startKeepAlive();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy]);
 
   const update = (patch: Partial<Project>) => {
     setProject((p) => {
@@ -145,7 +210,9 @@ export default function CrearPage() {
     if (busy !== null) return;
     setError(null);
     setFinalUrl(null);
+    setVoiceWarning(null);
     setBusy("creating");
+    await startKeepAlive();
     addLog("Creando tu vídeo viral...");
 
     try {
@@ -259,6 +326,27 @@ export default function CrearPage() {
         }
       }
 
+      // Aviso visible si la voz no se pudo generar
+      if (voiceMode === "voz" && !localVoiceUrl) {
+        setVoiceWarning(
+          "No se pudo generar la voz con ElevenLabs (clave o cuota). El vídeo se creará sin locución — revisa Configuración."
+        );
+      }
+
+      // Estirar el último momento para que la voz completa quepa en el vídeo
+      if (voiceMode === "voz" && localVoiceUrl && picked.length) {
+        const clipsDur = picked.reduce((a, g) => a + (g.end - g.start), 0);
+        if (voiceDuration > clipsDur + 0.5) {
+          const last = picked[picked.length - 1];
+          const srcDur = project.sources[last.si]?.duration || meta.duration || 0;
+          const wantEnd = Math.min(srcDur || Infinity, last.end + (voiceDuration - clipsDur));
+          if (wantEnd > last.end) {
+            last.end = Math.round(wantEnd * 100) / 100;
+            addLog(`Último momento extendido hasta ${formatTime(last.end)} para cubrir toda la voz`);
+          }
+        }
+      }
+
       // 6. Plan de edición con los momentos virales de todos los vídeos
       setJobStage({ stage: "Preparando edición", progress: 65 });
       const base: Project = {
@@ -312,6 +400,7 @@ export default function CrearPage() {
       setError(errText(e));
       addLog(`Error: ${errText(e)}`);
     } finally {
+      stopKeepAlive();
       setBusy(null);
     }
   }
@@ -350,6 +439,12 @@ export default function CrearPage() {
           </div>
         )}
 
+        {voiceWarning && (
+          <div className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-200">
+            ⚠️ {voiceWarning}
+          </div>
+        )}
+
         {jobStage && (
           <div className="mt-4 rounded-lg border border-blue-500/30 bg-blue-500/10 p-4">
             <div className="flex justify-between text-sm text-blue-200">
@@ -359,6 +454,12 @@ export default function CrearPage() {
             <div className="mt-2 h-2 rounded-full bg-blue-900/50 overflow-hidden">
               <div className="h-full bg-blue-500 transition-all" style={{ width: `${jobStage.progress}%` }} />
             </div>
+          </div>
+        )}
+
+        {busy === "creating" && (
+          <div className="mt-4 rounded-lg border border-cyan-500/30 bg-cyan-500/10 p-3 text-xs text-cyan-200">
+            📱 Mantén esta pestaña abierta y la pantalla encendida mientras se crea el vídeo (en iPhone, iOS pausa el trabajo si cambias de app).
           </div>
         )}
 

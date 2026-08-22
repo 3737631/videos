@@ -11,10 +11,96 @@ export interface ViralSegment {
 const WINDOW_SEC = 0.5;
 
 /**
- * Detecta los momentos con más energía/gancho del vídeo analizando
- * la energía de audio (RMS) por ventanas de 0,5 s. Son los tramos
- * "virales": gritos, risas, música intensa, picos de acción...
- * Si no hay audio o no se puede decodificar, devuelve tramos equidistantes.
+ * Muestrea el movimiento visual del vídeo: extrae frames pequeños en escala
+ * de grises cada stepSec segundos y mide la diferencia media entre frames
+ * consecutivos. Devuelve una curva por punto de muestreo (o null si falla).
+ */
+async function sampleMotion(
+  url: string,
+  duration: number,
+  stepSec: number,
+  onProgress?: (stage: string, pct: number) => void
+): Promise<{ times: number[]; diffs: number[] } | null> {
+  return new Promise((resolve) => {
+    const W = 32;
+    const H = 18;
+    const v = document.createElement("video");
+    v.src = url;
+    v.muted = true;
+    v.preload = "auto";
+    const cv = document.createElement("canvas");
+    cv.width = W;
+    cv.height = H;
+    const cx = cv.getContext("2d", { willReadFrequently: true });
+    if (!cx) return resolve(null);
+
+    const times: number[] = [];
+    for (let t = 0.25; t < duration; t += stepSec) times.push(t);
+    if (!times.length) times.push(Math.min(0.5, duration / 2));
+
+    const diffs = new Array<number>(times.length).fill(0);
+    let prevGray: Float32Array | null = null;
+    let idx = 0;
+    let done = false;
+
+    const timer = setTimeout(() => {
+      if (!done) {
+        done = true;
+        resolve(idx > 3 ? { times, diffs } : null);
+      }
+    }, 25000);
+
+    const finish = (val: { times: number[]; diffs: number[] } | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(val);
+    };
+
+    v.onseeked = () => {
+      try {
+        cx.drawImage(v, 0, 0, W, H);
+        const d = cx.getImageData(0, 0, W, H).data;
+        const gray = new Float32Array(W * H);
+        for (let p = 0; p < W * H; p++) {
+          gray[p] = 0.299 * d[p * 4] + 0.587 * d[p * 4 + 1] + 0.114 * d[p * 4 + 2];
+        }
+        if (prevGray) {
+          let s = 0;
+          for (let p = 0; p < gray.length; p++) {
+            const df = gray[p] - prevGray![p];
+            s += df * df;
+          }
+          diffs[idx] = Math.sqrt(s / gray.length);
+        }
+        prevGray = gray;
+      } catch {
+        finish(null);
+        return;
+      }
+      idx++;
+      onProgress?.(
+        `Analizando movimiento ${idx}/${times.length}`,
+        10 + Math.round((idx / times.length) * 30)
+      );
+      if (idx >= times.length) finish({ times, diffs });
+      else v.currentTime = Math.min(duration - 0.05, times[idx]);
+    };
+
+    v.onerror = () => finish(null);
+    try {
+      v.currentTime = times[0];
+    } catch {
+      finish(null);
+    }
+  });
+}
+
+/**
+ * Detecta los momentos con más gancho combinando DOS señales:
+ * 1) Energía de audio (RMS): gritos, risas, música intensa...
+ * 2) Movimiento visual (diferencia entre frames): acción, cambios de escena...
+ * Si alguna señal falla, usa la otra sola. Si ambas fallan, tramos equidistantes.
  */
 export async function detectViralHighlights(
   src: SourceVideo,
@@ -25,6 +111,7 @@ export async function detectViralHighlights(
     return [{ start: 0, end: Math.max(duration, 1), score: 1 }];
   }
 
+  // Señal 1: energía de audio
   let energies: number[] | null = null;
   try {
     onProgress?.("Analizando energía de audio", 5);
@@ -53,38 +140,62 @@ export async function detectViralHighlights(
     energies = null;
   }
 
-  onProgress?.("Buscando momentos virales", 45);
+  // Señal 2: movimiento visual
+  onProgress?.("Analizando movimiento", 12);
+  const motion = await sampleMotion(src.url, duration, 0.75, onProgress);
 
-  // Sin energía utilizable -> tramos equidistantes
-  if (!energies || !energies.length) {
+  // Rejilla común de 0,5 s sobre la duración
+  const gridN = Math.max(1, Math.ceil(duration / WINDOW_SEC));
+
+  const buildCurve = (samples: number[] | null, sampleStepSec: number): number[] | null => {
+    if (!samples || !samples.some((v) => v > 0)) return null;
+    const curve = new Array<number>(gridN).fill(0);
+    for (let g = 0; g < gridN; g++) {
+      const tCenter = (g + 0.5) * WINDOW_SEC;
+      const si = Math.min(samples.length - 1, Math.max(0, Math.round((tCenter - 0.25) / sampleStepSec)));
+      curve[g] = samples[si];
+    }
+    const max = Math.max(...curve, 1e-6);
+    return curve.map((v) => v / max);
+  };
+
+  const smoothCurve = (c: number[]): number[] =>
+    c.map((_, i) => (c[Math.max(0, i - 1)] + c[i] + c[Math.min(c.length - 1, i + 1)]) / 3);
+
+  const audioCurve = energies && energies.length ? smoothCurve(buildCurve(energies, WINDOW_SEC) || []) : null;
+  const motionCurve = motion ? smoothCurve(buildCurve(motion.diffs, 0.75) || []) : null;
+
+  onProgress?.("Buscando momentos virales", 48);
+
+  if (!audioCurve && !motionCurve) {
     return evenSegments(duration);
   }
 
-  // Suavizado (media móvil de 3) para evitar picos falsos
-  const smooth = energies.map((_, i) => {
-    const a = energies![Math.max(0, i - 1)];
-    const b = energies![i];
-    const c = energies![Math.min(energies!.length - 1, i + 1)];
-    return (a + b + c) / 3;
-  });
-
-  const maxE = Math.max(...smooth, 1e-6);
-  const norm = smooth.map((v) => v / maxE);
-
-  // Duración objetivo de cada corte viral y presupuesto total
+  // Puntuación combinada por ventana deslizante
   const segLen = duration <= 20 ? Math.min(duration * 0.8, 8) : 8;
   const budget = Math.max(segLen, Math.min(duration * 0.35, 30));
 
-  const step = WINDOW_SEC;
   const candidates: { start: number; score: number }[] = [];
-  for (let t = 0; t + segLen <= duration + 0.01; t += step) {
+  const wCount = Math.max(1, Math.round(segLen / WINDOW_SEC));
+  for (let t = 0; t + segLen <= duration + 0.01; t += WINDOW_SEC) {
     const i0 = Math.floor(t / WINDOW_SEC);
-    const i1 = Math.min(norm.length, Math.ceil((t + segLen) / WINDOW_SEC));
-    let acc = 0;
-    for (let i = i0; i < i1; i++) acc += norm[i];
-    // Bonus si el momento empieza fuerte (hook al inicio)
-    const hookBonus = norm[i0] ?? 0;
-    candidates.push({ start: t, score: acc + hookBonus * 2 });
+    let accA = 0;
+    let accM = 0;
+    for (let w = 0; w < wCount; w++) {
+      const gi = Math.min(gridN - 1, i0 + w);
+      accA += audioCurve ? audioCurve[gi] : 0;
+      accM += motionCurve ? motionCurve[gi] : 0;
+    }
+    // Normalizar por peso disponible de cada señal
+    const wa = audioCurve ? 1 : 0;
+    const wm = motionCurve ? 1 : 0;
+    const wsum = wa + wm || 1;
+    const combined = (accA + accM) / (wCount * wsum);
+    // Bonus si arranca fuerte (hook al inicio del corte)
+    const gi0 = Math.min(gridN - 1, i0);
+    const hook =
+      (audioCurve ? audioCurve[gi0] : 0) + (motionCurve ? motionCurve[gi0] : 0);
+    candidates.push({ start: t, score: combined + hook * 1.5 });
   }
   if (!candidates.length) return evenSegments(duration);
 
