@@ -59,9 +59,10 @@ export function stopPreview() {
 }
 
 /**
- * Genera la locución con la voz neuronal LOCAL (Kokoro, corre en el navegador):
- * ilimitada, rápida y sin claves ni cuotas. Si el dispositivo no soporta WASM,
- * usa la voz gratuita de Google como último recurso.
+ * Genera la locución:
+ * - Escritorio: voz neuronal LOCAL (Kokoro) → ilimitada y gratis.
+ * - Móvil: voz en la nube de Groq PlayAI → instantánea, sin descargar nada.
+ * - Respaldo universal: Google Translate TTS.
  */
 export async function generateSpeech(
   settings: AppSettings,
@@ -69,12 +70,74 @@ export async function generateSpeech(
   voiceId: string,
   options?: { speed?: number; onProgress?: (done: number, total: number) => void }
 ): Promise<TtsResult> {
-  void settings;
   if (!text.trim()) throw new Error("El texto de la voz está vacío");
+  const isMobileLike =
+    typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const errs: string[] = [];
+  if (!isMobileLike) {
+    try {
+      return await generateKokoroTts(text, voiceId, options?.onProgress);
+    } catch (e) {
+      errs.push(e instanceof Error ? e.message : "local");
+    }
+  } else {
+    void options;
+  }
   try {
-    return await generateKokoroTts(text, voiceId, options?.onProgress);
-  } catch {
+    return await generateGroqTts(settings, text, voiceId);
+  } catch (e) {
+    errs.push(e instanceof Error ? e.message : "groq");
+  }
+  try {
     return await generateGoogleTts(text);
+  } catch (e) {
+    errs.push(e instanceof Error ? e.message : "google");
+  }
+  throw new Error(`No se pudo generar la voz (${errs.join(" · ")})`);
+}
+
+// ===== Voz en la nube (Groq PlayAI TTS): rápida en cualquier dispositivo =====
+const GROQ_VOICE_MAP: Record<string, string> = {
+  alloy: "Celeste-PlayAI",
+  nova: "Arista-PlayAI",
+  shimmer: "Amber-PlayAI",
+  echo: "Atlas-PlayAI",
+  onyx: "Fritz-PlayAI",
+  fable: "Quinn-PlayAI",
+};
+
+async function generateGroqTts(
+  settings: AppSettings,
+  text: string,
+  voiceId: string
+): Promise<TtsResult> {
+  const key = settings.llmApiKey;
+  if (!key) throw new Error("sin clave");
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 30000);
+  try {
+    const res = await fetch("https://api.groq.com/openai/v1/audio/speech", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: "playai-tts",
+        voice: GROQ_VOICE_MAP[voiceId] || GROQ_VOICE_MAP.alloy,
+        input: text.slice(0, 9000),
+        response_format: "wav",
+      }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      let detail = "";
+      try {
+        detail = (await res.text()).slice(0, 120);
+      } catch {}
+      throw new Error(`groq ${res.status}${detail ? ` ${detail}` : ""}`);
+    }
+    const blob = await res.blob();
+    return finalizeTts(blob, "groq-cloud");
+  } finally {
+    clearTimeout(t);
   }
 }
 
@@ -117,22 +180,63 @@ function emitKokoroProgress() {
   kokoroListeners.forEach((cb) => cb(pct));
 }
 
+const KOKORO_MODEL = "onnx-community/Kokoro-82M-v1.0-ONNX";
+
+async function makeKokoro(dtype: string, device: string): Promise<any> {
+  const mod = await import("kokoro-js");
+  const progress_callback = (info: DownloadInfo) => {
+    if (info.status === "progress" && info.total) {
+      fileProgress.set(info.name || "model", { loaded: info.loaded || 0, total: info.total });
+      emitKokoroProgress();
+    }
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return await (mod as any).KokoroTTS.from_pretrained(KOKORO_MODEL, { dtype, device, progress_callback });
+}
+
+/** Comprueba que la voz realmente suena (evita rutas que devuelven audio mudo) */
+async function sampleOk(tts: any): Promise<boolean> {
+  try {
+    const out = await tts.generate("This is a quick voice test.", { voice: "af_heart", speed: 1 });
+    const n = out.audio?.length || 0;
+    if (n < 1000) return false;
+    let sum = 0;
+    let count = 0;
+    for (let i = 0; i < n; i += 16) {
+      sum += Math.abs(out.audio[i]);
+      count++;
+    }
+    return sum / count > 0.001;
+  } catch {
+    return false;
+  }
+}
+
 async function getKokoro() {
   if (!kokoroInst) {
-    const mod = await import("kokoro-js");
-    const progress_callback = (info: DownloadInfo) => {
-      if (info.status === "progress" && info.total) {
-        fileProgress.set(info.name || "model", { loaded: info.loaded || 0, total: info.total });
-        emitKokoroProgress();
+    // En escritorio con WebGPU probamos rutas rápidas validando que suenen;
+    // en móvil vamos directos a la ruta WASM probada.
+    const hasWebGPU = typeof navigator !== "undefined" && "gpu" in navigator;
+    const isMobileLike =
+      typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    if (hasWebGPU && !isMobileLike) {
+      for (const dtype of ["fp16", "fp32"]) {
+        try {
+          fileProgress.clear();
+          const cand = await makeKokoro(dtype, "webgpu");
+          if (await sampleOk(cand)) {
+            kokoroInst = cand;
+            break;
+          }
+        } catch {
+          /* siguiente opción */
+        }
       }
-    };
-    // Ruta WASM probada y fiable en todos los dispositivos (la ruta WebGPU producía
-    // audio mudo en algunos navegadores de escritorio)
-    kokoroInst = await mod.KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", {
-      dtype: "q8",
-      device: "wasm",
-      progress_callback,
-    });
+    }
+    if (!kokoroInst) {
+      fileProgress.clear();
+      kokoroInst = await makeKokoro("q8", "wasm");
+    }
   }
   return kokoroInst;
 }

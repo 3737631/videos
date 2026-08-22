@@ -156,11 +156,12 @@ export default function CrearPage() {
   const voicePctRef = useRef<number | null>(null);
 
   useEffect(() => {
-    // La voz se descarga sola nada más abrir la página (silenciosamente)
+    // La voz local se descarga sola al abrir SOLO en escritorio; en móvil la voz va por la nube
     const off = onKokoroDownload((pct) => {
       voicePctRef.current = pct;
     });
-    void preloadKokoro();
+    const isMobileLike = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    if (!isMobileLike) void preloadKokoro();
     return () => {
       off();
     };
@@ -470,7 +471,7 @@ export default function CrearPage() {
 
       // Aviso visible si la voz no se pudo generar (mensaje amable, detalle solo en el registro)
       if (voiceMode === "voz" && !localVoiceUrl) {
-        const msg = "No se pudo generar la voz en este dispositivo. El vídeo se creará sin locución.";
+        const msg = "No se pudo generar la voz. El vídeo se creará con música de fondo.";
         setVoiceWarning((prev) => (prev ? `${prev} Además, ${msg.charAt(0).toLowerCase()}${msg.slice(1)}` : msg));
       }
 
@@ -547,6 +548,10 @@ export default function CrearPage() {
       }
       // Modo solo música: silenciar el audio original para que se oiga SOLO la canción
       if (voiceMode === "musica") {
+        plan.audio.originalVolume = 0;
+      }
+      // Voz pedida pero falló: dejar el vídeo limpio (solo música), nunca audio original cortado
+      if (!localVoiceUrl && voiceMode === "voz") {
         plan.audio.originalVolume = 0;
       }
       // Con voz: bajar la música para que no tape la narración (mejor calidad percibida)
