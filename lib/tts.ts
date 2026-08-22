@@ -168,7 +168,8 @@ async function generateKokoroTts(
 ): Promise<TtsResult> {
   const tts = await getKokoro();
   const voice = KOKORO_VOICE_MAP[voiceId] || KOKORO_VOICE_MAP.alloy;
-  const chunks = splitForTts(text, 280);
+  // Trozos pequeños → progreso visible con frecuencia en todos los dispositivos
+  const chunks = splitForTts(text, 130);
   const pieces: Float32Array[] = [];
   let totalLen = 0;
   let sampleRate = 24000;

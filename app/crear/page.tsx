@@ -335,19 +335,49 @@ export default function CrearPage() {
           if (fullText.trim()) {
             try {
               const voiceT0 = Date.now();
-              const voice = await generateSpeech(settings, fullText, settings.ttsVoiceId || "alloy", {
-                speed: 1,
-                onProgress: (done, total) => {
-                  if (total <= 1) return;
-                  const el = (Date.now() - voiceT0) / 1000;
-                  const eta = Math.max(1, Math.round((el / done) * (total - done)));
-                  setJobStage({
-                    stage: `🎙️ Generando voz ${done}/${total} · quedan ~${eta}s`,
-                    progress: 42 + (done / total) * 10,
-                  });
-                },
-              });
-              if (await validateVoiceBlob(voice.url)) {
+              let lastDone = 0;
+              let lastTotal = 1;
+              // Latido visible cada segundo: nunca se queda congelado sin información
+              const beat = setInterval(() => {
+                const el = Math.round((Date.now() - voiceT0) / 1000);
+                setJobStage({
+                  stage: `🎙️ Generando voz… ${el}s transcurridos${lastDone ? ` (${lastDone}/${lastTotal} frases)` : ""}`,
+                  progress: Math.min(51, 42 + (lastDone / Math.max(1, lastTotal)) * 9),
+                });
+              }, 1000);
+              let timedOut = false;
+              const watchdog = setTimeout(() => {
+                timedOut = true;
+              }, 240000);
+              let voice: Awaited<ReturnType<typeof generateSpeech>> | null = null;
+              try {
+                voice = await Promise.race([
+                  generateSpeech(settings, fullText, settings.ttsVoiceId || "alloy", {
+                    speed: 1,
+                    onProgress: (done, total) => {
+                      lastDone = done;
+                      lastTotal = total;
+                      const el = (Date.now() - voiceT0) / 1000;
+                      const eta = Math.max(1, Math.round((el / done) * (total - done)));
+                      setJobStage({
+                        stage: `🎙️ Generando voz ${done}/${total} · quedan ~${eta}s`,
+                        progress: 42 + (done / total) * 9,
+                      });
+                    },
+                  }),
+                  new Promise<null>((resolve) =>
+                    setTimeout(() => resolve(null), 239000)
+                  ),
+                ]);
+              } finally {
+                clearTimeout(watchdog);
+                clearInterval(beat);
+              }
+              if (!voice) {
+                timedOut = true;
+              }
+              if (timedOut) throw new Error("La voz tardó demasiado en este dispositivo");
+              if (voice && (await validateVoiceBlob(voice.url))) {
                 ttsBlob = voice.blob;
                 localVoiceUrl = voice.url;
                 voiceDuration = voice.duration || 0;
