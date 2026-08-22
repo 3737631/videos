@@ -18,7 +18,7 @@ import { serviceStatus } from "@/lib/storage";
 import { analyzeVideo } from "@/lib/analyze";
 import { detectViralHighlights, type ViralSegment } from "@/lib/viral";
 import { detectWatermark } from "@/lib/watermark";
-import { isKokoroReady } from "@/lib/tts";
+import { isKokoroReady, preloadKokoro } from "@/lib/tts";
 import { loadFfmpeg, isFfmpegLoaded, getFfmpeg } from "@/lib/ffmpeg";
 import { renderProject } from "@/lib/render";
 
@@ -177,6 +177,7 @@ export default function CrearPage() {
     setFinalUrl(null);
     setBusy("analyzing");
     setJobStage({ stage: "Leyendo vídeo", progress: 10 });
+    void preloadKokoro(); // descarga la voz en segundo plano mientras preparas todo
 
     try {
       const sources: SourceVideo[] = [];
@@ -444,7 +445,7 @@ export default function CrearPage() {
         targetWidth: 1080,
         targetHeight: 1920,
         fps: 30,
-        crf: 18,
+        crf: 20,
         onStage: (st, p) => setJobStage({ stage: `Renderizando: ${st}`, progress: Math.min(99, Math.max(15, p)) }),
       });
 

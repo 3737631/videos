@@ -130,7 +130,7 @@ if (musicName) args.push("-stream_loop", "-1", "-i", musicName); // la música s
     "-map", "[vout]",
     "-map", "[aout]",
     "-c:v", "libx264",
-    "-preset", "veryfast",
+    "-preset", "ultrafast",
     "-crf", String(crf),
     "-c:a", "aac",
     "-b:a", "192k",

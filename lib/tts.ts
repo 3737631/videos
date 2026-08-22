@@ -112,6 +112,15 @@ export async function isKokoroReady(): Promise<boolean> {
   return kokoroInst !== null;
 }
 
+/** Descarga el modelo en segundo plano (se llama al subir vídeos para que no espere después) */
+export async function preloadKokoro(): Promise<void> {
+  try {
+    await getKokoro();
+  } catch {
+    /* se reintentará al generar */
+  }
+}
+
 function floatToWavBlob(samples: Float32Array, sampleRate = 24000): Blob {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
   const view = new DataView(buffer);
