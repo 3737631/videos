@@ -27,13 +27,15 @@ function getProjectsSnapshot(): Project[] {
   return loadProjects();
 }
 
-// Server snapshots: never touch localStorage
+// Server snapshots: never touch localStorage, always same reference
+const SERVER_SETTINGS = defaultSettings();
 function serverSettingsSnapshot(): AppSettings {
-  return defaultSettings();
+  return SERVER_SETTINGS;
 }
 
+const EMPTY_PROJECTS: Project[] = [];
 function serverProjectsSnapshot(): Project[] {
-  return [];
+  return EMPTY_PROJECTS;
 }
 
 export function useSettings(): [AppSettings, (patch: Partial<AppSettings>) => void] {
@@ -54,12 +56,15 @@ export function useProjects(): [Project[], (projects: Project[]) => void] {
   return [projects, update];
 }
 
+let nowCache = 0;
+function getNowSnapshot(): number {
+  if (nowCache === 0) nowCache = Date.now();
+  return nowCache;
+}
+const NOW_SERVER_SNAPSHOT = 0;
+
 export function useNow(): number {
-  return useSyncExternalStore(
-    subscribe,
-    () => Date.now(),
-    () => 0
-  );
+  return useSyncExternalStore(subscribe, getNowSnapshot, () => NOW_SERVER_SNAPSHOT);
 }
 
 export function useCurrentProject(id: string | null) {

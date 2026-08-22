@@ -3,15 +3,35 @@ import type { AppSettings, Project } from "@/types";
 const PROJECTS_KEY = "clipcraft.projects.v1";
 const SETTINGS_KEY = "clipcraft.settings.v1";
 
+// Snapshots cacheados: getSnapshot debe devolver SIEMPRE la misma
+// referencia mientras no cambien los datos, o React entra en bucle
+// infinito ("Maximum update depth exceeded" -> Application error).
+let projectsCache: Project[] | null = null;
+let settingsCache: AppSettings | null = null;
+
+const DEFAULT_SETTINGS: AppSettings = {
+  llmProvider: "groq",
+  llmApiKey: "",
+  llmModel: "llama-3.3-70b-versatile",
+  ttsProvider: "elevenlabs",
+  ttsApiKey: "",
+  ttsVoiceId: "alloy",
+  sttProvider: "groq",
+  sttApiKey: "",
+};
+
 export function loadProjects(): Project[] {
+  if (projectsCache !== null) return projectsCache;
+  let loaded: Project[];
   try {
     const raw = localStorage.getItem(PROJECTS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    const parsed = raw ? JSON.parse(raw) : [];
+    loaded = Array.isArray(parsed) ? parsed : [];
   } catch {
-    return [];
+    loaded = [];
   }
+  projectsCache = loaded;
+  return loaded;
 }
 
 export function saveProjects(projects: Project[]) {
@@ -20,6 +40,7 @@ export function saveProjects(projects: Project[]) {
   } catch {
     // cuota llena
   }
+  projectsCache = projects;
 }
 
 export function getProject(id: string): Project | null {
@@ -27,19 +48,19 @@ export function getProject(id: string): Project | null {
 }
 
 export function upsertProject(project: Project): Project[] {
-  const projects = loadProjects();
-  const idx = projects.findIndex((p) => p.id === project.id);
+  const current = [...loadProjects()];
+  const idx = current.findIndex((p) => p.id === project.id);
   project.updatedAt = new Date().toISOString();
-  if (idx >= 0) projects[idx] = project;
-  else projects.unshift(project);
-  saveProjects(projects);
-  return projects;
+  if (idx >= 0) current[idx] = project;
+  else current.unshift(project);
+  saveProjects(current);
+  return current;
 }
 
 export function deleteProject(id: string): Project[] {
-  const projects = loadProjects().filter((p) => p.id !== id);
-  saveProjects(projects);
-  return projects;
+  const next = loadProjects().filter((p) => p.id !== id);
+  saveProjects(next);
+  return next;
 }
 
 export function duplicateProject(id: string): Project | null {
@@ -59,13 +80,18 @@ export function duplicateProject(id: string): Project | null {
 }
 
 export function loadSettings(): AppSettings {
+  if (settingsCache !== null) return settingsCache;
+  let loaded: AppSettings;
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return defaultSettings();
-    return { ...defaultSettings(), ...JSON.parse(raw) };
+    loaded = raw
+      ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) }
+      : { ...DEFAULT_SETTINGS };
   } catch {
-    return defaultSettings();
+    loaded = { ...DEFAULT_SETTINGS };
   }
+  settingsCache = loaded;
+  return loaded;
 }
 
 export function saveSettings(settings: AppSettings) {
@@ -74,19 +100,12 @@ export function saveSettings(settings: AppSettings) {
   } catch {
     // ignorar
   }
+  settingsCache = settings;
 }
 
 export function defaultSettings(): AppSettings {
-  return {
-    llmProvider: "groq",
-    llmApiKey: "",
-    llmModel: "llama-3.3-70b-versatile",
-    ttsProvider: "elevenlabs",
-    ttsApiKey: "",
-    ttsVoiceId: "alloy",
-    sttProvider: "groq",
-    sttApiKey: "",
-  };
+  // Referencia estable: nunca crear objetos nuevos por llamada
+  return DEFAULT_SETTINGS;
 }
 
 export function serviceStatus(settings: AppSettings, service: "llm" | "tts" | "stt") {
