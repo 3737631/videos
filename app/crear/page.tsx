@@ -290,6 +290,7 @@ export default function CrearPage() {
       let localVoiceUrl: string | null = null;
       let ttsBlob: Blob | null = null;
       let voiceDuration = 0;
+      let lastVoiceError = "";
       if (voiceMode === "musica") {
         addLog("Modo solo música: sin voz");
       } else {
@@ -306,11 +307,12 @@ export default function CrearPage() {
                 addLog(`Voz generada (${voiceDuration.toFixed(1)}s)`);
               }
             } catch (e) {
-              addLog(`Voz omitida: ${errText(e)}`);
+              lastVoiceError = errText(e);
+              addLog(`Voz: ${lastVoiceError}`);
             }
           }
         } else {
-          addLog("Sin clave TTS: se omite la voz");
+          lastVoiceError = "Sin clave TTS configurada";
         }
       }
 
@@ -329,7 +331,8 @@ export default function CrearPage() {
       // Aviso visible si la voz no se pudo generar
       if (voiceMode === "voz" && !localVoiceUrl) {
         setVoiceWarning(
-          "No se pudo generar la voz con ElevenLabs (clave o cuota). El vídeo se creará sin locución — revisa Configuración."
+          lastVoiceError ||
+            "No se pudo generar la voz. El vídeo se creará sin locución — revisa Configuración."
         );
       }
 
@@ -442,6 +445,14 @@ export default function CrearPage() {
         {voiceWarning && (
           <div className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-200">
             ⚠️ {voiceWarning}
+            <a
+              href="https://elevenlabs.io/app/settings/api-keys"
+              target="_blank"
+              rel="noreferrer"
+              className="mt-2 block w-fit rounded-md bg-amber-500 px-3 py-1.5 text-xs font-semibold text-black hover:bg-amber-400"
+            >
+              Arreglar clave de ElevenLabs ↗
+            </a>
           </div>
         )}
 
