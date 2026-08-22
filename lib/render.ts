@@ -58,7 +58,7 @@ export async function renderProject(
   const geoms: Record<number, Geom> = {};
   for (let i = 0; i < usedSources.length; i++) {
     const s = usedSources[i];
-    stage(options, `Preparando vídeo ${i + 1}/${usedSources.length}`, 5 + Math.round(8 * ((i + 1) / usedSources.length)));
+    stage(options, `Preparando vídeo ${i + 1}/${usedSources.length}`, 3 + Math.round(7 * ((i + 1) / usedSources.length)));
     const name = `in_${i}.mp4`;
     await readFile(ffmpeg, name, await (await fetch(s.url)).blob());
     inNames.push(name);
@@ -83,7 +83,7 @@ export async function renderProject(
     await readFile(ffmpeg, musicName, await (await fetch(project.music.url)).blob());
   }
 
-  stage(options, "Generando subtítulos", 25);
+  stage(options, "Generando subtítulos", 12);
   const subFiles: string[] = [];
   const cueCount = plan.subtitles.cues.length;
   for (let i = 0; i < cueCount; i++) {
@@ -95,7 +95,7 @@ export async function renderProject(
     subFiles.push(name);
   }
 
-  stage(options, "Aplicando edición", 40);
+  stage(options, "Aplicando edición", 14);
   const srcIdxOf = (sourceId: string) => usedSources.findIndex((s) => s.id === sourceId);
   const graph = buildFilterGraph({
     clips: usedClips.map((c) => ({
@@ -130,7 +130,7 @@ export async function renderProject(
     "-map", "[vout]",
     "-map", "[aout]",
     "-c:v", "libx264",
-    "-preset", "medium",
+    "-preset", "veryfast",
     "-crf", String(crf),
     "-c:a", "aac",
     "-b:a", "192k",
@@ -140,9 +140,19 @@ export async function renderProject(
     outName
   );
 
-  await ffmpeg.exec(args);
+  // Progreso real de la codificación (0..1) → 15%..90%
+  const onProg = ({ progress }: { progress: number }) => {
+    const p = Math.min(1, Math.max(0, progress || 0));
+    stage(options, "Renderizando", 15 + p * 75);
+  };
+  ffmpeg.on("progress", onProg);
+  try {
+    await ffmpeg.exec(args);
+  } finally {
+    ffmpeg.off("progress", onProg);
+  }
 
-  stage(options, "Comprobando calidad", 88);
+  stage(options, "Comprobando calidad", 94);
   const outData = await ffmpeg.readFile(outName);
   const bytes = typeof outData === "string" ? new TextEncoder().encode(outData) : new Uint8Array(outData);
   const outBlob = new Blob([bytes.buffer as ArrayBuffer], { type: "video/mp4" });

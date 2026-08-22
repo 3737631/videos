@@ -299,7 +299,7 @@ export default function CrearPage() {
         targetHeight: 1920,
         fps: 30,
         crf: 18,
-        onStage: (st, p) => setJobStage({ stage: `Renderizando: ${st}`, progress: 72 + p * 0.26 }),
+        onStage: (st, p) => setJobStage({ stage: `Renderizando: ${st}`, progress: Math.min(99, Math.max(15, p)) }),
       });
 
       update({ renderUrl: result.url, renderValidation: result.validation, status: "exported" });
