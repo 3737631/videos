@@ -134,6 +134,10 @@ export default function CrearPage() {
   }
 
   useEffect(() => {
+    void preloadKokoro(); // nada más abrir la página, la voz se descarga en segundo plano
+  }, []);
+
+  useEffect(() => {
     const onVis = () => {
       if (document.visibilityState === "visible" && busy === "creating") startKeepAlive();
     };
