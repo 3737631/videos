@@ -271,6 +271,8 @@ export default function CrearPage() {
 
     try {
       const modoProducto = productUrl.trim().length > 10;
+      // Motor de render en paralelo: se carga MIENTRAS se analiza/genera voz
+      const ffLoading = isFfmpegLoaded() ? null : loadFfmpeg().catch(() => null);
       // 1. Análisis del contenido
       let meta: VideoMetadata = project.metadata || (null as unknown as VideoMetadata);
       if (!meta) {
@@ -547,19 +549,26 @@ export default function CrearPage() {
       if (voiceMode === "musica") {
         plan.audio.originalVolume = 0;
       }
+      // Con voz: bajar la música para que no tape la narración (mejor calidad percibida)
+      if (localVoiceUrl) {
+        plan.audio.musicVolume = Math.min(plan.audio.musicVolume ?? 0.25, 0.16);
+      }
       const next: Project = { ...base, editPlan: plan, status: "ready" };
       setProject(next);
       saveProject(next);
 
       // 7. Render final MP4 en el navegador (máxima calidad)
       setJobStage({ stage: "Cargando motor de vídeo (solo la primera vez)", progress: 70 });
-      if (!isFfmpegLoaded()) await loadFfmpeg();
+      if (!isFfmpegLoaded()) {
+        if (ffLoading) await ffLoading;
+        else await loadFfmpeg();
+      }
       const result = await renderProject(getFfmpeg(), next, {
         // iPhone: 720p → render ~2x más rápido; en TikTok la diferencia es imperceptible
         targetWidth: IS_IOS ? 720 : 1080,
         targetHeight: IS_IOS ? 1280 : 1920,
         fps: 24,
-        crf: 20,
+        crf: IS_IOS ? 20 : 18,
         onStage: (st, p) => setJobStage({ stage: st, progress: Math.min(99, Math.max(15, p)) }),
       });
 

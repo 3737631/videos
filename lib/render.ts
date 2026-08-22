@@ -78,9 +78,22 @@ export async function renderProject(
   }
 
   let musicName: string | null = null;
+  let musicReps = 1;
   if (plan.music && project.music?.url) {
     musicName = "music.mp3";
     await readFile(ffmpeg, musicName, await (await fetch(project.music.url)).blob());
+    // Repeticiones necesarias para cubrir TODO el vídeo (bucle determinista)
+    const estTotal =
+      plan.clips.reduce((a, c) => a + Math.max(0, c.end - c.start), 0) || 20;
+    let musicDur = 0;
+    try {
+      const info = await ffprobeInfo(ffmpeg, musicName);
+      musicDur = info.duration || 0;
+    } catch {
+      musicDur = 0;
+    }
+    const assumeLen = musicDur > 2 ? musicDur : 5;
+    musicReps = Math.max(1, Math.min(12, Math.ceil((estTotal + 1) / assumeLen)));
   }
 
   stage(options, "Generando subtítulos", 12);
@@ -107,7 +120,8 @@ export async function renderProject(
     geoms,
     voiceName,
     musicName,
-    subStartIdx: inNames.length + (voiceName ? 1 : 0) + (musicName ? 1 : 0),
+    musicReps,
+    subStartIdx: inNames.length + (voiceName ? 1 : 0) + (musicName ? musicReps : 0),
     subFiles,
     cueTimes: plan.subtitles.cues.map((c) => [c.start, c.end] as [number, number]),
     audio: plan.audio,
@@ -122,7 +136,7 @@ export async function renderProject(
   const args: string[] = ["-noautorotate"];
   for (const n of inNames) args.push("-i", n);
 if (voiceName) args.push("-i", voiceName);
-if (musicName) args.push("-stream_loop", "-1", "-i", musicName); // la música se repite hasta cubrir el vídeo completo
+    if (musicName) for (let k = 0; k < musicReps; k++) args.push("-i", musicName); // copias para bucle determinista
   for (const f of subFiles) args.push("-i", f);
 
   args.push(
@@ -197,6 +211,7 @@ interface GraphInput {
   geoms: Record<number, Geom>;
   voiceName: string | null;
   musicName: string | null;
+  musicReps?: number;
   subStartIdx: number;
   subFiles: string[];
   cueTimes: [number, number][];
@@ -277,14 +292,27 @@ function buildFilterGraph(input: GraphInput): string {
   const totalDur = Math.max(0.5, input.clips.reduce((a, c) => a + Math.max(0, c.end - c.start), 0));
   const capMusic = input.musicName ? `,atrim=end=${totalDur.toFixed(3)},asetpts=N/SR/TB` : "";
   if (input.voiceName) {
+    const reps = input.musicReps || 1;
     parts.push(
-      `[${input.subStartIdx - (input.musicName ? 2 : 1)}:a]aresample=48000,aformat=channel_layouts=stereo,volume=${Math.max(0.5, input.audio.voiceVolume ?? 1)}[vo]`
+      `[${input.subStartIdx - (input.musicName ? reps + 1 : 1)}:a]aresample=48000,aformat=channel_layouts=stereo,volume=${Math.max(0.5, input.audio.voiceVolume ?? 1)}[vo]`
     );
     audioNodes.push("[vo]");
   }
   if (input.musicName) {
-    const musicIdx = input.subStartIdx - 1;
-    parts.push(`[${musicIdx}:a]aresample=48000,aformat=channel_layouts=stereo,volume=${input.audio.musicVolume}[mu]`);
+    const reps = input.musicReps || 1;
+    const musicBase = input.subStartIdx - reps;
+    // Bucle determinista: copias del mismo input unidas con concat, recortadas a la duración total
+    parts.push(`[${musicBase}:a]aresample=48000,aformat=channel_layouts=stereo[mures]`);
+    if (reps > 1) {
+      const labels: string[] = [];
+      for (let k = 0; k < reps; k++) labels.push(`[muc${k}]`);
+      parts.push(`[mures]asplit=${reps}${labels.join("")}`);
+      const concInputs = labels.map((l) => `${l}`).join("");
+      parts.push(`${concInputs}concat=n=${reps}:v=0:a=1[muloop]`);
+      parts.push(`[muloop]volume=${input.audio.musicVolume}${capMusic}[mu]`);
+    } else {
+      parts.push(`[mures]volume=${input.audio.musicVolume}${capMusic}[mu]`);
+    }
     audioNodes.push("[mu]");
   }
   const firstGeom = input.geoms[0];
