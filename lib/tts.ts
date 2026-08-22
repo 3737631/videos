@@ -1,4 +1,4 @@
-import type { AppSettings, VoiceOption } from "@/types";
+﻿import type { AppSettings, VoiceOption } from "@/types";
 import { serviceStatus } from "@/lib/storage";
 
 export interface TtsResult {
@@ -9,7 +9,7 @@ export interface TtsResult {
 }
 
 export const VOICE_CATALOG: VoiceOption[] = [
-  // Voces en INGLÉS (ideales para contenido viral en EE.UU./global)
+  // Voces en INGLÃ‰S (ideales para contenido viral en EE.UU./global)
   { id: "alloy", name: "Alloy", gender: "neutra", style: "Natural US", language: "English", accent: "US", speed: 1 },
   { id: "echo", name: "Echo", gender: "masculina", style: "Deep narrator", language: "English", accent: "US", speed: 1 },
   { id: "fable", name: "Fable", gender: "neutra", style: "Storyteller UK", language: "English", accent: "UK", speed: 1 },
@@ -27,8 +27,8 @@ const PREVIEW_LINES: Record<string, string> = {
 };
 
 /**
- * Previsualización GRATUITA de voz usando el sintetizador del navegador.
- * No necesita claves de API ni consume créditos.
+ * PrevisualizaciÃ³n GRATUITA de voz usando el sintetizador del navegador.
+ * No necesita claves de API ni consume crÃ©ditos.
  */
 export function previewVoice(voice: VoiceOption): boolean {
   if (typeof window === "undefined" || !("speechSynthesis" in window)) return false;
@@ -74,7 +74,7 @@ export async function generateSpeech(
   voiceId: string,
   options?: { speed?: number }
 ): Promise<TtsResult> {
-  if (!text.trim()) throw new Error("El texto de la voz está vacío");
+  if (!text.trim()) throw new Error("El texto de la voz estÃ¡ vacÃ­o");
 
   const status = serviceStatus(settings, "tts");
   if (status.configured) {
@@ -84,9 +84,9 @@ export async function generateSpeech(
       }
       return await generateOpenAi(settings, text, voiceId, options);
     } catch (e) {
-      // Respaldo gratuito para que el vídeo NUNCA salga sin voz
+      // Respaldo gratuito para que el vÃ­deo NUNCA salga sin voz
       try {
-        return await generateStreamElementsTts(text, voiceId);
+        return await generateGoogleTts(text);
       } catch {
         throw e;
       }
@@ -94,34 +94,10 @@ export async function generateSpeech(
   }
 
   // Sin clave configurada: voz gratuita directa
-  return generateStreamElementsTts(text, voiceId);
+  return generateGoogleTts(text);
 }
 
-// Voces gratuitas de respaldo (Polly vía StreamElements, con CORS abierto)
-const STE_VOICE_MAP: Record<string, string> = {
-  alloy: "Joanna",
-  echo: "Matthew",
-  fable: "Amy",
-  onyx: "Brian",
-  nova: "Salli",
-  shimmer: "Kendra",
-};
-
-async function generateStreamElementsTts(text: string, voiceId?: string): Promise<TtsResult> {
-  const steVoice = STE_VOICE_MAP[voiceId || "alloy"] || "Joanna";
-  const chunks = splitForTts(text, 280);
-  const parts: Blob[] = [];
-  for (const chunk of chunks) {
-    const url = `https://api.streamelements.com/kappa/v2/speech?voice=${steVoice}&text=${encodeURIComponent(chunk)}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`Respaldo TTS falló (${res.status})`);
-    parts.push(await res.blob());
-    if (chunks.length > 1) await new Promise((r) => setTimeout(r, 250));
-  }
-  const blob = new Blob(parts, { type: "audio/mpeg" });
-  return finalizeTts(blob, "respaldo-gratis");
-}
-
+// Respaldo gratuito (voz de Google Translate vÃ­a proxies con CORS abierto)
 function splitForTts(text: string, maxLen: number): string[] {
   const sentences = text.replace(/\s+/g, " ").split(/(?<=[.!?])\s+/);
   const chunks: string[] = [];
@@ -136,6 +112,40 @@ function splitForTts(text: string, maxLen: number): string[] {
   }
   if (cur) chunks.push(cur);
   return chunks.length ? chunks : [text.slice(0, maxLen)];
+}
+
+const GTX_PROXIES: Array<(u: string) => string> = [
+  (u) => `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(u)}`,
+  (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
+  (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+];
+
+async function generateGoogleTts(text: string): Promise<TtsResult> {
+  const chunks = splitForTts(text, 190);
+  const parts: Blob[] = [];
+  for (const chunk of chunks) {
+    const target =
+      `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl=en&q=${encodeURIComponent(chunk)}`;
+    let got: Blob | null = null;
+    for (const wrap of GTX_PROXIES) {
+      try {
+        const res = await fetch(wrap(target));
+        if (!res.ok) continue;
+        const b = await res.blob();
+        if (b.size > 1024 && (b.type.includes("audio") || b.type === "" || b.type.includes("mpeg"))) {
+          got = b;
+          break;
+        }
+      } catch {
+        /* siguiente proxy */
+      }
+    }
+    if (!got) throw new Error("Respaldo TTS no disponible");
+    parts.push(got);
+    if (chunks.length > 1) await new Promise((r) => setTimeout(r, 300));
+  }
+  const blob = new Blob(parts, { type: "audio/mpeg" });
+  return finalizeTts(blob, "respaldo-gratis");
 }
 
 async function generateOpenAi(
@@ -164,7 +174,7 @@ async function generateOpenAi(
     const retryable = res.status === 429 || res.status >= 500;
     throw new Error(
       retryable
-        ? `El servicio TTS está sobrecargado (${res.status}). Reintenta.`
+        ? `El servicio TTS estÃ¡ sobrecargado (${res.status}). Reintenta.`
         : `Error TTS (${res.status}): ${body.slice(0, 200)}`
     );
   }
@@ -206,7 +216,7 @@ async function generateElevenLabs(
     const retryable = res.status === 429 || res.status >= 500;
     throw new Error(
       retryable
-        ? `El servicio TTS está sobrecargado (${res.status}). Reintenta.`
+        ? `El servicio TTS estÃ¡ sobrecargado (${res.status}). Reintenta.`
         : `Error TTS ElevenLabs (${res.status}): ${body.slice(0, 200)}`
     );
   }
@@ -216,13 +226,13 @@ async function generateElevenLabs(
 
 async function finalizeTts(blob: Blob, provider: string): Promise<TtsResult> {
   if (!blob.size || blob.size < 1024) {
-    throw new Error("El proveedor TTS devolvió un archivo vacío o inválido. Reintenta.");
+    throw new Error("El proveedor TTS devolviÃ³ un archivo vacÃ­o o invÃ¡lido. Reintenta.");
   }
   const url = URL.createObjectURL(blob);
   const duration = await probeAudioDuration(url);
   if (duration < 0.5) {
     URL.revokeObjectURL(url);
-    throw new Error("El audio generado es demasiado corto o no contiene voz válida.");
+    throw new Error("El audio generado es demasiado corto o no contiene voz vÃ¡lida.");
   }
   return { blob, url, duration, provider };
 }

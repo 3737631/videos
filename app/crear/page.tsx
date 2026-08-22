@@ -328,12 +328,9 @@ export default function CrearPage() {
         }
       }
 
-      // Aviso visible si la voz no se pudo generar
+      // Aviso visible si la voz no se pudo generar (mensaje amable, detalle solo en el registro)
       if (voiceMode === "voz" && !localVoiceUrl) {
-        setVoiceWarning(
-          lastVoiceError ||
-            "No se pudo generar la voz. El vídeo se creará sin locución — revisa Configuración."
-        );
+        setVoiceWarning("No se pudo usar ElevenLabs para esta voz. El vídeo se creará sin locución — revisa tu clave en Configuración.");
       }
 
       // Estirar el último momento para que la voz completa quepa en el vídeo
