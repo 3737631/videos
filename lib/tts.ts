@@ -59,10 +59,8 @@ export function stopPreview() {
 }
 
 /**
- * Genera la locución:
- * - Escritorio: voz neuronal LOCAL (Kokoro) → ilimitada y gratis.
- * - Móvil: voz en la nube de Groq PlayAI → instantánea, sin descargar nada.
- * - Respaldo universal: Google Translate TTS.
+ * Genera la locución con la voz neuronal LOCAL (Kokoro, corre en el navegador):
+ * ilimitada y sin claves. Respaldo universal: Google Translate TTS.
  */
 export async function generateSpeech(
   settings: AppSettings,
@@ -70,23 +68,13 @@ export async function generateSpeech(
   voiceId: string,
   options?: { speed?: number; onProgress?: (done: number, total: number) => void }
 ): Promise<TtsResult> {
+  void settings;
   if (!text.trim()) throw new Error("El texto de la voz está vacío");
-  const isMobileLike =
-    typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
   const errs: string[] = [];
-  if (!isMobileLike) {
-    try {
-      return await generateKokoroTts(text, voiceId, options?.onProgress);
-    } catch (e) {
-      errs.push(e instanceof Error ? e.message : "local");
-    }
-  } else {
-    void options;
-  }
   try {
-    return await generateGroqTts(settings, text, voiceId);
+    return await generateKokoroTts(text, voiceId, options?.onProgress);
   } catch (e) {
-    errs.push(e instanceof Error ? e.message : "groq");
+    errs.push(e instanceof Error ? e.message : "local");
   }
   try {
     return await generateGoogleTts(text);
@@ -94,51 +82,6 @@ export async function generateSpeech(
     errs.push(e instanceof Error ? e.message : "google");
   }
   throw new Error(`No se pudo generar la voz (${errs.join(" · ")})`);
-}
-
-// ===== Voz en la nube (Groq PlayAI TTS): rápida en cualquier dispositivo =====
-const GROQ_VOICE_MAP: Record<string, string> = {
-  alloy: "Celeste-PlayAI",
-  nova: "Arista-PlayAI",
-  shimmer: "Amber-PlayAI",
-  echo: "Atlas-PlayAI",
-  onyx: "Fritz-PlayAI",
-  fable: "Quinn-PlayAI",
-};
-
-async function generateGroqTts(
-  settings: AppSettings,
-  text: string,
-  voiceId: string
-): Promise<TtsResult> {
-  const key = settings.llmApiKey;
-  if (!key) throw new Error("sin clave");
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 30000);
-  try {
-    const res = await fetch("https://api.groq.com/openai/v1/audio/speech", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body: JSON.stringify({
-        model: "playai-tts",
-        voice: GROQ_VOICE_MAP[voiceId] || GROQ_VOICE_MAP.alloy,
-        input: text.slice(0, 9000),
-        response_format: "wav",
-      }),
-      signal: ctrl.signal,
-    });
-    if (!res.ok) {
-      let detail = "";
-      try {
-        detail = (await res.text()).slice(0, 120);
-      } catch {}
-      throw new Error(`groq ${res.status}${detail ? ` ${detail}` : ""}`);
-    }
-    const blob = await res.blob();
-    return finalizeTts(blob, "groq-cloud");
-  } finally {
-    clearTimeout(t);
-  }
 }
 
 // ===== Voz neuronal LOCAL (Kokoro-82M vía WASM): ilimitada, sin claves =====

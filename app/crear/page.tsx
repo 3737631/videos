@@ -389,7 +389,7 @@ export default function CrearPage() {
           progress: 42,
         });
         {
-          const fullText = capForViral(getScriptFullText({ ...project, script }), IS_IOS ? 320 : 400);
+          const fullText = capForViral(getScriptFullText({ ...project, script }), IS_IOS ? 220 : 400);
           if (fullText.trim()) {
             try {
               const voiceT0 = Date.now();
@@ -414,7 +414,7 @@ export default function CrearPage() {
               let timedOut = false;
               const watchdog = setTimeout(() => {
                 timedOut = true;
-              }, 240000);
+              }, 330000);
               let voice: Awaited<ReturnType<typeof generateSpeech>> | null = null;
               try {
                 voice = await Promise.race([
@@ -469,10 +469,11 @@ export default function CrearPage() {
         }
       }
 
-      // Aviso visible si la voz no se pudo generar (mensaje amable, detalle solo en el registro)
+      // Aviso visible si la voz no se pudo generar, con el motivo real para diagnosticar
       if (voiceMode === "voz" && !localVoiceUrl) {
-        const msg = "No se pudo generar la voz. El vídeo se creará con música de fondo.";
-        setVoiceWarning((prev) => (prev ? `${prev} Además, ${msg.charAt(0).toLowerCase()}${msg.slice(1)}` : msg));
+        const motivo = lastVoiceError ? ` Motivo: ${lastVoiceError.slice(0, 160)}` : "";
+        const msg = `No se pudo generar la voz. El vídeo se creará con música de fondo.${motivo}`;
+        setVoiceWarning((prev) => (prev ? `${prev} ${msg}` : msg));
       }
 
       // ⏱️ Tiempo perfecto para TikTok: los clips se ajustan exactos a la voz
