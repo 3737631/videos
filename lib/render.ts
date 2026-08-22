@@ -70,6 +70,7 @@ export async function renderProject(
   const targetWidth = isIphone ? Math.min(reqW, 540) : reqW;
   const targetHeight = isIphone ? Math.min(reqH, 960) : reqH;
   const crfEff = isIphone ? Math.max(crf, 24) : crf;
+  const fpsEff = isIphone ? Math.min(fps, 20) : fps;
 
   stage(options, "Preparando vídeo", 5);
   if (!project.sources.length) throw new Error("No hay fuentes de vídeo");
@@ -175,7 +176,8 @@ export async function renderProject(
     audio: plan.audio,
     targetWidth,
     targetHeight,
-    fps,
+    fps: fpsEff,
+    noZoom: isIphone,
   });
 
   stage(options, "Renderizando", 65);
@@ -196,7 +198,7 @@ if (voiceName) args.push("-i", voiceName);
     "-crf", String(crfEff),
     "-c:a", "aac",
     "-b:a", "128k",
-    "-r", String(fps),
+    "-r", String(fpsEff),
     "-y",
     outName
   );
@@ -443,6 +445,7 @@ interface GraphInput {
   targetWidth: number;
   targetHeight: number;
   fps: number;
+  noZoom?: boolean;
 }
 
 function buildFilterGraph(input: GraphInput): string {
@@ -484,10 +487,14 @@ function buildFilterGraph(input: GraphInput): string {
       ? `trim=start=${Math.max(0, clip.start).toFixed(3)}:end=${clip.end.toFixed(3)},setpts=PTS-STARTPTS,`
       : "";
 
-    const zoomMax = Math.max(1, Math.min(1.05, clip.zoom + 0.05));
-    const zoom = `zoompan=z='min(1.0+0.0006*on,${zoomMax.toFixed(2)})':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${input.targetWidth}x${input.targetHeight}:fps=${input.fps}`;
-
-    parts.push(`[${clip.srcIdx}:v]${trim}${rotateFilter}${cropScale},${zoom}[vseg${j}]`);
+    if (input.noZoom) {
+      // Sin zoompan (filtro muy caro en WASM): encuadre estático ya escalado
+      parts.push(`[${clip.srcIdx}:v]${trim}${rotateFilter}${cropScale}[vseg${j}]`);
+    } else {
+      const zoomMax = Math.max(1, Math.min(1.05, clip.zoom + 0.05));
+      const zoom = `zoompan=z='min(1.0+0.0006*on,${zoomMax.toFixed(2)})':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${input.targetWidth}x${input.targetHeight}:fps=${input.fps}`;
+      parts.push(`[${clip.srcIdx}:v]${trim}${rotateFilter}${cropScale},${zoom}[vseg${j}]`);
+    }
   });
 
   // Concatenar segmentos

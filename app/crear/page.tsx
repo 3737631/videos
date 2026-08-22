@@ -389,7 +389,7 @@ export default function CrearPage() {
           progress: 42,
         });
         {
-          const fullText = capForViral(getScriptFullText({ ...project, script }), IS_IOS ? 220 : 400);
+          const fullText = capForViral(getScriptFullText({ ...project, script }), IS_IOS ? 180 : 400);
           if (fullText.trim()) {
             try {
               const voiceT0 = Date.now();
@@ -401,7 +401,7 @@ export default function CrearPage() {
                 const dl = voicePctRef.current;
                 if (lastDone === 0 && dl !== null && dl < 100) {
                   setJobStage({
-                    stage: `⬇️ Descargando voz… ${dl}% · ${el}s transcurridos`,
+                    stage: `⬇️ Descargando voz… ${dl}% · ${el}s transcurridos (sin límite, solo la primera vez)`,
                     progress: Math.min(45, 42 + dl! * 0.03),
                   });
                   return;
@@ -411,37 +411,57 @@ export default function CrearPage() {
                   progress: Math.min(51, 42 + (lastDone / Math.max(1, lastTotal)) * 9),
                 });
               }, 1000);
+              // El tiempo límite SOLO cuenta mientras se genera; la descarga no tiene límite
+              // pero en cuanto el modelo esté listo se activa el reloj de generación.
               let timedOut = false;
-              const watchdog = setTimeout(() => {
-                timedOut = true;
-              }, 330000);
-              let voice: Awaited<ReturnType<typeof generateSpeech>> | null = null;
-              try {
-                voice = await Promise.race([
-                  generateSpeech(settings, fullText, settings.ttsVoiceId || "alloy", {
+              let watchdog: ReturnType<typeof setTimeout> | null = null;
+              const armWatchdog = () => {
+                if (!watchdog) {
+                  watchdog = setTimeout(() => {
+                    timedOut = true;
+                  }, 260000);
+                }
+              };
+              void (async () => {
+                for (let i = 0; i < 600; i++) {
+                  if (watchdog || timedOut) return;
+                  if (await isKokoroReady()) {
+                    armWatchdog();
+                    return;
+                  }
+                  await new Promise((r) => setTimeout(r, 1000));
+                }
+                armWatchdog();
+              })();
+              const attempt = async (t: string): Promise<Awaited<ReturnType<typeof generateSpeech>> | null> =>
+                Promise.race([
+                  generateSpeech(settings, t, settings.ttsVoiceId || "alloy", {
                     speed: 1,
                     onProgress: (done, total) => {
                       lastDone = done;
                       lastTotal = total;
                       const el = (Date.now() - voiceT0) / 1000;
-                      const eta = Math.max(1, Math.round((el / done) * (total - done)));
+                      const eta = Math.max(1, Math.round((el / Math.max(1, done)) * (total - done)));
                       setJobStage({
                         stage: `🎙️ Generando voz ${done}/${total} · quedan ~${eta}s`,
                         progress: 42 + (done / total) * 9,
                       });
                     },
                   }),
-                  new Promise<null>((resolve) =>
-                    setTimeout(() => resolve(null), 239000)
-                  ),
+                  new Promise<null>((resolve) => setTimeout(() => resolve(null), 250000)),
                 ]);
+              let voice: Awaited<ReturnType<typeof generateSpeech>> | null = null;
+              try {
+                voice = await attempt(fullText);
+                if (!voice && fullText.length > 90) {
+                  addLog("Voz lenta: reintentando con texto más corto");
+                  voice = await attempt(`${fullText.slice(0, 88)}.`);
+                }
               } finally {
-                clearTimeout(watchdog);
+                if (watchdog) clearTimeout(watchdog);
                 clearInterval(beat);
               }
-              if (!voice) {
-                timedOut = true;
-              }
+              if (!voice) timedOut = true;
               if (timedOut) throw new Error("La voz tardó demasiado en este dispositivo");
               if (voice && (await validateVoiceBlob(voice.url))) {
                 ttsBlob = voice.blob;
