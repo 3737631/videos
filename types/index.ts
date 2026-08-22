@@ -32,6 +32,7 @@ export interface SceneInfo {
   end: number;
   score: number;
   type: "people" | "product" | "scene" | "empty" | "action";
+  sourceId?: string;
 }
 
 export interface SilenceSegment {

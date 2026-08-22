@@ -81,7 +81,7 @@ export function buildEditPlan(project: Project): EditPlan {
     targetDuration,
     clips: meta?.scenes?.length
       ? meta.scenes.map((s) => ({
-          sourceId: project.sources[0]?.id || "",
+          sourceId: s.sourceId || project.sources[0]?.id || "",
           start: s.start,
           end: s.end,
           cropX: 0,

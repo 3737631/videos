@@ -13,7 +13,7 @@ import type {
 } from "@/types";
 import { buildEditPlan, getScriptFullText } from "@/lib/editplan";
 import { generateHooks, generateScript, transcribeWithTimestamps } from "@/lib/ai";
-import { generateSpeech, getVoiceById } from "@/lib/tts";
+import { VOICE_CATALOG, generateSpeech, getVoiceById, previewVoice, stopPreview } from "@/lib/tts";
 import { serviceStatus } from "@/lib/storage";
 import { analyzeVideo } from "@/lib/analyze";
 import { detectViralHighlights, type ViralSegment } from "@/lib/viral";
@@ -62,7 +62,7 @@ function fallbackScript(hookText: string): ScriptSegment[] {
 
 export default function CrearPage() {
   const { saveProject } = useProjectActions();
-  const [settings] = useSettings();
+  const [settings, setSettings] = useSettings();
   const fileInput = useRef<HTMLInputElement>(null);
   const [project, setProject] = useState<Project>(newProject);
   const [dragging, setDragging] = useState(false);
@@ -72,6 +72,7 @@ export default function CrearPage() {
   const [jobStage, setJobStage] = useState<{ stage: string; progress: number } | null>(null);
   const [voiceMode, setVoiceMode] = useState<"voz" | "musica">("voz");
   const [finalUrl, setFinalUrl] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
   const update = (patch: Partial<Project>) => {
     setProject((p) => {
@@ -163,24 +164,41 @@ export default function CrearPage() {
         }
       }
 
-      // 2. Momento viral automático
-      let sceneStart = 0;
-      let sceneEnd = Math.min(meta.duration || src.duration || 15, 30);
-      try {
-        const segs: ViralSegment[] = await detectViralHighlights(src, () => {});
-        if (segs.length) {
-          const best = segs.reduce((a, b) => (b.score > a.score ? b : a));
-          sceneStart = Math.max(0, best.start);
-          sceneEnd = Math.max(best.end, sceneStart + 5);
-          addLog(`Momento viral: ${formatTime(sceneStart)} – ${formatTime(sceneEnd)}`);
-        } else {
-          addLog("Se usa el inicio del vídeo como momento fuerte");
+      // 2. Momentos virales en TODOS los vídeos subidos
+      const nVids = project.sources.length;
+      setJobStage({ stage: `Buscando momentos virales (${nVids} vídeo${nVids > 1 ? "s" : ""})`, progress: 12 });
+      type Seg = ViralSegment & { si: number };
+      const allSegs: Seg[] = [];
+      for (let si = 0; si < nVids; si++) {
+        const s = project.sources[si];
+        try {
+          const segs = await detectViralHighlights(s, () => {});
+          segs.forEach((g) => allSegs.push({ ...g, si }));
+          addLog(`Vídeo ${si + 1}: ${segs.length} momento(s) con gancho`);
+        } catch {
+          addLog(`Vídeo ${si + 1}: detección omitida`);
         }
-      } catch {
-        addLog("Detección viral omitida");
       }
-      const totalDur = meta.duration || src.duration || sceneEnd;
-      sceneEnd = Math.max(sceneStart + 3, Math.min(sceneEnd, totalDur));
+      allSegs.sort((a, b) => b.score - a.score);
+
+      // Elegir los mejores: máx 4 momentos, total ≤ 40s
+      const picked: Seg[] = [];
+      let tot = 0;
+      for (const g of allSegs) {
+        const d = g.end - g.start;
+        if (picked.length >= 4 || tot + d > 40) continue;
+        picked.push(g);
+        tot += d;
+      }
+      if (!picked.length) {
+        picked.push({ start: 0, end: Math.min(project.sources[0].duration || 15, 20), score: 0.8, si: 0 });
+      }
+      picked.sort((a, b) => a.si - b.si || a.start - b.start);
+      addLog(
+        picked.length > 1
+          ? `Usando los ${picked.length} mejores momentos (${tot.toFixed(1)}s en total)`
+          : "Usando el momento más fuerte"
+      );
 
       // 3. Hooks y guion en inglés
       setJobStage({ stage: "Generando hooks y guion", progress: 24 });
@@ -241,13 +259,19 @@ export default function CrearPage() {
         }
       }
 
-      // 6. Plan de edición con la voz adjunta
+      // 6. Plan de edición con los momentos virales de todos los vídeos
       setJobStage({ stage: "Preparando edición", progress: 65 });
       const base: Project = {
         ...project,
         metadata: {
           ...meta,
-          scenes: [{ start: sceneStart, end: sceneEnd, score: 0.9, type: "action" }],
+          scenes: picked.map((g) => ({
+            start: Math.max(0, g.start),
+            end: g.end,
+            score: g.score || 0.9,
+            type: "action" as const,
+            sourceId: project.sources[g.si].id,
+          })),
         },
         hooks,
         selectedHook,
@@ -267,14 +291,14 @@ export default function CrearPage() {
       setProject(next);
       saveProject(next);
 
-      // 7. Render final MP4 en el navegador
+      // 7. Render final MP4 en el navegador (máxima calidad)
       setJobStage({ stage: "Cargando motor de vídeo (solo la primera vez)", progress: 70 });
       if (!isFfmpegLoaded()) await loadFfmpeg();
       const result = await renderProject(getFfmpeg(), next, {
         targetWidth: 1080,
         targetHeight: 1920,
         fps: 30,
-        crf: 23,
+        crf: 18,
         onStage: (st, p) => setJobStage({ stage: `Renderizando: ${st}`, progress: 72 + p * 0.26 }),
       });
 
@@ -290,6 +314,15 @@ export default function CrearPage() {
     } finally {
       setBusy(null);
     }
+  }
+
+  function togglePreview() {
+    if (previewing) {
+      stopPreview();
+      setPreviewing(false);
+      return;
+    }
+    setPreviewing(previewVoice(getVoiceById(settings.ttsVoiceId || "alloy")));
   }
 
   function onDrop(e: React.DragEvent) {
@@ -347,8 +380,8 @@ export default function CrearPage() {
             }`}
           >
             <span className="text-3xl">📱</span>
-            <span className="mt-2 text-sm">{hasSource ? "Cambiar vídeo" : "Toca para elegir de tu galería"}</span>
-            <span className="mt-1 text-xs text-gray-400">MP4 · MOV · WEBM</span>
+            <span className="mt-2 text-sm">{hasSource ? "Añadir más vídeos" : "Toca para elegir de tu galería"}</span>
+            <span className="mt-1 text-xs text-gray-400">Puedes subir varios · MP4 · MOV · WEBM</span>
             <input
               ref={fileInput}
               type="file"
@@ -359,17 +392,17 @@ export default function CrearPage() {
             />
           </div>
 
-          {hasSource && (
-            <div className="mt-3 flex items-center gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2.5">
-              <video src={project.sources[0].url} muted playsInline preload="metadata" className="h-14 w-10 rounded object-cover bg-black" />
+          {project.sources.map((s) => (
+            <div key={s.id} className="mt-3 flex items-center gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2.5">
+              <video src={s.url} muted playsInline preload="metadata" className="h-14 w-10 rounded object-cover bg-black" />
               <div className="flex-1 min-w-0">
-                <div className="text-sm truncate">{project.sources[0].name}</div>
+                <div className="text-sm truncate">{s.name}</div>
                 <div className="text-xs text-gray-400">
-                  {project.sources[0].duration > 0 ? `${project.sources[0].duration.toFixed(1)}s` : ""}
+                  {s.duration > 0 ? `${s.duration.toFixed(1)}s` : ""}
                 </div>
               </div>
             </div>
-          )}
+          ))}
         </section>
 
         {/* Guía SnapTik */}
@@ -395,26 +428,52 @@ export default function CrearPage() {
           </section>
         )}
 
-        {/* Modo audio */}
+        {/* Modo audio + selector de voz */}
         {hasSource && (
-          <div className="mt-4 flex items-center gap-2 text-xs text-gray-400">
-            <span>Audio:</span>
-            <button
-              onClick={() => setVoiceMode("voz")}
-              className={`rounded-full px-3 py-1 transition-colors ${
-                voiceMode === "voz" ? "bg-blue-600 text-white" : "bg-white/10 hover:bg-white/15"
-              }`}
-            >
-              🎙️ Con voz
-            </button>
-            <button
-              onClick={() => setVoiceMode("musica")}
-              className={`rounded-full px-3 py-1 transition-colors ${
-                voiceMode === "musica" ? "bg-emerald-600 text-white" : "bg-white/10 hover:bg-white/15"
-              }`}
-            >
-              🎵 Solo música
-            </button>
+          <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.02] p-4">
+            <div className="flex items-center gap-2 text-xs text-gray-400">
+              <span>Audio:</span>
+              <button
+                onClick={() => setVoiceMode("voz")}
+                className={`rounded-full px-3 py-1 transition-colors ${
+                  voiceMode === "voz" ? "bg-blue-600 text-white" : "bg-white/10 hover:bg-white/15"
+                }`}
+              >
+                🎙️ Con voz
+              </button>
+              <button
+                onClick={() => setVoiceMode("musica")}
+                className={`rounded-full px-3 py-1 transition-colors ${
+                  voiceMode === "musica" ? "bg-emerald-600 text-white" : "bg-white/10 hover:bg-white/15"
+                }`}
+              >
+                🎵 Solo música
+              </button>
+            </div>
+
+            {voiceMode === "voz" && (
+              <div className="mt-3 flex items-center gap-2">
+                <select
+                  value={settings.ttsVoiceId || "alloy"}
+                  onChange={(e) => setSettings({ ttsVoiceId: e.target.value })}
+                  className="flex-1 rounded-lg border border-white/15 bg-[#131722] px-3 py-2 text-sm outline-none focus:border-blue-500"
+                >
+                  {VOICE_CATALOG.filter((v) => v.language === "English").map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name} · {v.style}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={togglePreview}
+                  className={`shrink-0 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
+                    previewing ? "bg-emerald-600 text-white" : "bg-blue-600 hover:bg-blue-500 text-white"
+                  }`}
+                >
+                  {previewing ? "⏹ Parar" : "▶ Escuchar"}
+                </button>
+              </div>
+            )}
           </div>
         )}
 
