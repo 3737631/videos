@@ -96,9 +96,36 @@ interface KokoroAudio {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let kokoroInst: any = null;
 
+// Progreso de descarga del modelo (para mostrarlo en la UI desde el primer momento)
+type DownloadInfo = { status: string; loaded?: number; total?: number; name?: string };
+const kokoroListeners = new Set<(pct: number | null) => void>();
+const fileProgress = new Map<string, { loaded: number; total: number }>();
+
+export function onKokoroDownload(cb: (pct: number | null) => void): () => void {
+  kokoroListeners.add(cb);
+  return () => kokoroListeners.delete(cb);
+}
+
+function emitKokoroProgress() {
+  let loaded = 0;
+  let total = 0;
+  for (const f of fileProgress.values()) {
+    loaded += f.loaded;
+    total += f.total;
+  }
+  const pct = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : null;
+  kokoroListeners.forEach((cb) => cb(pct));
+}
+
 async function getKokoro() {
   if (!kokoroInst) {
     const mod = await import("kokoro-js");
+    const progress_callback = (info: DownloadInfo) => {
+      if (info.status === "progress" && info.total) {
+        fileProgress.set(info.name || "model", { loaded: info.loaded || 0, total: info.total });
+        emitKokoroProgress();
+      }
+    };
     // WebGPU (Chrome/Edge/Android/Safari moderno): descarga similar pero generación 5-20x más rápida
     const hasWebGPU = typeof navigator !== "undefined" && "gpu" in navigator;
     if (hasWebGPU) {
@@ -106,6 +133,7 @@ async function getKokoro() {
         kokoroInst = await mod.KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", {
           dtype: "q4f16",
           device: "webgpu",
+          progress_callback,
         });
       } catch {
         kokoroInst = null;
@@ -115,6 +143,7 @@ async function getKokoro() {
       kokoroInst = await mod.KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", {
         dtype: "q8",
         device: "wasm",
+        progress_callback,
       });
     }
   }

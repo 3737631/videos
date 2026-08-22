@@ -18,7 +18,7 @@ import { serviceStatus } from "@/lib/storage";
 import { analyzeVideo } from "@/lib/analyze";
 import { detectViralHighlights, type ViralSegment } from "@/lib/viral";
 import { detectWatermark } from "@/lib/watermark";
-import { isKokoroReady, preloadKokoro } from "@/lib/tts";
+import { isKokoroReady, onKokoroDownload, preloadKokoro } from "@/lib/tts";
 
 // Detección de iPhone/iPad para optimizar velocidad de render
 const IS_IOS =
@@ -139,8 +139,20 @@ export default function CrearPage() {
     wakeLockRef.current = null;
   }
 
+  const [voicePct, setVoicePct] = useState<number | null>(null);
+  const [voiceReady, setVoiceReady] = useState(false);
+
   useEffect(() => {
-    void preloadKokoro(); // nada más abrir la página, la voz se descarga en segundo plano
+    // La voz se descarga sola nada más abrir la página (con % visible)
+    const off = onKokoroDownload((pct) => {
+      setVoicePct(pct);
+      if (pct === null || pct >= 100) setVoiceReady(true);
+    });
+    void preloadKokoro();
+    return () => {
+      off();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -584,6 +596,20 @@ export default function CrearPage() {
         {busy === "creating" && (
           <div className="mt-4 rounded-lg border border-cyan-500/30 bg-cyan-500/10 p-3 text-xs text-cyan-200">
             📱 Mantén esta pestaña abierta y la pantalla encendida mientras se crea el vídeo (en iPhone, iOS pausa el trabajo si cambias de app).
+          </div>
+        )}
+
+        {voiceReady && (
+          <div className="mt-4 rounded-lg border border-green-500/30 bg-green-500/10 p-2.5 text-xs text-green-300">
+            🎙️ Voz neuronal lista (ya está en tu navegador — ilimitada y sin esperas)
+          </div>
+        )}
+        {!voiceReady && voicePct !== null && (
+          <div className="mt-4 rounded-lg border border-blue-500/30 bg-blue-500/10 p-2.5 text-xs text-blue-200">
+            🎙️ Descargando voz para toda la sesión… {voicePct}% (mientras eliges tu vídeo)
+            <div className="mt-1.5 h-1.5 rounded-full bg-blue-900/50 overflow-hidden">
+              <div className="h-full bg-blue-400 transition-all" style={{ width: `${voicePct}%` }} />
+            </div>
           </div>
         )}
 
