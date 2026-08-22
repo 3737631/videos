@@ -147,9 +147,8 @@ if (voiceName) args.push("-i", voiceName);
     "-preset", "ultrafast",
     "-crf", String(crf),
     "-c:a", "aac",
-    "-b:a", "192k",
+    "-b:a", "128k",
     "-r", String(fps),
-    "-movflags", "+faststart",
     "-y",
     outName
   );
@@ -198,11 +197,25 @@ if (voiceName) args.push("-i", voiceName);
     ffmpeg.off("progress", onProg);
   }
 
-  stage(options, "Comprobando calidad", 94);
-  const outData = await ffmpeg.readFile(outName);
+  // faststart (pasada extra que reescribe el MP4) revienta la memoria de Safari/WASM
+  // en iPhone y mata el proceso en silencio al 100%. Fuera del render principal;
+  // en escritorio se hace después como remux opcional barato.
+  stage(options, "Comprobando calidad", 92);
+  let finalName = outName;
+  const isIphone = typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent);
+  if (!isIphone) {
+    try {
+      stage(options, "Optimizando para redes sociales", 93);
+      await ffmpeg.exec(["-i", outName, "-c", "copy", "-movflags", "+faststart", "-y", "final_fs.mp4"]);
+      finalName = "final_fs.mp4";
+    } catch {
+      finalName = outName;
+    }
+  }
+  const outData = await ffmpeg.readFile(finalName);
   const bytes = typeof outData === "string" ? new TextEncoder().encode(outData) : new Uint8Array(outData);
   const outBlob = new Blob([bytes.buffer as ArrayBuffer], { type: "video/mp4" });
-  const validation = await validateRender(ffmpeg, outName, outBlob);
+  const validation = await validateRender(ffmpeg, finalName, outBlob);
   if (!validation.ok) {
     throw new Error(`Control de calidad falló: ${validation.errors.join("; ")}`);
   }
@@ -211,6 +224,7 @@ if (voiceName) args.push("-i", voiceName);
   if (voiceName) await deleteFileSafe(ffmpeg, voiceName);
   if (musicName) await deleteFileSafe(ffmpeg, musicName);
   for (const f of subFiles) await deleteFileSafe(ffmpeg, f);
+  await deleteFileSafe(ffmpeg, "final_fs.mp4");
 
   stage(options, "Finalizando", 100);
   const url = URL.createObjectURL(outBlob);
