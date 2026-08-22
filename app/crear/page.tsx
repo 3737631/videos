@@ -89,6 +89,7 @@ export default function CrearPage() {
   const [cutDur, setCutDur] = useState(0);
   const [voiceUrl, setVoiceUrl] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [voiceMode, setVoiceMode] = useState<"voz" | "musica">("voz");
 
   const update = (patch: Partial<Project>) => {
     setProject((p) => {
@@ -228,23 +229,27 @@ export default function CrearPage() {
 
       let localVoiceUrl: string | null = null;
       let ttsBlob: Blob | null = null;
-      setJobStage({ stage: "Generando voz", progress: 50 });
-      if (serviceStatus(settings, "tts").configured) {
-        const fullText = getScriptFullText({ ...base, script });
-        if (fullText.trim()) {
-          try {
-            const voice = await generateSpeech(settings, fullText, settings.ttsVoiceId || "alloy", { speed: 1 });
-            if (await validateVoiceBlob(voice.url)) {
-              ttsBlob = voice.blob;
-              localVoiceUrl = voice.url;
-              addLog(`Voz generada (${voice.duration.toFixed(1)}s)`);
-            }
-          } catch (e) {
-            addLog(`Voz omitida: ${errText(e)}`);
-          }
-        }
+      if (voiceMode === "musica") {
+        addLog("Modo solo música: se omite la voz");
       } else {
-        addLog("Sin clave TTS: se omite la voz (configúrala en Ajustes)");
+        setJobStage({ stage: "Generando voz", progress: 50 });
+        if (serviceStatus(settings, "tts").configured) {
+          const fullText = getScriptFullText({ ...base, script });
+          if (fullText.trim()) {
+            try {
+              const voice = await generateSpeech(settings, fullText, settings.ttsVoiceId || "alloy", { speed: 1 });
+              if (await validateVoiceBlob(voice.url)) {
+                ttsBlob = voice.blob;
+                localVoiceUrl = voice.url;
+                addLog(`Voz generada (${voice.duration.toFixed(1)}s)`);
+              }
+            } catch (e) {
+              addLog(`Voz omitida: ${errText(e)}`);
+            }
+          }
+        } else {
+          addLog("Sin clave TTS: se omite la voz (configúrala en Ajustes)");
+        }
       }
 
       let cues: Project["subtitles"]["cues"] = [];
@@ -294,7 +299,11 @@ export default function CrearPage() {
 
       if (localVoiceUrl) setVoiceUrl(localVoiceUrl);
       setJobStage({ stage: "Listo", progress: 100 });
-      addLog("¡Vídeo viral creado! Puedes escuchar la voz arriba.");
+      addLog(
+        voiceMode === "musica"
+          ? "¡Vídeo creado en modo solo música! Ya puedes exportarlo."
+          : "¡Vídeo viral creado! Puedes escuchar la voz arriba."
+      );
     } catch (e) {
       setError(errText(e));
       addLog(`Error: ${errText(e)}`);
@@ -513,12 +522,66 @@ export default function CrearPage() {
                 </a>
               </div>
             )}
+
+            <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2.5">
+              <div className="min-w-0">
+                <div className="text-sm font-medium">🚫 Quitar marca de agua de TikTok</div>
+                <div className="text-[11px] text-gray-500">
+                  Difumina el @usuario y el logo al exportar el vídeo final (no aplica al recorte sin pérdida).
+                </div>
+              </div>
+              <button
+                onClick={() => update({ removeWatermark: !project.removeWatermark })}
+                aria-pressed={!!project.removeWatermark}
+                className={`shrink-0 relative w-12 h-7 rounded-full transition-colors ${
+                  project.removeWatermark ? "bg-emerald-600" : "bg-white/15"
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 h-6 w-6 rounded-full bg-white transition-all ${
+                    project.removeWatermark ? "left-[22px]" : "left-0.5"
+                  }`}
+                />
+              </button>
+            </div>
           </section>
 
           <section className="rounded-xl border border-white/10 bg-white/[0.02] p-5">
-            <h2 className="font-semibold">3 · Voz en inglés</h2>
-            <p className="text-xs text-gray-400 mt-1">Escucha y elige la voz antes de crear.</p>
+            <h2 className="font-semibold">3 · Voz y audio</h2>
+            <p className="text-xs text-gray-400 mt-1">Con voz en inglés o solo con música de fondo.</p>
 
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setVoiceMode("voz")}
+                className={`rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
+                  voiceMode === "voz" ? "bg-blue-600 text-white" : "bg-white/10 text-gray-300 hover:bg-white/15"
+                }`}
+              >
+                🎙️ Con voz
+              </button>
+              <button
+                onClick={() => setVoiceMode("musica")}
+                className={`rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
+                  voiceMode === "musica" ? "bg-emerald-600 text-white" : "bg-white/10 text-gray-300 hover:bg-white/15"
+                }`}
+              >
+                🎵 Solo música
+              </button>
+            </div>
+
+            {voiceMode === "musica" ? (
+              <div className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+                <div className="text-sm font-medium text-emerald-300">🎵 Sin voz: solo música</div>
+                <div className="mt-1 text-xs text-gray-400">
+                  Elige una pista en la página{" "}
+                  <Link href="/musica" className="text-blue-400 hover:text-blue-300 underline">
+                    Música
+                  </Link>{" "}
+                  y se mezclará sobre tu vídeo. También se oye el audio original de fondo.
+                </div>
+              </div>
+            ) : (
+              <>
             <div className="mt-4 rounded-lg border border-blue-500/40 bg-blue-500/5 p-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="min-w-0">
@@ -548,6 +611,8 @@ export default function CrearPage() {
                 <div className="text-sm font-medium text-emerald-300 mb-2">🎙️ Tu voz está lista:</div>
                 <audio controls src={voiceUrl} className="w-full" />
               </div>
+            )}
+              </>
             )}
 
             <div className="mt-4 space-y-1.5 text-xs text-gray-400">

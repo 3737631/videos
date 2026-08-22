@@ -27,7 +27,13 @@ export default function VocesPage() {
   return (
     <AppShell>
       <div className="max-w-6xl mx-auto px-6 py-8">
-        <h1 className="text-2xl font-bold">Voces</h1>
+        <Link
+          href="/crear"
+          className="inline-flex items-center gap-1 text-sm text-gray-300 hover:text-white transition"
+        >
+          ← Atrás
+        </Link>
+        <h1 className="mt-3 text-2xl font-bold">Voces</h1>
         <p className="mt-1 text-sm text-gray-400">
           Pulsa ▶ para escuchar cada voz (vista previa gratuita, sin claves). La voz
           seleccionada se usará al crear tus vídeos.

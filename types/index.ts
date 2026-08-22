@@ -221,6 +221,7 @@ export interface Project {
   editPlan: EditPlan | null;
   renders: RenderJob[];
   thumbnail: string;
+  removeWatermark?: boolean;
   renderUrl?: string;
   renderValidation?: RenderValidation;
 }
