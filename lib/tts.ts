@@ -126,26 +126,13 @@ async function getKokoro() {
         emitKokoroProgress();
       }
     };
-    // WebGPU (Chrome/Edge/Android/Safari moderno): descarga similar pero generación 5-20x más rápida
-    const hasWebGPU = typeof navigator !== "undefined" && "gpu" in navigator;
-    if (hasWebGPU) {
-      try {
-        kokoroInst = await mod.KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", {
-          dtype: "q4f16",
-          device: "webgpu",
-          progress_callback,
-        });
-      } catch {
-        kokoroInst = null;
-      }
-    }
-    if (!kokoroInst) {
-      kokoroInst = await mod.KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", {
-        dtype: "q8",
-        device: "wasm",
-        progress_callback,
-      });
-    }
+    // Ruta WASM probada y fiable en todos los dispositivos (la ruta WebGPU producía
+    // audio mudo en algunos navegadores de escritorio)
+    kokoroInst = await mod.KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", {
+      dtype: "q8",
+      device: "wasm",
+      progress_callback,
+    });
   }
   return kokoroInst;
 }

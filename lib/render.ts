@@ -277,7 +277,9 @@ function buildFilterGraph(input: GraphInput): string {
   const totalDur = Math.max(0.5, input.clips.reduce((a, c) => a + Math.max(0, c.end - c.start), 0));
   const capMusic = input.musicName ? `,atrim=end=${totalDur.toFixed(3)},asetpts=N/SR/TB` : "";
   if (input.voiceName) {
-    parts.push(`[${input.subStartIdx - (input.musicName ? 2 : 1)}:a]aresample=48000,aformat=channel_layouts=stereo[vo]`);
+    parts.push(
+      `[${input.subStartIdx - (input.musicName ? 2 : 1)}:a]aresample=48000,aformat=channel_layouts=stereo,volume=${Math.max(0.5, input.audio.voiceVolume ?? 1)}[vo]`
+    );
     audioNodes.push("[vo]");
   }
   if (input.musicName) {
