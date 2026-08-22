@@ -85,17 +85,104 @@ export async function generateSpeech(
       }
       return await generateOpenAi(settings, text, voiceId, options);
     } catch (e) {
-      // Respaldo gratuito para que el vÃ­deo NUNCA salga sin voz
+      // Voz neuronal LOCAL ilimitada (Kokoro en el navegador), luego Google como última opción
       try {
-        return await generateGoogleTts(text);
+        return await generateKokoroTts(text, voiceId);
       } catch {
-        throw e;
+        try {
+          return await generateGoogleTts(text);
+        } catch {
+          throw e;
+        }
       }
     }
   }
 
-  // Sin clave configurada: voz gratuita directa
-  return generateGoogleTts(text);
+  // Sin clave configurada: voz neuronal local directa
+  return generateKokoroTts(text, voiceId);
+}
+
+// ===== Voz neuronal LOCAL (Kokoro, corre en el navegador): ilimitada, sin claves =====
+const KOKORO_VOICE_MAP: Record<string, string> = {
+  alloy: "af_heart", // femenina cálida US
+  nova: "af_bella", // femenina enérgica US
+  shimmer: "af_nicole", // femenina suave US
+  echo: "am_adam", // masculina profunda US
+  onyx: "am_michael", // masculina narrador US
+  fable: "bm_george", // masculina storyteller UK
+};
+
+interface KokoroAudio {
+  toWav: () => ArrayBuffer;
+  audio: Float32Array;
+  sampling_rate?: number;
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let kokoroInst: any = null;
+
+async function getKokoro() {
+  if (!kokoroInst) {
+    const mod = await import("kokoro-js");
+    kokoroInst = await mod.KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", {
+      dtype: "q8",
+      device: "wasm",
+    });
+  }
+  return kokoroInst;
+}
+
+function floatToWavBlob(samples: Float32Array, sampleRate = 24000): Blob {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const ws = (o: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
+  };
+  ws(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  ws(8, "WAVE");
+  ws(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  ws(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  let off = 44;
+  for (let i = 0; i < samples.length; i++, off += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+export async function isKokoroReady(): Promise<boolean> {
+  return kokoroInst !== null;
+}
+
+async function generateKokoroTts(text: string, voiceId: string): Promise<TtsResult> {
+  const tts = await getKokoro();
+  const voice = KOKORO_VOICE_MAP[voiceId] || KOKORO_VOICE_MAP.alloy;
+  const chunks = splitForTts(text, 280);
+  const pieces: Float32Array[] = [];
+  let totalLen = 0;
+  let sampleRate = 24000;
+  for (const chunk of chunks) {
+    const out = await tts.generate(chunk.trim(), { voice, speed: 1.05 });
+    sampleRate = out.sampling_rate || 24000;
+    pieces.push(out.audio);
+    totalLen += out.audio.length;
+  }
+  const merged = new Float32Array(totalLen);
+  let off = 0;
+  for (const p of pieces) {
+    merged.set(p, off);
+    off += p.length;
+  }
+  const blob = floatToWavBlob(merged, sampleRate);
+  return finalizeTts(blob, "kokoro-local");
 }
 
 // Respaldo gratuito (voz de Google Translate vÃ­a proxies con CORS abierto)

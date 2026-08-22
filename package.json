@@ -12,6 +12,7 @@
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
+    "kokoro-js": "^1.2.1",
     "next": "^15.3.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
