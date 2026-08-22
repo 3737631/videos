@@ -9,13 +9,55 @@ export interface TtsResult {
 }
 
 export const VOICE_CATALOG: VoiceOption[] = [
-  { id: "alloy", name: "Alloy", gender: "neutra", style: "Natural", language: "Español", accent: "Neutro", speed: 1 },
-  { id: "echo", name: "Echo", gender: "masculina", style: "Profesional", language: "Español", accent: "Neutro", speed: 1 },
-  { id: "fable", name: "Fable", gender: "neutra", style: "Storytelling", language: "Español", accent: "Neutro", speed: 1 },
-  { id: "onyx", name: "Onyx", gender: "masculina", style: "Energética", language: "Español", accent: "Neutro", speed: 1 },
-  { id: "nova", name: "Nova", gender: "femenina", style: "Natural", language: "Español", accent: "Neutro", speed: 1 },
-  { id: "shimmer", name: "Shimmer", gender: "femenina", style: "UGC", language: "Español", accent: "Neutro", speed: 1 },
+  // Voces en INGLÉS (ideales para contenido viral en EE.UU./global)
+  { id: "alloy", name: "Alloy", gender: "neutra", style: "Natural US", language: "English", accent: "US", speed: 1 },
+  { id: "echo", name: "Echo", gender: "masculina", style: "Deep narrator", language: "English", accent: "US", speed: 1 },
+  { id: "fable", name: "Fable", gender: "neutra", style: "Storyteller UK", language: "English", accent: "UK", speed: 1 },
+  { id: "onyx", name: "Onyx", gender: "masculina", style: "Movie trailer", language: "English", accent: "US", speed: 1 },
+  { id: "nova", name: "Nova", gender: "femenina", style: "Energetic creator", language: "English", accent: "US", speed: 1 },
+  { id: "shimmer", name: "Shimmer", gender: "femenina", style: "Soft UGC", language: "English", accent: "US", speed: 1 },
 ];
+
+export function getVoiceById(id: string): VoiceOption {
+  return VOICE_CATALOG.find((v) => v.id === id) || VOICE_CATALOG[0];
+}
+
+const PREVIEW_LINES: Record<string, string> = {
+  English: "Wait for it... this is the part everyone is talking about!",
+};
+
+/**
+ * Previsualización GRATUITA de voz usando el sintetizador del navegador.
+ * No necesita claves de API ni consume créditos.
+ */
+export function previewVoice(voice: VoiceOption): boolean {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return false;
+  const synth = window.speechSynthesis;
+  synth.cancel();
+  const utter = new SpeechSynthesisUtterance(PREVIEW_LINES[voice.language] ?? "Hola, esta es una muestra de voz.");
+  utter.lang = voice.language === "English" ? (voice.accent === "UK" ? "en-GB" : "en-US") : "es-ES";
+  utter.rate = voice.speed > 0 ? Math.min(2, voice.speed) : 1;
+  utter.pitch = voice.gender === "femenina" ? 1.15 : voice.gender === "masculina" ? 0.85 : 1;
+  // Intentar elegir una voz del sistema que encaje con el idioma/acento
+  const voices = synth.getVoices();
+  const targetLang = utter.lang.toLowerCase();
+  if (voice.language === "English") {
+    const en = voices.find((v) => v.lang.toLowerCase() === targetLang) ||
+      voices.find((v) => v.lang.toLowerCase().startsWith(targetLang.slice(0, 2)));
+    if (en) utter.voice = en;
+  } else {
+    const es = voices.find((v) => v.lang.toLowerCase().startsWith("es"));
+    if (es) utter.voice = es;
+  }
+  synth.speak(utter);
+  return true;
+}
+
+export function stopPreview() {
+  if (typeof window !== "undefined" && "speechSynthesis" in window) {
+    window.speechSynthesis.cancel();
+  }
+}
 
 export async function generateSpeech(
   settings: AppSettings,

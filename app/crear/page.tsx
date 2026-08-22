@@ -1,16 +1,24 @@
 "use client";
 
 import { useRef, useState } from "react";
+import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
-import { useProjectActions } from "@/lib/useStore";
-import type { Project, SourceVideo, VideoMetadata } from "@/types";
-import { jobs, type JobInstance } from "@/lib/jobs";
+import { useProjectActions, useSettings } from "@/lib/useStore";
+import type {
+  Project,
+  SourceVideo,
+  VideoMetadata,
+  HookOption,
+  ScriptSegment,
+} from "@/types";
 import { buildEditPlan, getScriptFullText } from "@/lib/editplan";
-import { useSettings } from "@/lib/useStore";
 import { generateHooks, generateScript, generateCta, transcribeWithTimestamps } from "@/lib/ai";
-import { generateSpeech } from "@/lib/tts";
+import { generateSpeech, getVoiceById, previewVoice, stopPreview } from "@/lib/tts";
+import { serviceStatus } from "@/lib/storage";
 import { analyzeVideo } from "@/lib/analyze";
 import { PRESETS, TARGET_DURATIONS, VIDEO_GOALS, VIDEO_STYLES } from "@/lib/presets";
+import { detectViralHighlights, losslessCut, type ViralSegment } from "@/lib/viral";
+import { loadFfmpeg } from "@/lib/ffmpeg";
 
 function newProject(): Project {
   const id = crypto.randomUUID();
@@ -29,12 +37,27 @@ function newProject(): Project {
     selectedHook: "",
     script: [],
     voice: null,
-    subtitles: { cues: [], style: { font: "system-ui", size: 64, weight: 800, color: "#fff", activeColor: "#fde047", shadow: true, stroke: false, strokeColor: "#000", position: "bottom", maxWidth: 86, animation: "pop" } },
+    subtitles: { cues: [], style: { font: "system-ui", size: 72, weight: 800, color: "#fff", activeColor: "#fde047", shadow: true, stroke: false, strokeColor: "#000", position: "bottom", maxWidth: 86, animation: "pop" } },
     music: null,
     editPlan: null,
     renders: [],
     thumbnail: "",
   };
+}
+
+const FALLBACK_HOOKS: HookOption[] = [
+  { id: "h1", text: "Wait for it… 🤯", score: 0.9 },
+  { id: "h2", text: "You won't believe what happens next", score: 0.85 },
+  { id: "h3", text: "POV: this changed everything", score: 0.8 },
+];
+
+function fallbackScript(hookText: string): ScriptSegment[] {
+  return [
+    { kind: "hook", text: hookText },
+    { kind: "desarrollo", text: "Here is the moment everyone is talking about — watch closely." },
+    { kind: "beneficio", text: "This trick makes your content pop instantly." },
+    { kind: "cta", text: "Follow for more viral clips like this." },
+  ];
 }
 
 function statusBadge(status: Project["status"]) {
@@ -51,17 +74,21 @@ function statusBadge(status: Project["status"]) {
 }
 
 export default function CrearPage() {
-  const { saveProject, projects } = useProjectActions();
+  const { saveProject } = useProjectActions();
   const [settings] = useSettings();
   const fileInput = useRef<HTMLInputElement>(null);
   const [project, setProject] = useState<Project>(newProject);
   const [dragging, setDragging] = useState(false);
-  const [busy, setBusy] = useState<"analyzing" | "creating" | null>(null);
+  const [busy, setBusy] = useState<"analyzing" | "creating" | "cutting" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [log, setLog] = useState<string[]>([]);
   const [jobStage, setJobStage] = useState<{ stage: string; progress: number } | null>(null);
   const [generatedCtas, setGeneratedCtas] = useState<string[]>([]);
-  const [voiceStatus, setVoiceStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [viralSegs, setViralSegs] = useState<ViralSegment[]>([]);
+  const [cutUrl, setCutUrl] = useState<string | null>(null);
+  const [cutDur, setCutDur] = useState(0);
+  const [voiceUrl, setVoiceUrl] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
   const update = (patch: Partial<Project>) => {
     setProject((p) => {
@@ -73,13 +100,43 @@ export default function CrearPage() {
 
   const addLog = (msg: string) => setLog((l) => [...l, `${new Date().toLocaleTimeString()} - ${msg}`]);
 
+  function errText(e: unknown) {
+    return e instanceof Error ? e.message : String(e);
+  }
+
+  async function runAnalysis(src: SourceVideo) {
+    let metadata: VideoMetadata;
+    try {
+      metadata = await analyzeVideo(src, (stage, progress) =>
+        setJobStage({ stage: `Analizando: ${stage}`, progress: 25 + progress * 0.35 })
+      );
+      addLog("Análisis completado");
+    } catch {
+      metadata = minimalMetadata(src);
+      addLog("Análisis básico aplicado (el vídeo se procesará igualmente)");
+    }
+    update({ metadata });
+
+    try {
+      const segs = await detectViralHighlights(src, () => {});
+      setViralSegs(segs);
+      addLog(`Momentos virales detectados: ${segs.length}`);
+    } catch {
+      setViralSegs([]);
+    }
+  }
+
   async function handleFiles(files: FileList | File[]) {
-    const list = Array.from(files).filter((f) => f.type.startsWith("video/") || /\.(mp4|mov|webm|avi)$/i.test(f.name));
+    const list = Array.from(files).filter(
+      (f) => f.type.startsWith("video/") || /\.(mp4|mov|m4v|webm|avi|3gp)$/i.test(f.name)
+    );
     if (!list.length) {
-      setError("Formato no soportado. Usa MP4, MOV, WEBM o AVI.");
+      setError("Formato no soportado. Usa MP4, MOV (galería del iPhone), WEBM o AVI.");
       return;
     }
     setError(null);
+    setCutUrl(null);
+    setViralSegs([]);
     setBusy("analyzing");
     setJobStage({ stage: "Leyendo vídeo", progress: 5 });
     addLog(`Procesando ${list.length} archivo(s)...`);
@@ -88,7 +145,7 @@ export default function CrearPage() {
       const sources: SourceVideo[] = [];
       for (const file of list) {
         const url = URL.createObjectURL(file);
-        const meta = await probeVideoMeta(file, url);
+        const meta = await probeVideoMeta(url);
         sources.push({
           id: crypto.randomUUID(),
           name: file.name,
@@ -108,20 +165,31 @@ export default function CrearPage() {
         name: main.name.replace(/\.[^.]+$/, ""),
         thumbnail: main.url,
       });
-      setJobStage({ stage: "Analizando contenido", progress: 30 });
 
-      const metadata = await analyzeVideo(main, (stage, progress) => {
-        setJobStage({ stage, progress });
-      });
-      update({ metadata });
-      addLog("Análisis completado");
+      await runAnalysis(main);
       setJobStage({ stage: "Listo", progress: 100 });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
-      addLog(`Error: ${msg}`);
+      setError(errText(e));
+      addLog(`Error: ${errText(e)}`);
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function reanalyze() {
+    const src = project.sources[0];
+    if (!src || busy !== null) return;
+    setError(null);
+    setBusy("analyzing");
+    setJobStage({ stage: "Analizando vídeo", progress: 20 });
+    try {
+      await runAnalysis(src);
+      setJobStage({ stage: "Listo", progress: 100 });
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setBusy(null);
+      setJobStage(null);
     }
   }
 
@@ -130,76 +198,144 @@ export default function CrearPage() {
       setError("Sube primero un vídeo.");
       return;
     }
-    if (!project.metadata) {
-      setError("Analiza primero el vídeo.");
-      return;
-    }
     setError(null);
     setBusy("creating");
-    addLog("Creando vídeo automáticamente...");
+    addLog("Creando vídeo viral...");
 
+    const base = project;
     try {
-      const metadataText = project.metadata.analysisText;
+      const metaText = base.metadata?.analysisText || "Vídeo vertical corto.";
+
       setJobStage({ stage: "Generando hooks", progress: 10 });
-      const hooks = await generateHooks(settings, metadataText);
-      if (!hooks.length) throw new Error("No se pudieron generar hooks. Revisa tu clave de LLM.");
+      let hooks: HookOption[] = [];
+      try {
+        hooks = await generateHooks(settings, metaText);
+      } catch {
+        hooks = [];
+      }
+      if (!hooks.length) hooks = FALLBACK_HOOKS;
       const selectedHook = hooks[0].text;
-      update({ hooks, selectedHook });
       addLog(`Hook elegido: "${selectedHook}"`);
 
       setJobStage({ stage: "Generando guion", progress: 30 });
-      const script = await generateScript(
-        settings,
-        metadataText,
-        hooks,
-        selectedHook,
-        project.style,
-        project.goal
-      );
-      if (!script.length) throw new Error("No se pudo generar el guion.");
-      update({ script });
-      addLog(`Guion generado (${script.length} bloques)`);
+      let script: ScriptSegment[] = [];
+      try {
+        script = await generateScript(settings, metaText, hooks, selectedHook, base.style, base.goal);
+      } catch {
+        script = [];
+      }
+      if (!script.length) script = fallbackScript(selectedHook);
 
-      setJobStage({ stage: "Generando voz", progress: 45 });
-      setVoiceStatus("loading");
-      const fullText = getScriptFullText({ ...project, script });
-      const voice = await generateSpeech(settings, fullText, settings.ttsVoiceId || "alloy", {
-        speed: 1,
-      });
-      const valid = await validateVoiceBlob(voice.url);
-      if (!valid) throw new Error("La voz generada no contiene audio válido. Reintenta.");
-      update({ voice: { voiceId: settings.ttsVoiceId || "alloy", voiceName: "Voz", provider: settings.ttsProvider, speed: 1, pitch: 1 } });
-      setVoiceStatus("done");
-      addLog(`Voz generada (${voice.duration.toFixed(1)}s)`);
+      let localVoiceUrl: string | null = null;
+      let ttsBlob: Blob | null = null;
+      setJobStage({ stage: "Generando voz", progress: 50 });
+      if (serviceStatus(settings, "tts").configured) {
+        const fullText = getScriptFullText({ ...base, script });
+        if (fullText.trim()) {
+          try {
+            const voice = await generateSpeech(settings, fullText, settings.ttsVoiceId || "alloy", { speed: 1 });
+            if (await validateVoiceBlob(voice.url)) {
+              ttsBlob = voice.blob;
+              localVoiceUrl = voice.url;
+              addLog(`Voz generada (${voice.duration.toFixed(1)}s)`);
+            }
+          } catch (e) {
+            addLog(`Voz omitida: ${errText(e)}`);
+          }
+        }
+      } else {
+        addLog("Sin clave TTS: se omite la voz (configúrala en Ajustes)");
+      }
 
-      setJobStage({ stage: "Generando subtítulos", progress: 60 });
-      const cues = await transcribeWithTimestamps(settings, voice.blob);
-      if (!cues.length) throw new Error("No se obtuvo transcripción con timestamps.");
-      update({ subtitles: { ...project.subtitles, cues } });
-      addLog(`Subtítulos: ${cues.length} bloques`);
+      let cues: Project["subtitles"]["cues"] = [];
+      if (ttsBlob && serviceStatus(settings, "stt").configured) {
+        setJobStage({ stage: "Generando subtítulos", progress: 65 });
+        try {
+          cues = await transcribeWithTimestamps(settings, ttsBlob);
+          addLog(`Subtítulos: ${cues.length} bloques`);
+        } catch {
+          addLog("Subtítulos omitidos");
+        }
+      }
 
       setJobStage({ stage: "Generando CTA", progress: 80 });
-      const ctas = await generateCta(settings, project.goal);
+      let ctas: string[] = [];
+      try {
+        ctas = await generateCta(settings, base.goal);
+      } catch {
+        ctas = [];
+      }
+      if (!ctas.length) ctas = ["Follow for more!"];
       setGeneratedCtas(ctas);
-      addLog("CTA generado");
 
-      setJobStage({ stage: "Construyendo plan de edición", progress: 90 });
-      const withVoice = { ...project, script, subtitles: { ...project.subtitles, cues } };
-      const plan = buildEditPlan(withVoice);
-      update({ editPlan: plan, status: "ready" });
-      addLog("Plan de edición listo");
+      setJobStage({ stage: "Construyendo plan de edición", progress: 92 });
+      const next: Project = {
+        ...base,
+        hooks,
+        selectedHook,
+        script,
+        subtitles: { ...base.subtitles, cues },
+        voice: localVoiceUrl
+          ? {
+              voiceId: settings.ttsVoiceId || "alloy",
+              voiceName: getVoiceById(settings.ttsVoiceId || "alloy").name,
+              provider: settings.ttsProvider,
+              speed: 1,
+              pitch: 1,
+            }
+          : base.voice,
+      };
+      const plan = buildEditPlan(next);
+      next.editPlan = plan;
+      next.status = "ready";
+      next.updatedAt = new Date().toISOString();
+      setProject(next);
+      saveProject(next);
 
+      if (localVoiceUrl) setVoiceUrl(localVoiceUrl);
       setJobStage({ stage: "Listo", progress: 100 });
-      addLog("Vídeo creado. Ve al editor para ajustar y exportar.");
+      addLog("¡Vídeo viral creado! Puedes escuchar la voz arriba.");
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
-      setVoiceStatus("error");
-      addLog(`Error: ${msg}`);
+      setError(errText(e));
+      addLog(`Error: ${errText(e)}`);
     } finally {
       setBusy(null);
       setJobStage(null);
     }
+  }
+
+  async function handleViralCut() {
+    const src = project.sources[0];
+    if (!src || !viralSegs.length || busy !== null) return;
+    setError(null);
+    setBusy("cutting");
+    setJobStage({ stage: "Preparando recorte", progress: 5 });
+    try {
+      addLog("Recortando momentos virales sin pérdida de calidad...");
+      const ff = await loadFfmpeg((line) => void line);
+      const res = await losslessCut(ff, src, viralSegs, (stage, progress) =>
+        setJobStage({ stage, progress })
+      );
+      setCutUrl(res.url);
+      setCutDur(res.duration);
+      addLog(`Recorte viral listo (${res.duration.toFixed(1)}s, sin recodificar)`);
+    } catch (e) {
+      setError(errText(e));
+      addLog(`Error: ${errText(e)}`);
+    } finally {
+      setBusy(null);
+      setJobStage(null);
+    }
+  }
+
+  function togglePreview() {
+    if (previewing) {
+      stopPreview();
+      setPreviewing(false);
+      return;
+    }
+    const ok = previewVoice(getVoiceById(settings.ttsVoiceId || "alloy"));
+    setPreviewing(ok);
   }
 
   function onDrop(e: React.DragEvent) {
@@ -208,24 +344,20 @@ export default function CrearPage() {
     handleFiles(e.dataTransfer.files);
   }
 
-  const hasMetadata = !!project.metadata;
-  const readyToCreate = hasMetadata && project.metadata?.qualityScore;
+  const selectedVoice = getVoiceById(settings.ttsVoiceId || "alloy");
+  const hasSource = project.sources.length > 0;
 
   return (
     <AppShell>
       <div className="max-w-6xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-2xl font-bold">Crear vídeo</h1>
+            <h1 className="text-2xl font-bold">Crear vídeo viral</h1>
             <p className="text-sm text-gray-400 mt-1">
-              Sube tu vídeo, analízalo y la IA lo convierte en un vídeo vertical completo.
+              Sube tu vídeo y se hace todo solo: análisis, momentos virales, voz en inglés y edición.
             </p>
           </div>
-          {project.id && (
-            <div className="flex items-center gap-2 text-xs">
-              {statusBadge(project.status)}
-            </div>
-          )}
+          <div>{statusBadge(project.status)}</div>
         </div>
 
         {error && (
@@ -240,24 +372,20 @@ export default function CrearPage() {
         {jobStage && (
           <div className="mt-4 rounded-lg border border-blue-500/30 bg-blue-500/10 p-4">
             <div className="flex justify-between text-sm text-blue-200">
-              <span>{busy === "creating" ? "🤖" : "🔍"} {jobStage.stage}</span>
+              <span>{busy === "creating" ? "🤖" : busy === "cutting" ? "✂️" : "🔍"} {jobStage.stage}</span>
               <span>{Math.round(jobStage.progress)}%</span>
             </div>
             <div className="mt-2 h-2 rounded-full bg-blue-900/50 overflow-hidden">
-              <div
-                className="h-full bg-blue-500 transition-all"
-                style={{ width: `${jobStage.progress}%` }}
-              />
+              <div className="h-full bg-blue-500 transition-all" style={{ width: `${jobStage.progress}%` }} />
             </div>
           </div>
         )}
 
         <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* FUENTES */}
           <section className="rounded-xl border border-white/10 bg-white/[0.02] p-5">
-            <h2 className="font-semibold">1. Fuentes</h2>
+            <h2 className="font-semibold">1 · Sube tu vídeo</h2>
             <p className="text-xs text-gray-400 mt-1">
-              MP4, MOV, WEBM o AVI. Puedes soltar varios archivos.
+              Desde la galería del iPhone (.mov/.mp4), PC o cualquier sitio.
             </p>
             <div
               onDragOver={(e) => {
@@ -274,13 +402,13 @@ export default function CrearPage() {
                 dragging ? "border-blue-500 bg-blue-500/10" : "border-white/15 hover:border-blue-400/50"
               }`}
             >
-              <span className="text-3xl">📁</span>
-              <span className="mt-2 text-sm">Arrastra tu vídeo o haz clic</span>
-              <span className="mt-1 text-xs text-gray-400">o selecciona un archivo</span>
+              <span className="text-3xl">📱</span>
+              <span className="mt-2 text-sm">Toca para elegir de tu galería</span>
+              <span className="mt-1 text-xs text-gray-400">MP4 · MOV · WEBM</span>
               <input
                 ref={fileInput}
                 type="file"
-                accept="video/mp4,video/quicktime,video/webm,video/x-msvideo"
+                accept="video/*"
                 multiple
                 className="hidden"
                 onChange={(e) => e.target.files && handleFiles(e.target.files)}
@@ -289,75 +417,152 @@ export default function CrearPage() {
 
             {project.sources.map((s) => (
               <div key={s.id} className="mt-3 flex items-center gap-3 rounded-lg border border-white/10 p-2.5">
-                <video
-                  src={s.url}
-                  muted
-                  preload="metadata"
-                  className="h-14 w-10 rounded object-cover bg-black"
-                />
+                <video src={s.url} muted playsInline preload="metadata" className="h-14 w-10 rounded object-cover bg-black" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm truncate">{s.name}</div>
                   <div className="text-xs text-gray-400">
-                    {s.width}×{s.height} · {s.duration.toFixed(1)}s
+                    {s.width > 0 ? `${s.width}×${s.height} · ` : ""}
+                    {s.duration > 0 ? `${s.duration.toFixed(1)}s` : "duración detectando…"}
                   </div>
                 </div>
               </div>
             ))}
+
+            {hasSource && (
+              <button
+                onClick={reanalyze}
+                disabled={busy !== null}
+                className="mt-3 w-full rounded-lg bg-white/5 px-3 py-2 text-xs text-gray-300 hover:bg-white/10 disabled:opacity-50"
+              >
+                🔄 Volver a analizar
+              </button>
+            )}
           </section>
 
-          {/* ANÁLISIS */}
           <section className="rounded-xl border border-white/10 bg-white/[0.02] p-5">
-            <h2 className="font-semibold">2. Analizar con IA</h2>
+            <h2 className="font-semibold">2 · Momentos virales</h2>
             <p className="text-xs text-gray-400 mt-1">
-              Detecta escenas, personas, producto, silencios, ritmo, calidad y audio.
+              Detecta automáticamente las partes con más gancho.
             </p>
-            <button
-              onClick={() => handleFiles([] as unknown as FileList)}
-              disabled={busy !== null || !project.sources.length}
-              className={`mt-4 w-full rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors ${
-                busy === "analyzing"
-                  ? "bg-blue-600/50 cursor-wait"
-                  : project.sources.length
-                    ? "bg-blue-600 hover:bg-blue-500"
-                    : "bg-white/5 text-gray-400 cursor-not-allowed"
-              }`}
-            >
-              {busy === "analyzing" ? "Analizando…" : hasMetadata ? "Re-analizar" : "Analizar vídeo"}
-            </button>
 
-            {project.metadata && (
-              <div className="mt-4 space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Escenas</span>
-                  <span>{project.metadata.scenes.length}</span>
+            {!hasSource && (
+              <p className="mt-6 text-sm text-gray-500 text-center">
+                Sube un vídeo para ver los momentos virales aquí.
+              </p>
+            )}
+
+            {hasSource && !viralSegs.length && busy === "analyzing" && (
+              <p className="mt-6 text-sm text-blue-300 text-center animate-pulse-soft">
+                Buscando momentos virales…
+              </p>
+            )}
+
+            {hasSource && !viralSegs.length && busy !== "analyzing" && (
+              <p className="mt-6 text-sm text-gray-500 text-center">
+                No se detectaron momentos destacados.
+              </p>
+            )}
+
+            {viralSegs.length > 0 && (
+              <div className="mt-4 space-y-2">
+                {viralSegs.map((seg, i) => {
+                  const strength = Math.min(100, Math.round(seg.score * 40));
+                  return (
+                    <div key={i} className="rounded-lg bg-white/[0.03] p-3">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="font-medium">🔥 Viral #{i + 1}</span>
+                        <span className="text-gray-400 text-xs">
+                          {formatTime(seg.start)} – {formatTime(seg.end)}
+                        </span>
+                      </div>
+                      <div className="mt-2 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                        <div className="h-full bg-gradient-to-r from-fuchsia-500 to-orange-400" style={{ width: `${strength}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
+                <button
+                  onClick={handleViralCut}
+                  disabled={busy !== null}
+                  className={`w-full mt-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors ${
+                    busy === "cutting"
+                      ? "bg-fuchsia-600/50 cursor-wait"
+                      : "bg-fuchsia-600 hover:bg-fuchsia-500"
+                  }`}
+                >
+                  ✂️ Recortar virales (sin pérdida de calidad)
+                </button>
+                <p className="text-[11px] text-gray-500 text-center">
+                  Recorta copiando los streams originales: cero recompresión.
+                </p>
+              </div>
+            )}
+
+            {cutUrl && (
+              <div className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+                <div className="text-sm font-medium text-emerald-300 mb-2">
+                  ✅ Recorte viral listo{cutDur > 0 ? ` · ${cutDur.toFixed(1)}s` : ""}
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Personas</span>
-                  <span>{project.metadata.people}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Voz</span>
-                  <span>{Math.round(project.metadata.speech * 100)}%</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Calidad</span>
-                  <span>{Math.round(project.metadata.qualityScore)}%</span>
-                </div>
-                <div className="mt-3 rounded-lg bg-white/[0.03] p-3 text-xs text-gray-300 max-h-32 overflow-y-auto">
-                  {project.metadata.analysisText}
-                </div>
+                <video src={cutUrl} controls playsInline className="w-full rounded-lg max-h-64 bg-black" />
+                <a
+                  href={cutUrl}
+                  download="clip-viral.mp4"
+                  className="block mt-2 text-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold hover:bg-emerald-500"
+                >
+                  ⬇️ Descargar clip viral
+                </a>
               </div>
             )}
           </section>
 
-          {/* CONFIGURACIÓN DEL VÍDEO */}
           <section className="rounded-xl border border-white/10 bg-white/[0.02] p-5">
-            <h2 className="font-semibold">3. Configuración</h2>
-            <p className="text-xs text-gray-400 mt-1">
-              Estilo, objetivo y duración del vídeo final.
-            </p>
+            <h2 className="font-semibold">3 · Voz en inglés</h2>
+            <p className="text-xs text-gray-400 mt-1">Escucha y elige la voz antes de crear.</p>
 
-            <div className="mt-4">
+            <div className="mt-4 rounded-lg border border-blue-500/40 bg-blue-500/5 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold truncate">
+                    🔊 {selectedVoice.name} ({selectedVoice.accent})
+                  </div>
+                  <div className="text-xs text-gray-400 truncate">
+                    {selectedVoice.language} · {selectedVoice.style}
+                  </div>
+                </div>
+                <button
+                  onClick={togglePreview}
+                  className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                    previewing ? "bg-emerald-600 text-white" : "bg-blue-600 hover:bg-blue-500 text-white"
+                  }`}
+                >
+                  {previewing ? "⏹ Parar" : "▶ Escuchar"}
+                </button>
+              </div>
+              <Link href="/voces" className="mt-2 inline-block text-xs text-blue-400 hover:text-blue-300">
+                Cambiar de voz →
+              </Link>
+            </div>
+
+            {voiceUrl && (
+              <div className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+                <div className="text-sm font-medium text-emerald-300 mb-2">🎙️ Tu voz está lista:</div>
+                <audio controls src={voiceUrl} className="w-full" />
+              </div>
+            )}
+
+            <div className="mt-4 space-y-1.5 text-xs text-gray-400">
+              <div>✅ Análisis automático del contenido</div>
+              <div>✅ Hook y guion virales en inglés</div>
+              <div>✅ Subtítulos llamativos (si hay claves)</div>
+              <div>✅ Recorte vertical 9:16</div>
+            </div>
+          </section>
+        </div>
+
+        <details className="mt-6 rounded-xl border border-white/10 bg-white/[0.02] p-5">
+          <summary className="text-sm font-semibold cursor-pointer">⚙️ Ajustes avanzados (opcional)</summary>
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-5">
+            <div>
               <span className="text-sm font-medium">Estilo</span>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {VIDEO_STYLES.map((s) => (
@@ -365,9 +570,7 @@ export default function CrearPage() {
                     key={s.id}
                     onClick={() => update({ style: s.id })}
                     className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
-                      project.style === s.id
-                        ? "bg-blue-600 text-white"
-                        : "bg-white/5 text-gray-300 hover:bg-white/10"
+                      project.style === s.id ? "bg-blue-600 text-white" : "bg-white/5 text-gray-300 hover:bg-white/10"
                     }`}
                   >
                     {s.label}
@@ -375,8 +578,7 @@ export default function CrearPage() {
                 ))}
               </div>
             </div>
-
-            <div className="mt-4">
+            <div>
               <span className="text-sm font-medium">Objetivo</span>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {VIDEO_GOALS.map((g) => (
@@ -384,9 +586,7 @@ export default function CrearPage() {
                     key={g.id}
                     onClick={() => update({ goal: g.id })}
                     className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
-                      project.goal === g.id
-                        ? "bg-fuchsia-600 text-white"
-                        : "bg-white/5 text-gray-300 hover:bg-white/10"
+                      project.goal === g.id ? "bg-fuchsia-600 text-white" : "bg-white/5 text-gray-300 hover:bg-white/10"
                     }`}
                   >
                     {g.label}
@@ -394,8 +594,7 @@ export default function CrearPage() {
                 ))}
               </div>
             </div>
-
-            <div className="mt-4">
+            <div>
               <span className="text-sm font-medium">Duración</span>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {TARGET_DURATIONS.map((d) => (
@@ -403,9 +602,7 @@ export default function CrearPage() {
                     key={String(d.id)}
                     onClick={() => update({ targetDuration: d.id })}
                     className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
-                      project.targetDuration === d.id
-                        ? "bg-emerald-600 text-white"
-                        : "bg-white/5 text-gray-300 hover:bg-white/10"
+                      project.targetDuration === d.id ? "bg-emerald-600 text-white" : "bg-white/5 text-gray-300 hover:bg-white/10"
                     }`}
                   >
                     {d.label}
@@ -413,8 +610,7 @@ export default function CrearPage() {
                 ))}
               </div>
             </div>
-
-            <div className="mt-5">
+            <div className="md:col-span-3">
               <span className="text-xs text-gray-400">Plantillas rápidas:</span>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {PRESETS.map((p) => (
@@ -429,35 +625,29 @@ export default function CrearPage() {
                 ))}
               </div>
             </div>
-          </section>
-        </div>
+          </div>
+        </details>
 
-        {/* BOTÓN PRINCIPAL */}
         <div className="mt-8">
           <button
             onClick={handleCreate}
-            disabled={busy !== null || !readyToCreate || !project.editPlan}
+            disabled={busy !== null || !hasSource}
             className={`w-full rounded-xl px-6 py-4 text-base font-bold transition-colors ${
               busy === "creating"
                 ? "bg-fuchsia-600/50 cursor-wait"
-                : !readyToCreate
+                : !hasSource
                   ? "bg-white/5 text-gray-400 cursor-not-allowed"
                   : "bg-fuchsia-600 hover:bg-fuchsia-500 shadow-lg shadow-fuchsia-900/40"
             }`}
           >
             {busy === "creating"
-              ? "Creando vídeo automáticamente…"
+              ? "Creando tu vídeo viral…"
               : project.editPlan
-                ? "Regenerar vídeo automáticamente"
-                : "Crear vídeo automáticamente"}
+                ? "🔁 Regenerar vídeo viral"
+                : "🚀 Crear vídeo viral"}
           </button>
-          <p className="mt-2 text-center text-xs text-gray-400">
-            Sube → Analiza → Guion → Voz → Subtítulos → Plan de edición. Luego edita cada
-            parte o exporta directamente.
-          </p>
         </div>
 
-        {/* LOG */}
         {log.length > 0 && (
           <details className="mt-6 rounded-xl border border-white/10 p-4">
             <summary className="text-sm font-medium cursor-pointer">Registro de actividad</summary>
@@ -481,44 +671,99 @@ export default function CrearPage() {
         )}
 
         <div className="mt-8 text-center">
-          <a
-            href={`/editor?id=${project.id}`}
-            className="text-sm text-blue-400 hover:text-blue-300"
-          >
+          <Link href={`/editor?id=${project.id}`} className="text-sm text-blue-400 hover:text-blue-300">
             Abrir en el editor completo →
-          </a>
+          </Link>
         </div>
       </div>
     </AppShell>
   );
 }
 
-async function probeVideoMeta(file: File, url: string): Promise<{
+async function probeVideoMeta(url: string): Promise<{
   duration: number;
   width: number;
   height: number;
   fps: number;
   hasAudio: boolean;
 }> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
+    const fallback = { duration: 0, width: 0, height: 0, fps: 30, hasAudio: true };
     const video = document.createElement("video");
     video.preload = "metadata";
-    video.onloadedmetadata = () => {
-      const hasAudio =
-        typeof (video as unknown as { mozHasAudio?: boolean }).mozHasAudio === "boolean"
-          ? (video as unknown as { mozHasAudio?: boolean }).mozHasAudio === true
-          : true;
-      resolve({
-        duration: isFinite(video.duration) ? video.duration : 0,
-        width: video.videoWidth,
-        height: video.videoHeight,
-        fps: 30,
-        hasAudio,
-      });
+    video.muted = true;
+    let settled = false;
+    let timer = 0 as unknown as ReturnType<typeof setTimeout>;
+    const finish = (val: typeof fallback) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(val);
     };
-    video.onerror = () => reject(new Error("No se pudo leer el vídeo."));
+    timer = setTimeout(() => finish(fallback), 8000);
+    video.onloadedmetadata = () => {
+      const dur = video.duration;
+      if (isFinite(dur) && dur > 0) {
+        finish({
+          duration: dur,
+          width: video.videoWidth || 0,
+          height: video.videoHeight || 0,
+          fps: 30,
+          hasAudio: true,
+        });
+        return;
+      }
+      video.onseeked = () => {
+        const d2 = video.duration;
+        finish({
+          duration: isFinite(d2) ? d2 : 0,
+          width: video.videoWidth || 0,
+          height: video.videoHeight || 0,
+          fps: 30,
+          hasAudio: true,
+        });
+      };
+      try {
+        video.currentTime = 1e6;
+      } catch {
+        finish({
+          duration: 0,
+          width: video.videoWidth || 0,
+          height: video.videoHeight || 0,
+          fps: 30,
+          hasAudio: true,
+        });
+      }
+    };
+    video.onerror = () => finish(fallback);
     video.src = url;
   });
+}
+
+function minimalMetadata(src: SourceVideo): VideoMetadata {
+  const duration = src.duration || 10;
+  return {
+    scenes: [],
+    duration,
+    resolution: { width: src.width || 1080, height: src.height || 1920 },
+    fps: src.fps || 30,
+    people: 0,
+    objects: ["contenido visual"],
+    speech: 0,
+    silenceSegments: [],
+    sceneChanges: 0,
+    interestingSegments: [],
+    audioLevel: 0,
+    qualityScore: 70,
+    analysisText: `Vídeo de ${duration.toFixed(1)}s listo para edición vertical.`,
+  };
+}
+
+function formatTime(t: number): string {
+  if (!t || !isFinite(t)) return "0:00";
+  const m = Math.floor(t / 60);
+  const s = Math.floor(t % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 async function validateVoiceBlob(url: string): Promise<boolean> {
