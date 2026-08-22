@@ -154,18 +154,32 @@ if (voiceName) args.push("-i", voiceName);
     outName
   );
 
-  // Progreso real de la codificación (0..1) → 15%..90%, con tiempo restante estimado
+  // Progreso HONESTO: el motor mide contra el primer input (mal), así que medimos
+  // nosotros con el tiempo de salida real frente a la duración total del vídeo.
+  const totalOut = Math.max(0.5, usedClips.reduce((a, c) => a + Math.max(0, c.end - c.start), 0));
   const renderT0 = Date.now();
-  const onProg = ({ progress }: { progress: number }) => {
-    const p = Math.min(1, Math.max(0, progress || 0));
+  let lastPct = 15;
+  let lastTick = Date.now();
+  const onProg = ({ time }: { progress?: number; time?: number }) => {
+    const sec = typeof time === "number" && time > 0 ? time / 1e6 : null;
     const el = (Date.now() - renderT0) / 1000;
+    const p = sec !== null ? Math.min(1, Math.max(0, sec / totalOut)) : Math.min(1, Math.max(0, el / Math.max(8, totalOut * 2)));
+    lastPct = 15 + p * 75;
+    lastTick = Date.now();
     const eta = p > 0.04 ? Math.max(1, Math.round((el / p) * (1 - p))) : null;
     stage(
       options,
       eta !== null ? `Renderizando vídeo… quedan ~${eta}s` : "Renderizando vídeo…",
-      15 + p * 75
+      lastPct
     );
   };
+  // Latido: si el motor deja de emitir eventos, seguimos mostrando vida igualmente
+  const beat = setInterval(() => {
+    if (Date.now() - lastTick > 6000) {
+      const el = Math.round((Date.now() - renderT0) / 1000);
+      stage(options, `Renderizando vídeo… ${el}s transcurridos (sigue trabajando)`, Math.min(89, lastPct));
+    }
+  }, 2000);
   ffmpeg.on("progress", onProg);
   try {
     // Red de seguridad: nunca colgar eternamente (p.ej. un filtro atascado)
@@ -180,6 +194,7 @@ if (voiceName) args.push("-i", voiceName);
       if (timer) clearTimeout(timer);
     }
   } finally {
+    clearInterval(beat);
     ffmpeg.off("progress", onProg);
   }
 
