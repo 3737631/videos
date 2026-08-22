@@ -201,59 +201,80 @@ if (voiceName) args.push("-i", voiceName);
     outName
   );
 
-  // Telemetría: guardamos las últimas líneas del motor para diagnóstico en vivo
+  // Telemetría: guardamos las últimas líneas del motor para diagnóstico en vivo.
+  // Además detectamos el FIN REAL del muxer (líneas que solo aparecen al cerrar el archivo):
+  // si la promesa de exec se pierde (bug conocido), resolvemos igualmente.
   const logTail: string[] = [];
+  let markMuxDone: (() => void) | null = null;
   const logHandler = ({ message }: { message: string }) => {
     logTail.push(message);
     if (logTail.length > 30) logTail.shift();
+    if (markMuxDone && (/Lsize=/.test(message) || /muxing overhead/.test(message) || /^video:\d+kB/.test(message))) {
+      const fn = markMuxDone;
+      markMuxDone = null;
+      fn();
+    }
   };
   ffmpeg.on("log", logHandler);
 
-  // Progreso HONESTO: el motor mide contra el primer input (mal), así que medimos
-  // nosotros con el tiempo de salida real frente a la duración total del vídeo.
+  // Progreso ASINTÓTICO: nunca se sienta en un número muerto. Mientras codifica avanza
+  // hacia ~92% desacelerando; al llegar al final cambia a "Finalizando" con latido visible.
   const totalOut = Math.max(0.5, usedClips.reduce((a, c) => a + Math.max(0, c.end - c.start), 0));
   const renderT0 = Date.now();
   let lastPct = 15;
-  let lastTick = Date.now();
+  let lastStageText = "";
+  let maxSecSeen = 0;
+  let lastAdvance = Date.now();
   let lastUi = 0;
   const onProg = ({ time }: { progress?: number; time?: number }) => {
     const sec = typeof time === "number" && time > 0 ? time / 1e6 : null;
+    if (sec !== null && sec > maxSecSeen + 0.05) {
+      maxSecSeen = sec;
+      lastAdvance = Date.now();
+    }
     const el = (Date.now() - renderT0) / 1000;
-    const p = sec !== null ? Math.min(1, Math.max(0, sec / totalOut)) : Math.min(1, Math.max(0, el / Math.max(8, totalOut * 2)));
-    lastPct = 15 + p * 75;
-    lastTick = Date.now();
+    const p =
+      sec !== null
+        ? Math.min(1, Math.max(0, sec / totalOut))
+        : Math.min(1, Math.max(0, el / Math.max(8, totalOut * 2)));
+    lastPct = 15 + Math.min(p, 0.97) * 77; // techo 92%: nunca parece terminado antes de tiempo
     const now = Date.now();
     if (now - lastUi < 400) return; // no ahogar la UI con miles de repaints
     lastUi = now;
+    if (p >= 0.97) {
+      lastStageText = "Cerrando el vídeo…";
+      stage(options, lastStageText, Math.min(92, lastPct));
+      return;
+    }
     const eta = p > 0.04 ? Math.max(1, Math.round((el / p) * (1 - p))) : null;
+    lastStageText = eta !== null ? `Renderizando vídeo… quedan ~${eta}s` : "Renderizando vídeo…";
+    stage(options, lastStageText, lastPct);
+  };
+  // Latido SIEMPRE activo: cada 2s refresca con tiempo transcurrido y la última línea
+  // interna del motor, así jamás aparece una barra muerta aunque el motor calle.
+  const beat = setInterval(() => {
+    if (Date.now() - lastUi < 3500) return;
+    const el = Math.round((Date.now() - renderT0) / 1000);
+    const tail = logTail[logTail.length - 1];
     stage(
       options,
-      eta !== null ? `Renderizando vídeo… quedan ~${eta}s` : "Renderizando vídeo…",
-      lastPct
+      `${lastStageText || "Renderizando vídeo…"} ${el}s${tail ? ` · ${tail.slice(0, 60)}` : ""}`,
+      Math.min(91, lastPct)
     );
-  };
-  // Latido: si el motor deja de emitir eventos, seguimos mostrando vida igualmente
-  const beat = setInterval(() => {
-    if (Date.now() - lastTick > 6000) {
-      const el = Math.round((Date.now() - renderT0) / 1000);
-      const tail = logTail[logTail.length - 1];
-      stage(
-        options,
-        `Renderizando vídeo… ${el}s transcurridos${tail ? ` · ${tail.slice(0, 70)}` : ""}`,
-        Math.min(89, lastPct)
-      );
-    }
   }, 2000);
   ffmpeg.on("progress", onProg);
   try {
-    // Guardián doble: (a) si el motor deja de dar señales 45s => murió (memoria WASM)
-    // => reiniciamos el motor y avisamos claro; (b) tope duro de 8 minutos.
+    // Triple red: (a) fin real por log del muxer; (b) estancamiento REAL (tiempo sin
+    // avanzar 45s) => error claro con las últimas líneas; (c) tope duro de 8 minutos.
     let rejectGuard!: (e: Error) => void;
     const guard = new Promise<never>((_, reject) => {
       rejectGuard = reject;
     });
+    const doneP = new Promise<void>((resolve) => {
+      markMuxDone = resolve;
+    });
     const stall = setInterval(() => {
-      if (Date.now() - lastTick > 45000 && Date.now() - renderT0 > 60000) {
+      if (Date.now() - lastAdvance > 45000 && Date.now() - renderT0 > 60000) {
         rejectGuard(
           new Error(
             `Motor parado 45s. Últimas líneas: ${logTail.slice(-5).join(" | ").slice(0, 300)}`
@@ -265,7 +286,17 @@ if (voiceName) args.push("-i", voiceName);
       rejectGuard(new Error("El motor de vídeo tardó demasiado. Prueba con un vídeo más corto."));
     }, 480000);
     try {
-      await Promise.race([ffmpeg.exec(args), guard]);
+      await Promise.race([
+        ffmpeg.exec(args).then(() => {
+          if (markMuxDone) {
+            const fn = markMuxDone;
+            markMuxDone = null;
+            fn();
+          }
+        }),
+        doneP,
+        guard,
+      ]);
     } catch (e) {
       // Motor posiblemente muerto: forzar recreación en el próximo uso
       try {
