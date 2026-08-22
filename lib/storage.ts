@@ -9,16 +9,23 @@ const SETTINGS_KEY = "clipcraft.settings.v1";
 let projectsCache: Project[] | null = null;
 let settingsCache: AppSettings | null = null;
 
+const BUILTIN_GROQ_KEY = "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";
+const BUILTIN_ELEVENLABS_KEY = "sk_da788064febe680d49463bca63e744aa19cd81b3353ba6e1";
+
 const DEFAULT_SETTINGS: AppSettings = {
   llmProvider: "groq",
-  llmApiKey: "",
+  llmApiKey: BUILTIN_GROQ_KEY,
   llmModel: "llama-3.3-70b-versatile",
   ttsProvider: "elevenlabs",
-  ttsApiKey: "",
+  ttsApiKey: BUILTIN_ELEVENLABS_KEY,
   ttsVoiceId: "alloy",
   sttProvider: "groq",
-  sttApiKey: "",
+  sttApiKey: BUILTIN_GROQ_KEY,
 };
+
+function pickKey(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.trim() ? value : fallback;
+}
 
 export function loadProjects(): Project[] {
   if (projectsCache !== null) return projectsCache;
@@ -84,9 +91,14 @@ export function loadSettings(): AppSettings {
   let loaded: AppSettings;
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    loaded = raw
-      ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) }
-      : { ...DEFAULT_SETTINGS };
+    const parsed = raw ? JSON.parse(raw) : {};
+    loaded = {
+      ...DEFAULT_SETTINGS,
+      ...(parsed && typeof parsed === "object" ? parsed : {}),
+      llmApiKey: pickKey(parsed.llmApiKey, DEFAULT_SETTINGS.llmApiKey),
+      sttApiKey: pickKey(parsed.sttApiKey, DEFAULT_SETTINGS.sttApiKey),
+      ttsApiKey: pickKey(parsed.ttsApiKey, DEFAULT_SETTINGS.ttsApiKey),
+    };
   } catch {
     loaded = { ...DEFAULT_SETTINGS };
   }

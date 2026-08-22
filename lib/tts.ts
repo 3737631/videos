@@ -59,6 +59,15 @@ export function stopPreview() {
   }
 }
 
+const ELEVENLABS_VOICE_MAP: Record<string, string> = {
+  alloy: "21m00Tcm4TlvDq8ikWAM",
+  echo: "29vD33N1CtxCmqQRPOHJ",
+  fable: "JBFqnCBsd6RMkjVDRZzb",
+  onyx: "VR6AewLTigWG4xSOukaG",
+  nova: "EXAVITQu4vr4xnSDxMaL",
+  shimmer: "LcfcDJNUP1GQjkzn1xUU",
+};
+
 export async function generateSpeech(
   settings: AppSettings,
   text: string,
@@ -118,7 +127,8 @@ async function generateElevenLabs(
   options?: { speed?: number }
 ): Promise<TtsResult> {
   const speed = options?.speed && options.speed > 0 ? options.speed : 1;
-  const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+  const elVoiceId = ELEVENLABS_VOICE_MAP[voiceId] || voiceId;
+  const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${elVoiceId}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
