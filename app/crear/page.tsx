@@ -19,6 +19,12 @@ import { analyzeVideo } from "@/lib/analyze";
 import { detectViralHighlights, type ViralSegment } from "@/lib/viral";
 import { detectWatermark } from "@/lib/watermark";
 import { isKokoroReady, preloadKokoro } from "@/lib/tts";
+
+// Detección de iPhone/iPad para optimizar velocidad de render
+const IS_IOS =
+  typeof navigator !== "undefined" &&
+  (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
 import { loadFfmpeg, isFfmpegLoaded, getFfmpeg } from "@/lib/ffmpeg";
 import { renderProject } from "@/lib/render";
 
@@ -164,6 +170,7 @@ export default function CrearPage() {
     const lastStop = Math.max(cut.lastIndexOf("."), cut.lastIndexOf("!"), cut.lastIndexOf("?"));
     return (lastStop > 120 ? cut.slice(0, lastStop + 1) : cut).trim();
   }
+
 
   function errText(e: unknown) {
     return e instanceof Error ? e.message : String(e);
@@ -331,7 +338,7 @@ export default function CrearPage() {
           progress: 42,
         });
         {
-          const fullText = capForViral(getScriptFullText({ ...project, script }), 400);
+          const fullText = capForViral(getScriptFullText({ ...project, script }), IS_IOS ? 320 : 400);
           if (fullText.trim()) {
             try {
               const voiceT0 = Date.now();
@@ -488,8 +495,9 @@ export default function CrearPage() {
       setJobStage({ stage: "Cargando motor de vídeo (solo la primera vez)", progress: 70 });
       if (!isFfmpegLoaded()) await loadFfmpeg();
       const result = await renderProject(getFfmpeg(), next, {
-        targetWidth: 1080,
-        targetHeight: 1920,
+        // iPhone: 720p → render ~2x más rápido; en TikTok la diferencia es imperceptible
+        targetWidth: IS_IOS ? 720 : 1080,
+        targetHeight: IS_IOS ? 1280 : 1920,
         fps: 24,
         crf: 20,
         onStage: (st, p) => setJobStage({ stage: st, progress: Math.min(99, Math.max(15, p)) }),
