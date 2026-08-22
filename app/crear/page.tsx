@@ -151,6 +151,15 @@ export default function CrearPage() {
 
   const addLog = (msg: string) => setLog((l) => [...l, `${new Date().toLocaleTimeString()} - ${msg}`]);
 
+  // Recorta el guion para que la voz dure lo óptimo viral (~26s)
+  function capForViral(text: string, maxChars: number): string {
+    const t = text.trim();
+    if (t.length <= maxChars) return t;
+    const cut = t.slice(0, maxChars);
+    const lastStop = Math.max(cut.lastIndexOf("."), cut.lastIndexOf("!"), cut.lastIndexOf("?"));
+    return (lastStop > 120 ? cut.slice(0, lastStop + 1) : cut).trim();
+  }
+
   function errText(e: unknown) {
     return e instanceof Error ? e.message : String(e);
   }
@@ -264,12 +273,12 @@ export default function CrearPage() {
       }
       allSegs.sort((a, b) => b.score - a.score);
 
-      // Elegir los mejores: máx 4 momentos, total ≤ 40s
+      // Elegir los mejores: máx 3 momentos, base corta para tiempo viral TikTok
       const picked: Seg[] = [];
       let tot = 0;
       for (const g of allSegs) {
         const d = g.end - g.start;
-        if (picked.length >= 4 || tot + d > 40) continue;
+        if (picked.length >= 3 || tot + d > 22) continue;
         picked.push(g);
         tot += d;
       }
@@ -312,7 +321,7 @@ export default function CrearPage() {
       } else {
         setJobStage({ stage: "Generando voz", progress: 42 });
         if (serviceStatus(settings, "tts").configured) {
-          const fullText = getScriptFullText({ ...project, script });
+          const fullText = capForViral(getScriptFullText({ ...project, script }), 400);
           if (fullText.trim()) {
             try {
               const voice = await generateSpeech(settings, fullText, settings.ttsVoiceId || "alloy", { speed: 1 });
@@ -350,18 +359,47 @@ export default function CrearPage() {
         setVoiceWarning((prev) => (prev ? `${prev} Además, ${msg.charAt(0).toLowerCase()}${msg.slice(1)}` : msg));
       }
 
-      // Estirar el último momento para que la voz completa quepa en el vídeo
-      if (voiceMode === "voz" && localVoiceUrl && picked.length) {
-        const clipsDur = picked.reduce((a, g) => a + (g.end - g.start), 0);
-        if (voiceDuration > clipsDur + 0.5) {
+      // ⏱️ Tiempo perfecto para TikTok: los clips se ajustan exactos a la voz
+      if (voiceMode === "voz" && localVoiceUrl && picked.length && voiceDuration > 0) {
+        let clipsDur = picked.reduce((a, g) => a + (g.end - g.start), 0);
+        const target = Math.min(34, Math.max(12, voiceDuration + 0.8));
+        if (clipsDur > target + 1) {
+          // Sobra vídeo: quitar momentos desde el final y recortar el último
+          while (picked.length > 1) {
+            const d = picked[picked.length - 1].end - picked[picked.length - 1].start;
+            if (clipsDur - d >= target - 1) {
+              clipsDur -= d;
+              picked.pop();
+            } else break;
+          }
+          const lastT = picked[picked.length - 1];
+          const excess = clipsDur - target;
+          if (excess > 0.3 && lastT.end - lastT.start - excess > 2.5) {
+            lastT.end = Math.round((lastT.end - excess) * 100) / 100;
+          }
+          addLog(`⏱️ Vídeo ajustado a ${target.toFixed(0)}s para máxima retención`);
+        } else if (voiceDuration > clipsDur + 0.5) {
+          // Falta vídeo: estirar el último momento (tope absoluto 38s)
           const last = picked[picked.length - 1];
           const srcDur = project.sources[last.si]?.duration || meta.duration || 0;
-          const wantEnd = Math.min(srcDur || Infinity, last.end + (voiceDuration - clipsDur));
+          const wantTotal = Math.min(voiceDuration + 0.6, 38);
+          const wantEnd = Math.min(srcDur || Infinity, last.end + (wantTotal - clipsDur));
           if (wantEnd > last.end) {
             last.end = Math.round(wantEnd * 100) / 100;
-            addLog(`Último momento extendido hasta ${formatTime(last.end)} para cubrir toda la voz`);
+            addLog(`Último momento extendido hasta ${formatTime(last.end)} para cubrir la voz`);
           }
         }
+        const finalDur = picked.reduce((a, g) => a + (g.end - g.start), 0);
+        addLog(`🎯 Duración final: ${finalDur.toFixed(0)}s (zona viral de TikTok)`);
+      } else if (voiceMode === "musica" && picked.length) {
+        // Solo música: loop corto ideal para retención
+        let clipsDur = picked.reduce((a, g) => a + (g.end - g.start), 0);
+        const target = Math.min(picked[0].end - picked[0].start > 20 ? 20 : clipsDur, clipsDur);
+        while (picked.length > 1 && clipsDur > 24) {
+          const d = picked[picked.length-1].end - picked[picked.length-1].start;
+          if (clipsDur - d >= 18) { clipsDur -= d; picked.pop(); } else break;
+        }
+        void target;
       }
 
       // 6. Plan de edición con los momentos virales de todos los vídeos
