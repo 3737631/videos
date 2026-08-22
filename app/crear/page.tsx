@@ -17,6 +17,7 @@ import { VOICE_CATALOG, generateSpeech, getVoiceById, previewVoice, stopPreview 
 import { serviceStatus } from "@/lib/storage";
 import { analyzeVideo } from "@/lib/analyze";
 import { detectViralHighlights, type ViralSegment } from "@/lib/viral";
+import { detectWatermark } from "@/lib/watermark";
 import { loadFfmpeg, isFfmpegLoaded, getFfmpeg } from "@/lib/ffmpeg";
 import { renderProject } from "@/lib/render";
 
@@ -74,6 +75,7 @@ export default function CrearPage() {
   const [finalUrl, setFinalUrl] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [voiceWarning, setVoiceWarning] = useState<string | null>(null);
+  const [watermarkDetected, setWatermarkDetected] = useState(false);
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
   const keepAudioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -211,6 +213,7 @@ export default function CrearPage() {
     setError(null);
     setFinalUrl(null);
     setVoiceWarning(null);
+    setWatermarkDetected(false);
     setBusy("creating");
     await startKeepAlive();
     addLog("Creando tu vídeo viral...");
@@ -231,7 +234,20 @@ export default function CrearPage() {
         }
       }
 
-      // 2. Momentos virales en TODOS los vídeos subidos
+      // 2. Detección de marca de agua (primer vídeo)
+      setJobStage({ stage: "Buscando momentos virales", progress: 11 });
+      try {
+        const wm = await detectWatermark(project.sources[0].url);
+        setWatermarkDetected(wm);
+        if (wm) {
+          addLog("🚫 Se ha detectado marca de agua en el vídeo");
+          setVoiceWarning("Se ha detectado marca de agua. Para quitarla, descarga el vídeo limpio con SnapTik y vuelve a subirlo.");
+        }
+      } catch {
+        /* sin detección */
+      }
+
+      // 3. Momentos virales en TODOS los vídeos subidos
       const nVids = project.sources.length;
       setJobStage({ stage: `Buscando momentos virales (${nVids} vídeo${nVids > 1 ? "s" : ""})`, progress: 12 });
       type Seg = ViralSegment & { si: number };
@@ -330,7 +346,8 @@ export default function CrearPage() {
 
       // Aviso visible si la voz no se pudo generar (mensaje amable, detalle solo en el registro)
       if (voiceMode === "voz" && !localVoiceUrl) {
-        setVoiceWarning("No se pudo usar ElevenLabs para esta voz. El vídeo se creará sin locución — revisa tu clave en Configuración.");
+        const msg = "No se pudo usar ElevenLabs para esta voz. El vídeo se creará sin locución — revisa tu clave en Configuración.";
+        setVoiceWarning((prev) => (prev ? `${prev} Además, ${msg.charAt(0).toLowerCase()}${msg.slice(1)}` : msg));
       }
 
       // Estirar el último momento para que la voz completa quepa en el vídeo
@@ -440,16 +457,19 @@ export default function CrearPage() {
         )}
 
         {voiceWarning && (
-          <div className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-200">
-            ⚠️ {voiceWarning}
-            <a
-              href="https://elevenlabs.io/app/settings/api-keys"
-              target="_blank"
-              rel="noreferrer"
-              className="mt-2 block w-fit rounded-md bg-amber-500 px-3 py-1.5 text-xs font-semibold text-black hover:bg-amber-400"
-            >
-              Arreglar clave de ElevenLabs ↗
-            </a>
+          <div className={`mt-4 rounded-lg border p-3 text-sm ${watermarkDetected ? "border-orange-500/40 bg-orange-500/10 text-orange-200" : "border-amber-500/40 bg-amber-500/10 text-amber-200"}`}>
+            {watermarkDetected ? "🚫 " : "⚠️ "}
+            {voiceWarning}
+            {watermarkDetected && (
+              <a
+                href="https://snaptik.me/es"
+                target="_blank"
+                rel="noreferrer"
+                className="mt-2 block w-fit rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-400"
+              >
+                Abrir SnapTik ↗
+              </a>
+            )}
           </div>
         )}
 

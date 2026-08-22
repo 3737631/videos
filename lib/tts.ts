@@ -121,6 +121,16 @@ const GTX_PROXIES: Array<(u: string) => string> = [
   (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
 ];
 
+async function fetchWithTimeout(url: string, ms = 12000): Promise<Response> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { signal: ctrl.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function generateGoogleTts(text: string): Promise<TtsResult> {
   const chunks = splitForTts(text, 190);
   const parts: Blob[] = [];
@@ -130,7 +140,7 @@ async function generateGoogleTts(text: string): Promise<TtsResult> {
     let got: Blob | null = null;
     for (const wrap of GTX_PROXIES) {
       try {
-        const res = await fetch(wrap(target));
+        const res = await fetchWithTimeout(wrap(target), 12000);
         if (!res.ok) continue;
         const b = await res.blob();
         if (b.size > 1024 && (b.type.includes("audio") || b.type === "" || b.type.includes("mpeg"))) {
