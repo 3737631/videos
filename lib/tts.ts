@@ -74,16 +74,68 @@ export async function generateSpeech(
   voiceId: string,
   options?: { speed?: number }
 ): Promise<TtsResult> {
-  const status = serviceStatus(settings, "tts");
-  if (!status.configured) {
-    throw new Error("Servicio TTS no configurado. Añade tu clave en Configuración (ttsApiKey).");
-  }
   if (!text.trim()) throw new Error("El texto de la voz está vacío");
 
-  if (settings.ttsProvider === "elevenlabs") {
-    return generateElevenLabs(settings, text, voiceId, options);
+  const status = serviceStatus(settings, "tts");
+  if (status.configured) {
+    try {
+      if (settings.ttsProvider === "elevenlabs") {
+        return await generateElevenLabs(settings, text, voiceId, options);
+      }
+      return await generateOpenAi(settings, text, voiceId, options);
+    } catch (e) {
+      // Respaldo gratuito para que el vídeo NUNCA salga sin voz
+      try {
+        return await generateStreamElementsTts(text, voiceId);
+      } catch {
+        throw e;
+      }
+    }
   }
-  return generateOpenAi(settings, text, voiceId, options);
+
+  // Sin clave configurada: voz gratuita directa
+  return generateStreamElementsTts(text, voiceId);
+}
+
+// Voces gratuitas de respaldo (Polly vía StreamElements, con CORS abierto)
+const STE_VOICE_MAP: Record<string, string> = {
+  alloy: "Joanna",
+  echo: "Matthew",
+  fable: "Amy",
+  onyx: "Brian",
+  nova: "Salli",
+  shimmer: "Kendra",
+};
+
+async function generateStreamElementsTts(text: string, voiceId?: string): Promise<TtsResult> {
+  const steVoice = STE_VOICE_MAP[voiceId || "alloy"] || "Joanna";
+  const chunks = splitForTts(text, 280);
+  const parts: Blob[] = [];
+  for (const chunk of chunks) {
+    const url = `https://api.streamelements.com/kappa/v2/speech?voice=${steVoice}&text=${encodeURIComponent(chunk)}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Respaldo TTS falló (${res.status})`);
+    parts.push(await res.blob());
+    if (chunks.length > 1) await new Promise((r) => setTimeout(r, 250));
+  }
+  const blob = new Blob(parts, { type: "audio/mpeg" });
+  return finalizeTts(blob, "respaldo-gratis");
+}
+
+function splitForTts(text: string, maxLen: number): string[] {
+  const sentences = text.replace(/\s+/g, " ").split(/(?<=[.!?])\s+/);
+  const chunks: string[] = [];
+  let cur = "";
+  for (const s of sentences) {
+    if ((cur + " " + s).trim().length <= maxLen) {
+      cur = (cur + " " + s).trim();
+    } else {
+      if (cur) chunks.push(cur);
+      cur = s.length > maxLen ? s.slice(0, maxLen) : s;
+    }
+  }
+  if (cur) chunks.push(cur);
+  return chunks.length ? chunks : [text.slice(0, maxLen)];
 }
 
 async function generateOpenAi(
@@ -146,6 +198,11 @@ async function generateElevenLabs(
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
+    if (res.status === 401 && body.includes("missing_permissions")) {
+      throw new Error(
+        "Tu clave de ElevenLabs NO tiene el permiso text_to_speech. Crea una clave nueva en elevenlabs.io con todos los permisos."
+      );
+    }
     const retryable = res.status === 429 || res.status >= 500;
     throw new Error(
       retryable
