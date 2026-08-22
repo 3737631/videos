@@ -121,7 +121,7 @@ export async function renderProject(
     voiceName,
     musicName,
     musicReps,
-    subStartIdx: inNames.length + (voiceName ? 1 : 0) + (musicName ? musicReps : 0),
+    subStartIdx: inNames.length + (voiceName ? 1 : 0) + (musicName ? 1 : 0),
     subFiles,
     cueTimes: plan.subtitles.cues.map((c) => [c.start, c.end] as [number, number]),
     audio: plan.audio,
@@ -136,7 +136,7 @@ export async function renderProject(
   const args: string[] = ["-noautorotate"];
   for (const n of inNames) args.push("-i", n);
 if (voiceName) args.push("-i", voiceName);
-    if (musicName) for (let k = 0; k < musicReps; k++) args.push("-i", musicName); // copias para bucle determinista
+    if (musicName) args.push("-i", musicName); // UNA sola copia; el bucle lo hace asplit+concat
   for (const f of subFiles) args.push("-i", f);
 
   args.push(
@@ -168,7 +168,17 @@ if (voiceName) args.push("-i", voiceName);
   };
   ffmpeg.on("progress", onProg);
   try {
-    await ffmpeg.exec(args);
+    // Red de seguridad: nunca colgar eternamente (p.ej. un filtro atascado)
+    const EXEC_TIMEOUT_MS = 480000;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("El motor de vídeo tardó demasiado. Prueba otra vez; si repite, usa un vídeo más corto.")), EXEC_TIMEOUT_MS);
+    });
+    try {
+      await Promise.race([ffmpeg.exec(args), timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   } finally {
     ffmpeg.off("progress", onProg);
   }
@@ -292,17 +302,16 @@ function buildFilterGraph(input: GraphInput): string {
   const totalDur = Math.max(0.5, input.clips.reduce((a, c) => a + Math.max(0, c.end - c.start), 0));
   const capMusic = input.musicName ? `,atrim=end=${totalDur.toFixed(3)},asetpts=N/SR/TB` : "";
   if (input.voiceName) {
-    const reps = input.musicReps || 1;
     parts.push(
-      `[${input.subStartIdx - (input.musicName ? reps + 1 : 1)}:a]aresample=48000,aformat=channel_layouts=stereo,volume=${Math.max(0.5, input.audio.voiceVolume ?? 1)}[vo]`
+      `[${input.subStartIdx - (input.musicName ? 2 : 1)}:a]aresample=48000,aformat=channel_layouts=stereo,volume=${Math.max(0.5, input.audio.voiceVolume ?? 1)}[vo]`
     );
     audioNodes.push("[vo]");
   }
   if (input.musicName) {
     const reps = input.musicReps || 1;
-    const musicBase = input.subStartIdx - reps;
-    // Bucle determinista: copias del mismo input unidas con concat, recortadas a la duración total
-    parts.push(`[${musicBase}:a]aresample=48000,aformat=channel_layouts=stereo[mures]`);
+    const musicIdx = input.subStartIdx - 1;
+    // Bucle determinista: una sola entrada decodificada, dividida y encadenada hasta cubrir el vídeo
+    parts.push(`[${musicIdx}:a]aresample=48000,aformat=channel_layouts=stereo[mures]`);
     if (reps > 1) {
       const labels: string[] = [];
       for (let k = 0; k < reps; k++) labels.push(`[muc${k}]`);

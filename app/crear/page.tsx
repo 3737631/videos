@@ -13,7 +13,7 @@ import type {
 } from "@/types";
 import { buildEditPlan, getScriptFullText } from "@/lib/editplan";
 import { generateHooks, generateScript, generateProductScript, transcribeWithTimestamps } from "@/lib/ai";
-import { VOICE_CATALOG, generateSpeech, getVoiceById, previewVoice, stopPreview } from "@/lib/tts";
+import { generateSpeech } from "@/lib/tts";
 import { serviceStatus } from "@/lib/storage";
 import { analyzeVideo } from "@/lib/analyze";
 import { detectViralHighlights, type ViralSegment } from "@/lib/viral";
@@ -94,7 +94,6 @@ export default function CrearPage() {
   const [jobStage, setJobStage] = useState<{ stage: string; progress: number } | null>(null);
   const [voiceMode, setVoiceMode] = useState<"voz" | "musica">("voz");
   const [finalUrl, setFinalUrl] = useState<string | null>(null);
-  const [previewing, setPreviewing] = useState(false);
   const [voiceWarning, setVoiceWarning] = useState<string | null>(null);
   const [watermarkDetected, setWatermarkDetected] = useState(false);
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
@@ -153,17 +152,13 @@ export default function CrearPage() {
     wakeLockRef.current = null;
   }
 
-  const [voicePct, setVoicePct] = useState<number | null>(null);
-  const [voiceReady, setVoiceReady] = useState(false);
   const [productUrl, setProductUrl] = useState("");
   const voicePctRef = useRef<number | null>(null);
 
   useEffect(() => {
-    // La voz se descarga sola nada más abrir la página (con % visible)
+    // La voz se descarga sola nada más abrir la página (silenciosamente)
     const off = onKokoroDownload((pct) => {
       voicePctRef.current = pct;
-      setVoicePct(pct);
-      if (pct === null || pct >= 100) setVoiceReady(true);
     });
     void preloadKokoro();
     return () => {
@@ -261,6 +256,11 @@ export default function CrearPage() {
       return;
     }
     if (busy !== null) return;
+    // Con voz: el enlace del producto es OBLIGATORIO
+    if (voiceMode === "voz" && productUrl.trim().length <= 10) {
+      setError("🛒 Pega el enlace del producto para generar la voz (o cambia a Solo música).");
+      return;
+    }
     setError(null);
     setFinalUrl(null);
     setVoiceWarning(null);
@@ -587,15 +587,6 @@ export default function CrearPage() {
     }
   }
 
-  function togglePreview() {
-    if (previewing) {
-      stopPreview();
-      setPreviewing(false);
-      return;
-    }
-    setPreviewing(previewVoice(getVoiceById(settings.ttsVoiceId || "alloy")));
-  }
-
   function onDrop(e: React.DragEvent) {
     e.preventDefault();
     setDragging(false);
@@ -656,20 +647,6 @@ export default function CrearPage() {
           </div>
         )}
 
-        {voiceReady && (
-          <div className="mt-4 rounded-lg border border-green-500/30 bg-green-500/10 p-2.5 text-xs text-green-300">
-            🎙️ Voz neuronal lista (ya está en tu navegador — ilimitada y sin esperas)
-          </div>
-        )}
-        {!voiceReady && voicePct !== null && (
-          <div className="mt-4 rounded-lg border border-blue-500/30 bg-blue-500/10 p-2.5 text-xs text-blue-200">
-            🎙️ Descargando voz para toda la sesión… {voicePct}% (mientras eliges tu vídeo)
-            <div className="mt-1.5 h-1.5 rounded-full bg-blue-900/50 overflow-hidden">
-              <div className="h-full bg-blue-400 transition-all" style={{ width: `${voicePct}%` }} />
-            </div>
-          </div>
-        )}
-
         {/* 1 · Subir */}
         <section className="mt-6 rounded-xl border border-white/10 bg-white/[0.02] p-5">
           <div
@@ -711,23 +688,6 @@ export default function CrearPage() {
               </div>
             </div>
           ))}
-
-          <div className="mt-4">
-            <label className="text-xs font-semibold text-gray-300">
-              🛒 Enlace de producto (opcional · AliExpress, Amazon…)
-            </label>
-            <input
-              type="url"
-              value={productUrl}
-              onChange={(e) => setProductUrl(e.target.value)}
-              placeholder="https://es.aliexpress.com/item/100500xxxxx.html"
-              disabled={busy !== null}
-              className="mt-1.5 w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2.5 text-sm outline-none focus:border-fuchsia-500 disabled:opacity-50"
-            />
-            <p className="mt-1 text-[11px] text-gray-500">
-              Si lo pegas, el guion contará ese producto (modo ultra-rápido: se salta el análisis largo)
-            </p>
-          </div>
         </section>
 
         {/* Guía SnapTik */}
@@ -777,26 +737,21 @@ export default function CrearPage() {
             </div>
 
             {voiceMode === "voz" && (
-              <div className="mt-3 flex items-center gap-2">
-                <select
-                  value={settings.ttsVoiceId || "alloy"}
-                  onChange={(e) => setSettings({ ttsVoiceId: e.target.value })}
-                  className="flex-1 rounded-lg border border-white/15 bg-[#131722] px-3 py-2 text-sm outline-none focus:border-blue-500"
-                >
-                  {VOICE_CATALOG.filter((v) => v.language === "English").map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.name} · {v.style}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={togglePreview}
-                  className={`shrink-0 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
-                    previewing ? "bg-emerald-600 text-white" : "bg-blue-600 hover:bg-blue-500 text-white"
-                  }`}
-                >
-                  {previewing ? "⏹ Parar" : "▶ Escuchar"}
-                </button>
+              <div className="mt-3">
+                <label className="text-xs font-semibold text-gray-300">
+                  🛒 Enlace del producto (obligatorio para la voz)
+                </label>
+                <input
+                  type="url"
+                  value={productUrl}
+                  onChange={(e) => setProductUrl(e.target.value)}
+                  placeholder="https://es.aliexpress.com/item/100500xxxxx.html"
+                  disabled={busy !== null}
+                  className="mt-1.5 w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2.5 text-sm outline-none focus:border-fuchsia-500 disabled:opacity-50"
+                />
+                <p className="mt-1 text-[11px] text-gray-500">
+                  La voz contará ese producto (guion ultra-rápido). En Solo música no hace falta.
+                </p>
               </div>
             )}
           </div>
