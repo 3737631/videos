@@ -12,7 +12,7 @@ import type {
   ScriptSegment,
 } from "@/types";
 import { buildEditPlan, getScriptFullText } from "@/lib/editplan";
-import { generateHooks, generateScript, transcribeWithTimestamps } from "@/lib/ai";
+import { generateHooks, generateScript, generateProductScript, transcribeWithTimestamps } from "@/lib/ai";
 import { VOICE_CATALOG, generateSpeech, getVoiceById, previewVoice, stopPreview } from "@/lib/tts";
 import { serviceStatus } from "@/lib/storage";
 import { analyzeVideo } from "@/lib/analyze";
@@ -25,6 +25,20 @@ const IS_IOS =
   typeof navigator !== "undefined" &&
   (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
+
+/** Lee el texto de una página de producto (p.ej. AliExpress) sin bloqueos CORS */
+async function fetchProductInfo(url: string): Promise<string> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 20000);
+  try {
+    const res = await fetch(`https://r.jina.ai/${url}`, { signal: ctrl.signal });
+    if (!res.ok) throw new Error(`No se pudo leer el enlace (${res.status})`);
+    const txt = await res.text();
+    return txt.replace(/\s+/g, " ").trim().slice(0, 1500);
+  } finally {
+    clearTimeout(t);
+  }
+}
 import { loadFfmpeg, isFfmpegLoaded, getFfmpeg } from "@/lib/ffmpeg";
 import { renderProject } from "@/lib/render";
 
@@ -141,6 +155,7 @@ export default function CrearPage() {
 
   const [voicePct, setVoicePct] = useState<number | null>(null);
   const [voiceReady, setVoiceReady] = useState(false);
+  const [productUrl, setProductUrl] = useState("");
 
   useEffect(() => {
     // La voz se descarga sola nada más abrir la página (con % visible)
@@ -253,18 +268,24 @@ export default function CrearPage() {
     addLog("Creando tu vídeo viral...");
 
     try {
+      const modoProducto = productUrl.trim().length > 10;
       // 1. Análisis del contenido
       let meta: VideoMetadata = project.metadata || (null as unknown as VideoMetadata);
       if (!meta) {
-        setJobStage({ stage: "Analizando vídeo", progress: 6 });
-        try {
-          meta = await analyzeVideo(src, (st, p) =>
-            setJobStage({ stage: `Analizando: ${st}`, progress: 6 + p * 12 })
-          );
-          addLog("Análisis completado");
-        } catch {
+        if (modoProducto) {
           meta = minimalMetadata(src);
-          addLog("Análisis básico aplicado");
+          addLog("Modo producto: análisis de vídeo reducido (más rápido)");
+        } else {
+          setJobStage({ stage: "Analizando vídeo", progress: 6 });
+          try {
+            meta = await analyzeVideo(src, (st, p) =>
+              setJobStage({ stage: `Analizando: ${st}`, progress: 6 + p * 12 })
+            );
+            addLog("Análisis completado");
+          } catch {
+            meta = minimalMetadata(src);
+            addLog("Análisis básico aplicado");
+          }
         }
       }
 
@@ -317,23 +338,36 @@ export default function CrearPage() {
           : "Usando el momento más fuerte"
       );
 
-      // 3. Hooks y guion en inglés
-      setJobStage({ stage: "Generando hooks y guion", progress: 24 });
+      // 3. Hooks y guion en inglés (o guion de producto desde enlace)
+      setJobStage({ stage: modoProducto ? "Leyendo producto…" : "Generando hooks y guion", progress: 24 });
       let hooks: HookOption[] = [];
-      try {
-        hooks = await generateHooks(settings, meta.analysisText || "Short vertical video.");
-      } catch {
-        hooks = [];
-      }
-      if (!hooks.length) hooks = FALLBACK_HOOKS;
-      const selectedHook = hooks[0].text;
+      let selectedHook = "";
       let script: ScriptSegment[] = [];
-      try {
-        script = await generateScript(settings, meta.analysisText || "Short vertical video.", hooks, selectedHook, project.style, project.goal);
-      } catch {
-        script = [];
+      if (modoProducto) {
+        try {
+          const info = await fetchProductInfo(productUrl.trim());
+          setJobStage({ stage: "Creando guion del producto…", progress: 30 });
+          script = await generateProductScript(settings, info);
+          addLog("🛒 Guion del producto listo");
+        } catch (e) {
+          addLog(`Producto: ${errText(e)}`);
+        }
       }
-      if (!script.length) script = fallbackScript(selectedHook);
+      if (!script.length) {
+        try {
+          hooks = await generateHooks(settings, meta.analysisText || "Short vertical video.");
+        } catch {
+          hooks = [];
+        }
+        if (!hooks.length) hooks = FALLBACK_HOOKS;
+        selectedHook = hooks[0].text;
+        try {
+          script = await generateScript(settings, meta.analysisText || "Short vertical video.", hooks, selectedHook, project.style, project.goal);
+        } catch {
+          script = [];
+        }
+        if (!script.length) script = fallbackScript(selectedHook);
+      }
       addLog(`Guion listo (${script.length} bloques)`);
 
       // 4. Voz neuronal local ilimitada (o modo solo música)
@@ -499,6 +533,10 @@ export default function CrearPage() {
           volume: 1,
         };
       }
+      // Modo solo música: silenciar el audio original para que se oiga SOLO la canción
+      if (voiceMode === "musica") {
+        plan.audio.originalVolume = 0;
+      }
       const next: Project = { ...base, editPlan: plan, status: "ready" };
       setProject(next);
       saveProject(next);
@@ -654,6 +692,23 @@ export default function CrearPage() {
               </div>
             </div>
           ))}
+
+          <div className="mt-4">
+            <label className="text-xs font-semibold text-gray-300">
+              🛒 Enlace de producto (opcional · AliExpress, Amazon…)
+            </label>
+            <input
+              type="url"
+              value={productUrl}
+              onChange={(e) => setProductUrl(e.target.value)}
+              placeholder="https://es.aliexpress.com/item/100500xxxxx.html"
+              disabled={busy !== null}
+              className="mt-1.5 w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2.5 text-sm outline-none focus:border-fuchsia-500 disabled:opacity-50"
+            />
+            <p className="mt-1 text-[11px] text-gray-500">
+              Si lo pegas, el guion contará ese producto (modo ultra-rápido: se salta el análisis largo)
+            </p>
+          </div>
         </section>
 
         {/* Guía SnapTik */}

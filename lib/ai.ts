@@ -105,6 +105,29 @@ export async function generateCta(settings: AppSettings, goal: string): Promise<
   return parseJsonArray(raw).map((c) => String(c).trim()).filter((c) => c.length > 2).slice(0, 4);
 }
 
+export async function generateProductScript(
+  settings: AppSettings,
+  productInfo: string
+): Promise<ScriptSegment[]> {
+  const system = `Eres un creador de vídeos virales de productos para TikTok. Escribe un guion EN INGLÉS para narrar con voz. REGLAS:
+- Estructura: HOOK (1 frase potente), DESARROLLO (1-2 frases del producto), BENEFICIO (1 frase), PRUEBA (1 frase), CTA (1 frase tipo "link in bio").
+- Máximo 60 palabras en total. Frases cortas y punchy.
+- Usa SOLO los datos del producto (nombre, función, precio si aparece). No inventes nada más.`;
+
+  const user = `Datos del producto:\n${productInfo.slice(0, 1200)}\n\nDevuelve SOLO JSON: [{"kind":"hook","text":"..."},{"kind":"desarrollo","text":"..."},{"kind":"beneficio","text":"..."},{"kind":"prueba","text":"..."},{"kind":"cta","text":"..."}]`;
+
+  const raw = await chat(settings, [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ], 700);
+
+  const parsed = parseJsonArray(raw);
+  const validKinds = new Set(["hook", "desarrollo", "beneficio", "prueba", "cta"]);
+  return parsed
+    .filter((s) => validKinds.has(String(s.kind)) && String(s.text || "").trim().length > 2)
+    .map((s) => ({ kind: s.kind as ScriptSegment["kind"], text: String(s.text).trim() }));
+}
+
 export async function transcribeWithTimestamps(
   settings: AppSettings,
   audioBlob: Blob,
