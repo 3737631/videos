@@ -156,10 +156,12 @@ export default function CrearPage() {
   const [voicePct, setVoicePct] = useState<number | null>(null);
   const [voiceReady, setVoiceReady] = useState(false);
   const [productUrl, setProductUrl] = useState("");
+  const voicePctRef = useRef<number | null>(null);
 
   useEffect(() => {
     // La voz se descarga sola nada más abrir la página (con % visible)
     const off = onKokoroDownload((pct) => {
+      voicePctRef.current = pct;
       setVoicePct(pct);
       if (pct === null || pct >= 100) setVoiceReady(true);
     });
@@ -393,6 +395,14 @@ export default function CrearPage() {
               // Latido visible cada segundo: nunca se queda congelado sin información
               const beat = setInterval(() => {
                 const el = Math.round((Date.now() - voiceT0) / 1000);
+                const dl = voicePctRef.current;
+                if (lastDone === 0 && dl !== null && dl < 100) {
+                  setJobStage({
+                    stage: `⬇️ Descargando voz… ${dl}% · ${el}s transcurridos`,
+                    progress: Math.min(45, 42 + dl! * 0.03),
+                  });
+                  return;
+                }
                 setJobStage({
                   stage: `🎙️ Generando voz… ${el}s transcurridos${lastDone ? ` (${lastDone}/${lastTotal} frases)` : ""}`,
                   progress: Math.min(51, 42 + (lastDone / Math.max(1, lastTotal)) * 9),
