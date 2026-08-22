@@ -330,7 +330,19 @@ export default function CrearPage() {
           const fullText = capForViral(getScriptFullText({ ...project, script }), 400);
           if (fullText.trim()) {
             try {
-              const voice = await generateSpeech(settings, fullText, settings.ttsVoiceId || "alloy", { speed: 1 });
+              const voiceT0 = Date.now();
+              const voice = await generateSpeech(settings, fullText, settings.ttsVoiceId || "alloy", {
+                speed: 1,
+                onProgress: (done, total) => {
+                  if (total <= 1) return;
+                  const el = (Date.now() - voiceT0) / 1000;
+                  const eta = Math.max(1, Math.round((el / done) * (total - done)));
+                  setJobStage({
+                    stage: `🎙️ Generando voz ${done}/${total} · quedan ~${eta}s`,
+                    progress: 42 + (done / total) * 10,
+                  });
+                },
+              });
               if (await validateVoiceBlob(voice.url)) {
                 ttsBlob = voice.blob;
                 localVoiceUrl = voice.url;
@@ -444,9 +456,9 @@ export default function CrearPage() {
       const result = await renderProject(getFfmpeg(), next, {
         targetWidth: 1080,
         targetHeight: 1920,
-        fps: 30,
+        fps: 24,
         crf: 20,
-        onStage: (st, p) => setJobStage({ stage: `Renderizando: ${st}`, progress: Math.min(99, Math.max(15, p)) }),
+        onStage: (st, p) => setJobStage({ stage: st, progress: Math.min(99, Math.max(15, p)) }),
       });
 
       update({ renderUrl: result.url, renderValidation: result.validation, status: "exported" });

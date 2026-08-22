@@ -67,13 +67,12 @@ export async function generateSpeech(
   settings: AppSettings,
   text: string,
   voiceId: string,
-  options?: { speed?: number }
+  options?: { speed?: number; onProgress?: (done: number, total: number) => void }
 ): Promise<TtsResult> {
   void settings;
-  void options;
   if (!text.trim()) throw new Error("El texto de la voz está vacío");
   try {
-    return await generateKokoroTts(text, voiceId);
+    return await generateKokoroTts(text, voiceId, options?.onProgress);
   } catch {
     return await generateGoogleTts(text);
   }
@@ -100,10 +99,24 @@ let kokoroInst: any = null;
 async function getKokoro() {
   if (!kokoroInst) {
     const mod = await import("kokoro-js");
-    kokoroInst = await mod.KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", {
-      dtype: "q8",
-      device: "wasm",
-    });
+    // WebGPU (Chrome/Edge/Android/Safari moderno): descarga similar pero generación 5-20x más rápida
+    const hasWebGPU = typeof navigator !== "undefined" && "gpu" in navigator;
+    if (hasWebGPU) {
+      try {
+        kokoroInst = await mod.KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", {
+          dtype: "q4f16",
+          device: "webgpu",
+        });
+      } catch {
+        kokoroInst = null;
+      }
+    }
+    if (!kokoroInst) {
+      kokoroInst = await mod.KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", {
+        dtype: "q8",
+        device: "wasm",
+      });
+    }
   }
   return kokoroInst;
 }
@@ -148,18 +161,23 @@ function floatToWavBlob(samples: Float32Array, sampleRate = 24000): Blob {
   return new Blob([buffer], { type: "audio/wav" });
 }
 
-async function generateKokoroTts(text: string, voiceId: string): Promise<TtsResult> {
+async function generateKokoroTts(
+  text: string,
+  voiceId: string,
+  onProgress?: (done: number, total: number) => void
+): Promise<TtsResult> {
   const tts = await getKokoro();
   const voice = KOKORO_VOICE_MAP[voiceId] || KOKORO_VOICE_MAP.alloy;
   const chunks = splitForTts(text, 280);
   const pieces: Float32Array[] = [];
   let totalLen = 0;
   let sampleRate = 24000;
-  for (const chunk of chunks) {
-    const out = await tts.generate(chunk.trim(), { voice, speed: 1.05 });
+  for (let i = 0; i < chunks.length; i++) {
+    const out = await tts.generate(chunks[i].trim(), { voice, speed: 1.05 });
     sampleRate = out.sampling_rate || 24000;
     pieces.push(out.audio);
     totalLen += out.audio.length;
+    onProgress?.(i + 1, chunks.length);
   }
   const merged = new Float32Array(totalLen);
   let off = 0;

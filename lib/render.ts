@@ -140,10 +140,17 @@ if (musicName) args.push("-stream_loop", "-1", "-i", musicName); // la música s
     outName
   );
 
-  // Progreso real de la codificación (0..1) → 15%..90%
+  // Progreso real de la codificación (0..1) → 15%..90%, con tiempo restante estimado
+  const renderT0 = Date.now();
   const onProg = ({ progress }: { progress: number }) => {
     const p = Math.min(1, Math.max(0, progress || 0));
-    stage(options, "Renderizando", 15 + p * 75);
+    const el = (Date.now() - renderT0) / 1000;
+    const eta = p > 0.04 ? Math.max(1, Math.round((el / p) * (1 - p))) : null;
+    stage(
+      options,
+      eta !== null ? `Renderizando vídeo… quedan ~${eta}s` : "Renderizando vídeo…",
+      15 + p * 75
+    );
   };
   ffmpeg.on("progress", onProg);
   try {
