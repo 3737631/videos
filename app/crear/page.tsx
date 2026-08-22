@@ -39,7 +39,7 @@ async function fetchProductInfo(url: string): Promise<string> {
     clearTimeout(t);
   }
 }
-import { loadFfmpeg, isFfmpegLoaded, getFfmpeg } from "@/lib/ffmpeg";
+import { loadFfmpeg, isFfmpegLoaded, getFfmpeg, resetFfmpeg } from "@/lib/ffmpeg";
 import { renderProject } from "@/lib/render";
 
 function newProject(): Project {
@@ -563,14 +563,32 @@ export default function CrearPage() {
         if (ffLoading) await ffLoading;
         else await loadFfmpeg();
       }
-      const result = await renderProject(getFfmpeg(), next, {
-        // iPhone: 720p → render ~2x más rápido; en TikTok la diferencia es imperceptible
-        targetWidth: IS_IOS ? 720 : 1080,
-        targetHeight: IS_IOS ? 1280 : 1920,
-        fps: 24,
-        crf: IS_IOS ? 20 : 18,
-        onStage: (st, p) => setJobStage({ stage: st, progress: Math.min(99, Math.max(15, p)) }),
-      });
+      const onStage = (st: string, p: number) =>
+        setJobStage({ stage: st, progress: Math.min(99, Math.max(15, p)) });
+      let result;
+      try {
+        result = await renderProject(getFfmpeg(), next, {
+          // iPhone: 720p → render ~2x más rápido; en TikTok la diferencia es imperceptible
+          targetWidth: IS_IOS ? 720 : 1080,
+          targetHeight: IS_IOS ? 1280 : 1920,
+          fps: 24,
+          crf: IS_IOS ? 20 : 18,
+          onStage,
+        });
+      } catch {
+        // Reintento en modo ligero con motor recién creado (memoria fresca)
+        addLog("⚠️ Reintentando en modo ligero…");
+        setJobStage({ stage: "Reintentando en modo ligero", progress: 70 });
+        await resetFfmpeg();
+        await loadFfmpeg();
+        result = await renderProject(getFfmpeg(), next, {
+          targetWidth: 540,
+          targetHeight: 960,
+          fps: 24,
+          crf: 26,
+          onStage,
+        });
+      }
 
       update({ renderUrl: result.url, renderValidation: result.validation, status: "exported" });
       setFinalUrl(result.url);

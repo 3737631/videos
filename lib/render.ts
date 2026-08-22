@@ -19,9 +19,16 @@ export async function renderProject(
   project: Project,
   options: RenderOptions
 ): Promise<{ blob: Blob; url: string; validation: RenderValidation }> {
-  const { targetWidth = 1080, targetHeight = 1920, fps = 30, crf = 23 } = options;
+  const { targetWidth: reqW = 1080, targetHeight: reqH = 1920, fps = 30, crf = 23 } = options;
   const plan = project.editPlan;
   if (!plan) throw new Error("No hay plan de edición");
+
+  // iPhone: Safari limita la memoria WASM; bajar resolución/calidad evita muertes silenciosas
+  const isIphone =
+    typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent);
+  const targetWidth = isIphone ? Math.min(reqW, 540) : reqW;
+  const targetHeight = isIphone ? Math.min(reqH, 960) : reqH;
+  const crfEff = isIphone ? Math.max(crf, 24) : crf;
 
   stage(options, "Preparando vídeo", 5);
   if (!project.sources.length) throw new Error("No hay fuentes de vídeo");
@@ -145,7 +152,7 @@ if (voiceName) args.push("-i", voiceName);
     "-map", "[aout]",
     "-c:v", "libx264",
     "-preset", "ultrafast",
-    "-crf", String(crf),
+    "-crf", String(crfEff),
     "-c:a", "aac",
     "-b:a", "128k",
     "-r", String(fps),
@@ -181,28 +188,48 @@ if (voiceName) args.push("-i", voiceName);
   }, 2000);
   ffmpeg.on("progress", onProg);
   try {
-    // Red de seguridad: nunca colgar eternamente (p.ej. un filtro atascado)
-    const EXEC_TIMEOUT_MS = 480000;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error("El motor de vídeo tardó demasiado. Prueba otra vez; si repite, usa un vídeo más corto.")), EXEC_TIMEOUT_MS);
+    // Guardián doble: (a) si el motor deja de dar señales 45s => murió (memoria WASM)
+    // => reiniciamos el motor y avisamos claro; (b) tope duro de 8 minutos.
+    let rejectGuard!: (e: Error) => void;
+    const guard = new Promise<never>((_, reject) => {
+      rejectGuard = reject;
     });
+    const stall = setInterval(() => {
+      if (Date.now() - lastTick > 45000 && Date.now() - renderT0 > 60000) {
+        rejectGuard(
+          new Error(
+            "El motor se detuvo por falta de memoria del navegador. Se reintentará en modo ligero."
+          )
+        );
+      }
+    }, 3000);
+    const hard = setTimeout(() => {
+      rejectGuard(new Error("El motor de vídeo tardó demasiado. Prueba con un vídeo más corto."));
+    }, 480000);
     try {
-      await Promise.race([ffmpeg.exec(args), timeout]);
+      await Promise.race([ffmpeg.exec(args), guard]);
+    } catch (e) {
+      // Motor posiblemente muerto: forzar recreación en el próximo uso
+      try {
+        ffmpeg.terminate();
+      } catch {}
+      throw e;
     } finally {
-      if (timer) clearTimeout(timer);
+      clearInterval(stall);
+      clearTimeout(hard);
     }
   } finally {
     clearInterval(beat);
     ffmpeg.off("progress", onProg);
   }
 
+  stage(options, "Leyendo vídeo generado", 92);
+
   // faststart (pasada extra que reescribe el MP4) revienta la memoria de Safari/WASM
   // en iPhone y mata el proceso en silencio al 100%. Fuera del render principal;
   // en escritorio se hace después como remux opcional barato.
   stage(options, "Comprobando calidad", 92);
   let finalName = outName;
-  const isIphone = typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent);
   if (!isIphone) {
     try {
       stage(options, "Optimizando para redes sociales", 93);
