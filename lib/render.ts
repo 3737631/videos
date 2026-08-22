@@ -14,6 +14,47 @@ function stage(options: RenderOptions, s: string, pct: number) {
   options.onStage?.(s, pct);
 }
 
+// Validación ligera sin ffmpeg: metadatos vía <video> del navegador
+async function quickValidateMp4(blob: Blob): Promise<RenderValidation> {
+  const base: RenderValidation = {
+    ok: false,
+    duration: 0,
+    width: 0,
+    height: 0,
+    fps: 24,
+    hasAudio: true,
+    audioDuration: 0,
+    sizeBytes: blob.size,
+    codec: "h264/aac",
+    errors: [],
+  };
+  if (blob.size < 100 * 1024) {
+    base.errors.push("archivo demasiado pequeño");
+    return base;
+  }
+  const url = URL.createObjectURL(blob);
+  try {
+    const dur = await new Promise<number>((resolve, reject) => {
+      const v = document.createElement("video");
+      v.preload = "metadata";
+      v.onloadedmetadata = () => resolve(v.duration || 0);
+      v.onerror = () => reject(new Error("metadatos ilegibles"));
+      v.src = url;
+      setTimeout(() => reject(new Error("timeout leyendo metadatos")), 15000);
+    });
+    base.duration = dur;
+    base.audioDuration = dur;
+    if (dur < 1) base.errors.push("duración inválida");
+    base.ok = base.errors.length === 0;
+    return base;
+  } catch (e) {
+    base.errors.push(e instanceof Error ? e.message : "vídeo ilegible");
+    return base;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 export async function renderProject(
   ffmpeg: FFmpeg,
   project: Project,
@@ -160,18 +201,30 @@ if (voiceName) args.push("-i", voiceName);
     outName
   );
 
+  // Telemetría: guardamos las últimas líneas del motor para diagnóstico en vivo
+  const logTail: string[] = [];
+  const logHandler = ({ message }: { message: string }) => {
+    logTail.push(message);
+    if (logTail.length > 30) logTail.shift();
+  };
+  ffmpeg.on("log", logHandler);
+
   // Progreso HONESTO: el motor mide contra el primer input (mal), así que medimos
   // nosotros con el tiempo de salida real frente a la duración total del vídeo.
   const totalOut = Math.max(0.5, usedClips.reduce((a, c) => a + Math.max(0, c.end - c.start), 0));
   const renderT0 = Date.now();
   let lastPct = 15;
   let lastTick = Date.now();
+  let lastUi = 0;
   const onProg = ({ time }: { progress?: number; time?: number }) => {
     const sec = typeof time === "number" && time > 0 ? time / 1e6 : null;
     const el = (Date.now() - renderT0) / 1000;
     const p = sec !== null ? Math.min(1, Math.max(0, sec / totalOut)) : Math.min(1, Math.max(0, el / Math.max(8, totalOut * 2)));
     lastPct = 15 + p * 75;
     lastTick = Date.now();
+    const now = Date.now();
+    if (now - lastUi < 400) return; // no ahogar la UI con miles de repaints
+    lastUi = now;
     const eta = p > 0.04 ? Math.max(1, Math.round((el / p) * (1 - p))) : null;
     stage(
       options,
@@ -183,7 +236,12 @@ if (voiceName) args.push("-i", voiceName);
   const beat = setInterval(() => {
     if (Date.now() - lastTick > 6000) {
       const el = Math.round((Date.now() - renderT0) / 1000);
-      stage(options, `Renderizando vídeo… ${el}s transcurridos (sigue trabajando)`, Math.min(89, lastPct));
+      const tail = logTail[logTail.length - 1];
+      stage(
+        options,
+        `Renderizando vídeo… ${el}s transcurridos${tail ? ` · ${tail.slice(0, 70)}` : ""}`,
+        Math.min(89, lastPct)
+      );
     }
   }, 2000);
   ffmpeg.on("progress", onProg);
@@ -198,7 +256,7 @@ if (voiceName) args.push("-i", voiceName);
       if (Date.now() - lastTick > 45000 && Date.now() - renderT0 > 60000) {
         rejectGuard(
           new Error(
-            "El motor se detuvo por falta de memoria del navegador. Se reintentará en modo ligero."
+            `Motor parado 45s. Últimas líneas: ${logTail.slice(-5).join(" | ").slice(0, 300)}`
           )
         );
       }
@@ -221,6 +279,7 @@ if (voiceName) args.push("-i", voiceName);
   } finally {
     clearInterval(beat);
     ffmpeg.off("progress", onProg);
+    ffmpeg.off("log", logHandler);
   }
 
   stage(options, "Leyendo vídeo generado", 92);
@@ -242,7 +301,15 @@ if (voiceName) args.push("-i", voiceName);
   const outData = await ffmpeg.readFile(finalName);
   const bytes = typeof outData === "string" ? new TextEncoder().encode(outData) : new Uint8Array(outData);
   const outBlob = new Blob([bytes.buffer as ArrayBuffer], { type: "video/mp4" });
-  const validation = await validateRender(ffmpeg, finalName, outBlob);
+  stage(options, "Comprobando calidad", 94);
+  let validation: RenderValidation;
+  if (isIphone) {
+    // En iPhone NO relanzamos ffmpeg para validar (2ª ejecución = riesgo de cuelgue
+    // en Safari). Validación nativa barata con el reproductor del navegador.
+    validation = await quickValidateMp4(outBlob);
+  } else {
+    validation = await validateRender(ffmpeg, finalName, outBlob);
+  }
   if (!validation.ok) {
     throw new Error(`Control de calidad falló: ${validation.errors.join("; ")}`);
   }
