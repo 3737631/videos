@@ -183,28 +183,21 @@ function buildFilterGraph(input: GraphInput): string {
     cropScale = `crop=${effW}:${cropH}:0:${cropY},scale=${input.targetWidth}:${input.targetHeight}`;
   }
 
-  // Paso 2.5: quitar marcas de agua típicas de TikTok (usuario arriba-izq, logo abajo-der)
-  let delogo = "";
+  // Paso 2.5: eliminar marca de agua TikTok acercando el encuadre (píxeles reales, sin difuminado)
+  let wmFix = "";
   if (input.removeWatermark) {
-    const tw = input.targetWidth;
-    const th = input.targetHeight;
-    const uX = Math.round(tw * 0.02);
-    const uY = Math.round(th * 0.055);
-    const uW = Math.round(tw * 0.5);
-    const uH = Math.round(th * 0.05);
-    const lW = Math.round(tw * 0.38);
-    const lH = Math.round(th * 0.12);
-    const lX = tw - lW - Math.round(tw * 0.01);
-    const lY = th - lH - Math.round(th * 0.03);
-    delogo =
-      `,delogo=x=${uX}:y=${uY}:w=${uW}:h=${uH}` +
-      `,delogo=x=${lX}:y=${lY}:w=${lW}:h=${lH}`;
+    const k = 0.84;
+    const cw = Math.round(input.targetWidth * k);
+    const ch = Math.round(input.targetHeight * k);
+    const cx = Math.round((input.targetWidth - cw) / 2);
+    const cy = Math.round((input.targetHeight - ch) / 2);
+    wmFix = `,crop=${cw}:${ch}:${cx}:${cy},scale=${input.targetWidth}:${input.targetHeight}`;
   }
 
   // Paso 3: zoom dinámico suave (105% máximo)
   const zoom = `zoompan=z='min(1.0+0.0006*on,1.05)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${input.targetWidth}x${input.targetHeight}:fps=${input.fps}`;
 
-  parts.push(`[0:v]${rotateFilter}${cropScale}${delogo},${zoom}[vbase]`);
+  parts.push(`[0:v]${rotateFilter}${cropScale}${wmFix},${zoom}[vbase]`);
 
   // Paso 4: subtítulos overlay
   let cur = "vbase";

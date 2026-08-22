@@ -527,7 +527,8 @@ export default function CrearPage() {
               <div className="min-w-0">
                 <div className="text-sm font-medium">🚫 Quitar marca de agua de TikTok</div>
                 <div className="text-[11px] text-gray-500">
-                  Difumina el @usuario y el logo al exportar el vídeo final (no aplica al recorte sin pérdida).
+                  Acerca el encuadre para que el @usuario y el logo queden fuera del plano: nítido, sin difuminar (se
+                  aplica al exportar).
                 </div>
               </div>
               <button
