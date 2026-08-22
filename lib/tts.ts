@@ -59,13 +59,14 @@ export function stopPreview() {
   }
 }
 
+// Voces premade INCLUIDAS en el plan gratuito (biblioteca antigua bloqueada por API)
 const ELEVENLABS_VOICE_MAP: Record<string, string> = {
-  alloy: "21m00Tcm4TlvDq8ikWAM",
-  echo: "29vD33N1CtxCmqQRPOHJ",
-  fable: "JBFqnCBsd6RMkjVDRZzb",
-  onyx: "VR6AewLTigWG4xSOukaG",
-  nova: "EXAVITQu4vr4xnSDxMaL",
-  shimmer: "LcfcDJNUP1GQjkzn1xUU",
+  alloy: "TX3LPaxmHKxFdv7VOQHJ", // Liam - Energetic Social Media Creator
+  echo: "IKne3meq5aSn9XLyUdCD", // Charlie - Deep, Confident, Energetic
+  fable: "JBFqnCBsd6RMkjVDRZzb", // George - Warm Storyteller
+  onyx: "pNInz6obpgDQGcFmaJgB", // Brian - Deep, Resonant
+  nova: "FGY2WhTYpPnrIDTdsKH5", // Laura - Enthusiast, Quirky
+  shimmer: "pFZP5JQG7iQjIQuC4Bku", // Lily - Velvety
 };
 
 export async function generateSpeech(
@@ -208,6 +209,9 @@ async function generateElevenLabs(
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
+    if (body.includes("quota_exceeded")) {
+      throw new Error("Cuota gratuita de ElevenLabs agotada este mes (10.000 caracteres). Se usar\u00e1 voz de respaldo.");
+    }
     if (res.status === 401 && body.includes("missing_permissions")) {
       throw new Error(
         "Tu clave de ElevenLabs NO tiene el permiso text_to_speech. Crea una clave nueva en elevenlabs.io con todos los permisos."

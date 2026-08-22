@@ -1,4 +1,4 @@
-import type { AppSettings, Project } from "@/types";
+﻿import type { AppSettings, Project } from "@/types";
 
 const PROJECTS_KEY = "clipcraft.projects.v1";
 const SETTINGS_KEY = "clipcraft.settings.v1";
@@ -10,7 +10,7 @@ let projectsCache: Project[] | null = null;
 let settingsCache: AppSettings | null = null;
 
 const BUILTIN_GROQ_KEY = "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";
-const BUILTIN_ELEVENLABS_KEY = "sk_da788064febe680d49463bca63e744aa19cd81b3353ba6e1";
+const BUILTIN_ELEVENLABS_KEY = "sk_c1a85027b5556512faa5e13bab6670694dbf99e716d79b34";
 
 const DEFAULT_SETTINGS: AppSettings = {
   llmProvider: "groq",
