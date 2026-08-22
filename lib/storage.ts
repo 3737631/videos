@@ -27,6 +27,11 @@ function pickKey(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value : fallback;
 }
 
+// Claves antiguas conocidas como rotas: se sustituyen solas por la integrada
+const STALE_TTS_KEYS = new Set([
+  "sk_da788064febe680d49463bca63e744aa19cd81b3353ba6e1",
+]);
+
 export function loadProjects(): Project[] {
   if (projectsCache !== null) return projectsCache;
   let loaded: Project[];
@@ -99,6 +104,7 @@ export function loadSettings(): AppSettings {
       sttApiKey: pickKey(parsed.sttApiKey, DEFAULT_SETTINGS.sttApiKey),
       ttsApiKey: pickKey(parsed.ttsApiKey, DEFAULT_SETTINGS.ttsApiKey),
     };
+    if (STALE_TTS_KEYS.has(loaded.ttsApiKey)) loaded.ttsApiKey = BUILTIN_ELEVENLABS_KEY;
   } catch {
     loaded = { ...DEFAULT_SETTINGS };
   }

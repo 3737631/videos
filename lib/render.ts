@@ -121,8 +121,8 @@ export async function renderProject(
 
   const args: string[] = ["-noautorotate"];
   for (const n of inNames) args.push("-i", n);
-  if (voiceName) args.push("-i", voiceName);
-  if (musicName) args.push("-i", musicName);
+if (voiceName) args.push("-i", voiceName);
+if (musicName) args.push("-stream_loop", "-1", "-i", musicName); // la música se repite hasta cubrir el vídeo completo
   for (const f of subFiles) args.push("-i", f);
 
   args.push(
@@ -267,6 +267,8 @@ function buildFilterGraph(input: GraphInput): string {
 
   // Audio con ducking: voz -> música -> original del primer clip
   const audioNodes: string[] = [];
+  const totalDur = Math.max(0.5, input.clips.reduce((a, c) => a + Math.max(0, c.end - c.start), 0));
+  const capMusic = input.musicName ? `,atrim=end=${totalDur.toFixed(3)},asetpts=N/SR/TB` : "";
   if (input.voiceName) {
     parts.push(`[${input.subStartIdx - (input.musicName ? 2 : 1)}:a]aresample=48000,aformat=channel_layouts=stereo[vo]`);
     audioNodes.push("[vo]");
@@ -290,9 +292,9 @@ function buildFilterGraph(input: GraphInput): string {
   if (audioNodes.length === 0) {
     parts.push("anullsrc=channel_layout=stereo:sample_rate=48000[aout]");
   } else if (audioNodes.length === 1) {
-    parts.push(`${audioNodes[0]}aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[aout]`);
+    parts.push(`${audioNodes[0]}${capMusic}aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[aout]`);
   } else {
-    parts.push(`${audioNodes.join("")}amix=inputs=${audioNodes.length}:duration=first:normalize=0[aout]`);
+    parts.push(`${audioNodes.join("")}amix=inputs=${audioNodes.length}:duration=first:normalize=0${capMusic}[aout]`);
   }
 
   return parts.join(";");
