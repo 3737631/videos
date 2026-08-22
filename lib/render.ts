@@ -80,20 +80,20 @@ export async function renderProject(
   let musicName: string | null = null;
   let musicReps = 1;
   if (plan.music && project.music?.url) {
-    musicName = "music.mp3";
-    await readFile(ffmpeg, musicName, await (await fetch(project.music.url)).blob());
-    // Repeticiones necesarias para cubrir TODO el vídeo (bucle determinista)
+    // Bucle infalible: decodificamos la canción con el navegador y generamos un WAV
+    // ya repetido hasta cubrir TODO el vídeo. Sin filtros de bucle ni entradas extra.
     const estTotal =
       plan.clips.reduce((a, c) => a + Math.max(0, c.end - c.start), 0) || 20;
-    let musicDur = 0;
     try {
-      const info = await ffprobeInfo(ffmpeg, musicName);
-      musicDur = info.duration || 0;
+      const wav = await makeLoopedMusicWav(await (await fetch(project.music.url)).blob(), estTotal + 1.5);
+      musicName = "music.wav";
+      await readFile(ffmpeg, musicName, wav);
     } catch {
-      musicDur = 0;
+      // Sin decodificación posible: usamos el original sin bucle
+      musicName = "music.mp3";
+      await readFile(ffmpeg, musicName, await (await fetch(project.music.url)).blob());
     }
-    const assumeLen = musicDur > 2 ? musicDur : 5;
-    musicReps = Math.max(1, Math.min(12, Math.ceil((estTotal + 1) / assumeLen)));
+    void musicReps;
   }
 
   stage(options, "Generando subtítulos", 12);
@@ -216,6 +216,66 @@ interface Geom {
   hasAudio: boolean;
 }
 
+// Decodifica una canción con el navegador y devuelve un WAV 16-bit estéreo
+// de duración >= targetSeconds repitiendo la canción (bucle sin filtros ffmpeg).
+async function makeLoopedMusicWav(blob: Blob, targetSeconds: number): Promise<Blob> {
+  const AC: typeof AudioContext =
+    window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  const ctx = new AC();
+  try {
+    const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+    const sr = decoded.sampleRate;
+    const chs = Math.min(2, decoded.numberOfChannels);
+    const outLen = Math.max(1, Math.min(Math.ceil(targetSeconds * sr), 180 * sr));
+    const chans: Float32Array[] = [];
+    for (let c = 0; c < chs; c++) {
+      const src = decoded.getChannelData(Math.min(c, decoded.numberOfChannels - 1));
+      const dst = new Float32Array(outLen);
+      const srcLen = src.length;
+      if (srcLen === 0) throw new Error("audio vacío");
+      for (let i = 0; i < outLen; i += srcLen) {
+        dst.set(src.subarray(0, Math.min(srcLen, outLen - i)), i);
+      }
+      chans.push(dst);
+    }
+    // WAV PCM 16-bit intercalado
+    const frames = outLen;
+    const bytesPerSample = 2;
+    const blockAlign = chs * bytesPerSample;
+    const dataSize = frames * blockAlign;
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+    const ws = (o: number, s: string) => {
+      for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
+    };
+    ws(0, "RIFF");
+    view.setUint32(4, 36 + dataSize, true);
+    ws(8, "WAVE");
+    ws(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, chs, true);
+    view.setUint32(24, sr, true);
+    view.setUint32(28, sr * blockAlign, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, 16, true);
+    ws(36, "data");
+    view.setUint32(40, dataSize, true);
+    let off = 44;
+    for (let i = 0; i < frames; i++) {
+      for (let c = 0; c < chs; c++) {
+        let s = chans[c][i];
+        s = s < -1 ? -1 : s > 1 ? 1 : s;
+        view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+        off += bytesPerSample;
+      }
+    }
+    return new Blob([buffer], { type: "audio/wav" });
+  } finally {
+    void ctx.close();
+  }
+}
+
 interface GraphInput {
   clips: GraphClip[];
   geoms: Record<number, Geom>;
@@ -308,20 +368,10 @@ function buildFilterGraph(input: GraphInput): string {
     audioNodes.push("[vo]");
   }
   if (input.musicName) {
-    const reps = input.musicReps || 1;
     const musicIdx = input.subStartIdx - 1;
-    // Bucle determinista: una sola entrada decodificada, dividida y encadenada hasta cubrir el vídeo
-    parts.push(`[${musicIdx}:a]aresample=48000,aformat=channel_layouts=stereo[mures]`);
-    if (reps > 1) {
-      const labels: string[] = [];
-      for (let k = 0; k < reps; k++) labels.push(`[muc${k}]`);
-      parts.push(`[mures]asplit=${reps}${labels.join("")}`);
-      const concInputs = labels.map((l) => `${l}`).join("");
-      parts.push(`${concInputs}concat=n=${reps}:v=0:a=1[muloop]`);
-      parts.push(`[muloop]volume=${input.audio.musicVolume}${capMusic}[mu]`);
-    } else {
-      parts.push(`[mures]volume=${input.audio.musicVolume}${capMusic}[mu]`);
-    }
+    parts.push(
+      `[${musicIdx}:a]aresample=48000,aformat=channel_layouts=stereo,volume=${input.audio.musicVolume}${capMusic}[mu]`
+    );
     audioNodes.push("[mu]");
   }
   const firstGeom = input.geoms[0];
