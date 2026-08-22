@@ -1,5 +1,4 @@
 ﻿import type { AppSettings, VoiceOption } from "@/types";
-import { serviceStatus } from "@/lib/storage";
 
 export interface TtsResult {
   blob: Blob;
@@ -9,7 +8,7 @@ export interface TtsResult {
 }
 
 export const VOICE_CATALOG: VoiceOption[] = [
-  // Voces en INGLÃ‰S (ideales para contenido viral en EE.UU./global)
+  // Voces en INGLÉS (ideales para contenido viral en EE.UU./global)
   { id: "alloy", name: "Alloy", gender: "neutra", style: "Natural US", language: "English", accent: "US", speed: 1 },
   { id: "echo", name: "Echo", gender: "masculina", style: "Deep narrator", language: "English", accent: "US", speed: 1 },
   { id: "fable", name: "Fable", gender: "neutra", style: "Storyteller UK", language: "English", accent: "UK", speed: 1 },
@@ -27,8 +26,8 @@ const PREVIEW_LINES: Record<string, string> = {
 };
 
 /**
- * PrevisualizaciÃ³n GRATUITA de voz usando el sintetizador del navegador.
- * No necesita claves de API ni consume crÃ©ditos.
+ * Previsualización GRATUITA de voz usando el sintetizador del navegador.
+ * No necesita claves de API ni consume créditos.
  */
 export function previewVoice(voice: VoiceOption): boolean {
   if (typeof window === "undefined" || !("speechSynthesis" in window)) return false;
@@ -59,50 +58,28 @@ export function stopPreview() {
   }
 }
 
-// Voces premade INCLUIDAS en el plan gratuito (biblioteca antigua bloqueada por API)
-const ELEVENLABS_VOICE_MAP: Record<string, string> = {
-  alloy: "TX3LPaxmHKxFdv7VOQHJ", // Liam - Energetic Social Media Creator
-  echo: "IKne3meq5aSn9XLyUdCD", // Charlie - Deep, Confident, Energetic
-  fable: "JBFqnCBsd6RMkjVDRZzb", // George - Warm Storyteller
-  onyx: "pNInz6obpgDQGcFmaJgB", // Brian - Deep, Resonant
-  nova: "FGY2WhTYpPnrIDTdsKH5", // Laura - Enthusiast, Quirky
-  shimmer: "pFZP5JQG7iQjIQuC4Bku", // Lily - Velvety
-};
-
+/**
+ * Genera la locución con la voz neuronal LOCAL (Kokoro, corre en el navegador):
+ * ilimitada, rápida y sin claves ni cuotas. Si el dispositivo no soporta WASM,
+ * usa la voz gratuita de Google como último recurso.
+ */
 export async function generateSpeech(
   settings: AppSettings,
   text: string,
   voiceId: string,
   options?: { speed?: number }
 ): Promise<TtsResult> {
-  if (!text.trim()) throw new Error("El texto de la voz estÃ¡ vacÃ­o");
-
-  const status = serviceStatus(settings, "tts");
-  if (status.configured) {
-    try {
-      if (settings.ttsProvider === "elevenlabs") {
-        return await generateElevenLabs(settings, text, voiceId, options);
-      }
-      return await generateOpenAi(settings, text, voiceId, options);
-    } catch (e) {
-      // Voz neuronal LOCAL ilimitada (Kokoro en el navegador), luego Google como última opción
-      try {
-        return await generateKokoroTts(text, voiceId);
-      } catch {
-        try {
-          return await generateGoogleTts(text);
-        } catch {
-          throw e;
-        }
-      }
-    }
+  void settings;
+  void options;
+  if (!text.trim()) throw new Error("El texto de la voz está vacío");
+  try {
+    return await generateKokoroTts(text, voiceId);
+  } catch {
+    return await generateGoogleTts(text);
   }
-
-  // Sin clave configurada: voz neuronal local directa
-  return generateKokoroTts(text, voiceId);
 }
 
-// ===== Voz neuronal LOCAL (Kokoro, corre en el navegador): ilimitada, sin claves =====
+// ===== Voz neuronal LOCAL (Kokoro-82M vía WASM): ilimitada, sin claves =====
 const KOKORO_VOICE_MAP: Record<string, string> = {
   alloy: "af_heart", // femenina cálida US
   nova: "af_bella", // femenina enérgica US
@@ -129,6 +106,10 @@ async function getKokoro() {
     });
   }
   return kokoroInst;
+}
+
+export async function isKokoroReady(): Promise<boolean> {
+  return kokoroInst !== null;
 }
 
 function floatToWavBlob(samples: Float32Array, sampleRate = 24000): Blob {
@@ -158,10 +139,6 @@ function floatToWavBlob(samples: Float32Array, sampleRate = 24000): Blob {
   return new Blob([buffer], { type: "audio/wav" });
 }
 
-export async function isKokoroReady(): Promise<boolean> {
-  return kokoroInst !== null;
-}
-
 async function generateKokoroTts(text: string, voiceId: string): Promise<TtsResult> {
   const tts = await getKokoro();
   const voice = KOKORO_VOICE_MAP[voiceId] || KOKORO_VOICE_MAP.alloy;
@@ -185,7 +162,7 @@ async function generateKokoroTts(text: string, voiceId: string): Promise<TtsResu
   return finalizeTts(blob, "kokoro-local");
 }
 
-// Respaldo gratuito (voz de Google Translate vÃ­a proxies con CORS abierto)
+// ===== Último recurso: voz de Google Translate vía proxies con CORS abierto =====
 function splitForTts(text: string, maxLen: number): string[] {
   const sentences = text.replace(/\s+/g, " ").split(/(?<=[.!?])\s+/);
   const chunks: string[] = [];
@@ -246,94 +223,16 @@ async function generateGoogleTts(text: string): Promise<TtsResult> {
   return finalizeTts(blob, "respaldo-gratis");
 }
 
-async function generateOpenAi(
-  settings: AppSettings,
-  text: string,
-  voiceId: string,
-  options?: { speed?: number }
-): Promise<TtsResult> {
-  const speed = options?.speed && options.speed > 0 ? Math.min(4, Math.max(0.25, options.speed)) : 1;
-  const res = await fetch("https://api.openai.com/v1/audio/speech", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${settings.ttsApiKey}`,
-    },
-    body: JSON.stringify({
-      model: "tts-1",
-      voice: voiceId || settings.ttsVoiceId || "alloy",
-      input: text,
-      response_format: "mp3",
-      speed,
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    const retryable = res.status === 429 || res.status >= 500;
-    throw new Error(
-      retryable
-        ? `El servicio TTS estÃ¡ sobrecargado (${res.status}). Reintenta.`
-        : `Error TTS (${res.status}): ${body.slice(0, 200)}`
-    );
-  }
-  const blob = await res.blob();
-  return finalizeTts(blob, "openai");
-}
-
-async function generateElevenLabs(
-  settings: AppSettings,
-  text: string,
-  voiceId: string,
-  options?: { speed?: number }
-): Promise<TtsResult> {
-  const speed = options?.speed && options.speed > 0 ? options.speed : 1;
-  const elVoiceId = ELEVENLABS_VOICE_MAP[voiceId] || voiceId;
-  const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${elVoiceId}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "xi-api-key": settings.ttsApiKey,
-    },
-    body: JSON.stringify({
-      text,
-      model_id: "eleven_multilingual_v2",
-      voice_settings: {
-        stability: 0.5,
-        similarity_boost: 0.75,
-        speed,
-      },
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    if (body.includes("quota_exceeded")) {
-      throw new Error("Cuota gratuita de ElevenLabs agotada este mes (10.000 caracteres). Se usar\u00e1 voz de respaldo.");
-    }
-    if (res.status === 401 && body.includes("missing_permissions")) {
-      throw new Error(
-        "Tu clave de ElevenLabs NO tiene el permiso text_to_speech. Crea una clave nueva en elevenlabs.io con todos los permisos."
-      );
-    }
-    const retryable = res.status === 429 || res.status >= 500;
-    throw new Error(
-      retryable
-        ? `El servicio TTS estÃ¡ sobrecargado (${res.status}). Reintenta.`
-        : `Error TTS ElevenLabs (${res.status}): ${body.slice(0, 200)}`
-    );
-  }
-  const blob = await res.blob();
-  return finalizeTts(blob, "elevenlabs");
-}
-
+// ===== Utilidades =====
 async function finalizeTts(blob: Blob, provider: string): Promise<TtsResult> {
   if (!blob.size || blob.size < 1024) {
-    throw new Error("El proveedor TTS devolviÃ³ un archivo vacÃ­o o invÃ¡lido. Reintenta.");
+    throw new Error("El proveedor TTS devolvió un archivo vacío o inválido. Reintenta.");
   }
   const url = URL.createObjectURL(blob);
   const duration = await probeAudioDuration(url);
   if (duration < 0.5) {
     URL.revokeObjectURL(url);
-    throw new Error("El audio generado es demasiado corto o no contiene voz vÃ¡lida.");
+    throw new Error("El audio generado es demasiado corto o no contiene voz válida.");
   }
   return { blob, url, duration, provider };
 }

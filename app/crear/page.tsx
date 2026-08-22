@@ -18,6 +18,7 @@ import { serviceStatus } from "@/lib/storage";
 import { analyzeVideo } from "@/lib/analyze";
 import { detectViralHighlights, type ViralSegment } from "@/lib/viral";
 import { detectWatermark } from "@/lib/watermark";
+import { isKokoroReady } from "@/lib/tts";
 import { loadFfmpeg, isFfmpegLoaded, getFfmpeg } from "@/lib/ffmpeg";
 import { renderProject } from "@/lib/render";
 
@@ -311,7 +312,7 @@ export default function CrearPage() {
       if (!script.length) script = fallbackScript(selectedHook);
       addLog(`Guion listo (${script.length} bloques)`);
 
-      // 4. Voz en inglés (o modo solo música)
+      // 4. Voz neuronal local ilimitada (o modo solo música)
       let localVoiceUrl: string | null = null;
       let ttsBlob: Blob | null = null;
       let voiceDuration = 0;
@@ -319,8 +320,12 @@ export default function CrearPage() {
       if (voiceMode === "musica") {
         addLog("Modo solo música: sin voz");
       } else {
-        setJobStage({ stage: "Generando voz", progress: 42 });
-        if (serviceStatus(settings, "tts").configured) {
+        const primeraVez = !(await isKokoroReady());
+        setJobStage({
+          stage: primeraVez ? "Descargando voz neuronal (solo la primera vez)" : "Generando voz",
+          progress: 42,
+        });
+        {
           const fullText = capForViral(getScriptFullText({ ...project, script }), 400);
           if (fullText.trim()) {
             try {
@@ -336,8 +341,6 @@ export default function CrearPage() {
               addLog(`Voz: ${lastVoiceError}`);
             }
           }
-        } else {
-          lastVoiceError = "Sin clave TTS configurada";
         }
       }
 
@@ -355,7 +358,7 @@ export default function CrearPage() {
 
       // Aviso visible si la voz no se pudo generar (mensaje amable, detalle solo en el registro)
       if (voiceMode === "voz" && !localVoiceUrl) {
-        const msg = "No se pudo usar ElevenLabs para esta voz. El vídeo se creará sin locución — revisa tu clave en Configuración.";
+        const msg = "No se pudo generar la voz en este dispositivo. El vídeo se creará sin locución.";
         setVoiceWarning((prev) => (prev ? `${prev} Además, ${msg.charAt(0).toLowerCase()}${msg.slice(1)}` : msg));
       }
 
