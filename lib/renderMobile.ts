@@ -1,5 +1,59 @@
 import type { Project } from "@/types";
 
+export interface MobileRenderResult {
+  blob: Blob;
+  url: string;
+  validation: {
+    ok: boolean;
+    duration: number;
+    width: number;
+    height: number;
+    fps: number;
+    hasAudio: boolean;
+    audioDuration: number;
+    sizeBytes: number;
+    codec: string;
+    errors: string[];
+  };
+  /** Audio grabado por separado (seguro por si Safari ignora el audio mezclado) */
+  audioBlob: Blob | null;
+}
+
+function pickAudioMime(): string {
+  const cands = ["audio/mp4", "audio/aac", "audio/webm;codecs=opus", "audio/webm"];
+  if (typeof MediaRecorder !== "undefined") {
+    for (const m of cands) {
+      try {
+        if (MediaRecorder.isTypeSupported(m)) return m;
+      } catch {}
+    }
+  }
+  return "";
+}
+
+/** ¿El archivo de vídeo contiene audio audible? (decodificación nativa, sin ffmpeg) */
+export async function hasAudibleAudio(blob: Blob): Promise<boolean> {
+  try {
+    const AC: typeof AudioContext =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const ctx = new AC();
+    const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
+    const ch = buf.getChannelData(0);
+    let sum = 0;
+    let n = 0;
+    for (let i = 0; i < ch.length; i += 97) {
+      sum += Math.abs(ch[i]);
+      n++;
+    }
+    await ctx.close();
+    return n > 0 && sum / n > 0.0005;
+  } catch {
+    // Si no podemos analizarlo, asumimos que está bien (evitamos uniones innecesarias)
+    return true;
+  }
+}
+
 export interface MobileRenderOptions {
   width: number;
   height: number;
@@ -74,7 +128,7 @@ function drawCover(
 export async function renderProjectMobile(
   project: Project,
   opts: MobileRenderOptions
-): Promise<{ blob: Blob; url: string; validation: { ok: boolean; duration: number; width: number; height: number; fps: number; hasAudio: boolean; audioDuration: number; sizeBytes: number; codec: string; errors: string[] } }> {
+): Promise<MobileRenderResult> {
   const plan = project.editPlan;
   if (!plan) throw new Error("No hay plan de edición");
   const W = Math.round(opts.width);
@@ -102,6 +156,11 @@ export async function renderProjectMobile(
   const master = actx.createGain();
   master.gain.value = 1;
   master.connect(dest);
+  // Fuerza el grafo WebAudio a procesar en iOS aunque nadie escuche en directo
+  const pull = actx.createGain();
+  pull.gain.value = 0;
+  master.connect(pull);
+  pull.connect(actx.destination);
 
   let voiceEl: HTMLAudioElement | null = null;
   if (plan.voice?.audioUrl) {
@@ -204,9 +263,32 @@ export async function renderProjectMobile(
     rec.onstop = () => resolve();
   });
 
+  // Seguro de audio: grabamos SOLO el audio en paralelo; si Safari ignorara la pista
+  // de audio del vídeo mezclado, unimos este archivo después (unión rápida, sin re-codificar)
+  let aRec: MediaRecorder | null = null;
+  const aParts: Blob[] = [];
+  let aStopped: Promise<void> = Promise.resolve();
+  try {
+    const am = pickAudioMime();
+    if (am && dest.stream.getAudioTracks().length) {
+      aRec = new MediaRecorder(dest.stream, { mimeType: am });
+      aRec.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) aParts.push(e.data);
+      };
+      aStopped = new Promise<void>((resolve) => {
+        aRec!.onstop = () => resolve();
+      });
+    }
+  } catch {
+    aRec = null;
+  }
+
   try {
     await actx.resume();
     rec.start(1000);
+    if (aRec && aRec.state === "inactive") aRec.start(1000);
+    // Pequeña espera para que ambas grabadoras estén rodando antes del primer sonido
+    await new Promise((r) => setTimeout(r, 150));
     if (musicSource) musicSource.start();
     if (voiceEl) void voiceEl.play().catch(() => {});
 
@@ -263,11 +345,11 @@ export async function renderProjectMobile(
     try {
       if (rec.state !== "inactive") rec.stop();
     } catch {}
+    try {
+      if (aRec && aRec.state !== "inactive") aRec.stop();
+    } catch {}
     if (musicSource) try { musicSource.stop(); } catch {}
     if (voiceEl) try { voiceEl.pause(); } catch {}
-    try {
-      actx.close();
-    } catch {}
     for (const v of vidCache.values()) {
       try {
         v.pause();
@@ -279,6 +361,11 @@ export async function renderProjectMobile(
     } catch {}
   }
   await stopped;
+  await aStopped;
+  // Cerrar el AudioContext DESPUÉS de parar las grabadoras
+  try {
+    await actx.close();
+  } catch {}
 
   // Validación por construcción: conocemos la duración exacta (la grabamos nosotros);
   // los metadatos de MediaRecorder en iOS NO son fiables (duration Infinity), así que
@@ -286,6 +373,11 @@ export async function renderProjectMobile(
   const blob = new Blob(parts, { type: usedMime.includes("mp4") ? "video/mp4" : "video/webm" });
   if (!blob.size || blob.size < 64 * 1024) {
     throw new Error("grabación sin datos suficientes");
+  }
+  let audioBlob: Blob | null = null;
+  if (aParts.length) {
+    audioBlob = new Blob(aParts, { type: aParts[0].type || "audio/mp4" });
+    if (audioBlob.size < 1024) audioBlob = null;
   }
   opts.onStage?.("Comprobando calidad", 96);
   const validation = {
@@ -302,5 +394,5 @@ export async function renderProjectMobile(
   };
   const url = URL.createObjectURL(blob);
   opts.onStage?.("Finalizando", 99);
-  return { blob, url, validation };
+  return { blob, url, validation, audioBlob };
 }
