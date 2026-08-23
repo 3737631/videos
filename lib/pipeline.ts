@@ -13,9 +13,11 @@ import {
 } from "@/lib/voices/catalog";
 import {
   ensureVoiceInstalled,
-  synthesizeWithFallback,
+  synthesizeProsodyWithFallback,
   blobDuration,
 } from "@/lib/voices/engine";
+import { recommendStyle, getStyle } from "@/lib/script/styles";
+import { correctiveSpeed } from "@/lib/script/generator";
 import { classifyMusic } from "@/lib/audio/musicClassifier";
 import { selectTrack } from "@/lib/audio/musicSelector";
 import { renderTrack } from "@/lib/audio/musicLibrary";
@@ -28,6 +30,12 @@ export interface CreationInput {
   voiceId?: string | null;
   onlyMusic?: boolean;
   targetSeconds?: number;
+  /** Estilo de entonación (natural, viral, urgente…) */
+  styleId?: string;
+  /** Duración del vídeo fuente a la que debe encajar la voz */
+  targetDurationSec?: number;
+  /** Tolerancia del ajuste de duración (def. 0.25 s) */
+  toleranceSec?: number;
 }
 
 export interface CreationResult {
@@ -48,6 +56,8 @@ export interface CreationResult {
   cuesCount: number;
   niche: NicheInfo;
   errors: string[];
+  styleId: string | null;
+  targetSeconds: number | null;
 }
 
 export interface PipelineHandlers {
@@ -166,7 +176,16 @@ export async function runCreationPipeline(
     );
     const lang = detectScriptLang(script);
     const palette = NICHE_PALETTES[nicheInfo.niche];
-    const speed = suggestedSpeechRate(nicheInfo);
+    // Tono: el elegido por el usuario o el recomendado automáticamente
+    const styleId =
+      getStyle(input.styleId).id === input.styleId
+        ? (input.styleId as string)
+        : recommendStyle({
+            scriptText: script,
+            isDropshipping: nicheInfo.isDropshipping,
+            durationSec: input.targetDurationSec ?? null,
+          });
+    const validationWarnings: string[] = [];
 
     // ── Seleccionar voz ────────────────────────────────────────────────
     let chosenId =
@@ -183,33 +202,63 @@ export async function runCreationPipeline(
       );
     }
 
-    // ── Generar voz ────────────────────────────────────────────────────
+    // ── Generar voz (entonación por segmentos + ajuste a duración) ─────
     let voiceDuration: number | null = null;
     let usedFallback = false;
+    const segTimings: Array<{ text: string; start: number; end: number }> = [];
     if (!input.onlyMusic) {
-      const fullText = script;
-      const res = await runStage(
-        "GENERATING_VOICE",
-        async (signal) => {
-          return await synthesizeWithFallback(fullText, chosenId, {
-            signal,
-            speed,
-            onProgress: (p) => tracker.set("GENERATING_VOICE", p ?? undefined),
-          });
-        },
-        h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.GENERATING_VOICE, retries: 0 }
-      );
-      voiceBlob = res.blob;
-      voiceDuration = await blobDuration(voiceBlob);
-      chosenId = res.voiceId;
-      usedFallback = res.usedFallback;
+      const target = input.targetDurationSec ?? input.targetSeconds ?? null;
+      const tol = input.toleranceSec ?? 0.25;
+      const baseSpeed = suggestedSpeechRate(nicheInfo);
+      let attemptSpeed = baseSpeed;
+      let best: Awaited<ReturnType<typeof synthesizeProsodyWithFallback>> | null = null;
+
+      for (let round = 0; round < 2; round++) {
+        const res = await runStage(
+          "GENERATING_VOICE",
+          async (signal) => {
+            return await synthesizeProsodyWithFallback(script, chosenId, {
+              signal,
+              speed: attemptSpeed,
+              styleId,
+              onProgress: (p) => tracker.set("GENERATING_VOICE", p ?? undefined),
+            });
+          },
+          h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.GENERATING_VOICE, retries: 0 }
+        );
+        best = res;
+        voiceDuration = await blobDuration(res.blob);
+        chosenId = res.voiceId;
+        usedFallback = res.usedFallback;
+        if (!target || round === 1) break;
+        const mul = correctiveSpeed(voiceDuration, target, tol);
+        if (!mul) break; // ya encaja
+        attemptSpeed = Math.min(1.5, Math.max(0.7, attemptSpeed * mul));
+      }
+      if (best) {
+        segTimings.push(...best.timings);
+        if (
+          target &&
+          voiceDuration &&
+          Math.abs(voiceDuration - target) > Math.max(tol, 0.8)
+        ) {
+          validationWarnings.push(
+            `La voz mide ${voiceDuration.toFixed(1)} s y el vídeo ${target.toFixed(1)} s`
+          );
+        }
+      }
     }
 
     // ── Generar música ─────────────────────────────────────────────────
     await runStage(
       "GENERATING_MUSIC",
       async (signal) => {
-        const cls = classifyMusic({ scriptText: script });
+        const cls = classifyMusic({
+          scriptText: script,
+          projectStyle: styleId,
+          goal: "ventas",
+          durationSec: Math.round(voiceDuration ?? input.targetDurationSec ?? input.targetSeconds ?? 15),
+        });
         const sel = selectTrack(cls.primaryCategory, cls.secondaryCategory, projectId);
         const secs = Math.max(8, voiceDuration ?? input.targetSeconds ?? 15);
         const rendered = await renderTrack(sel.track, secs, undefined);
@@ -226,10 +275,14 @@ export async function runCreationPipeline(
       console.warn("música omitida:", err);
     });
 
-    // ── Subtítulos ─────────────────────────────────────────────────────
+    // ── Subtítulos (anclados a timestamps REALES de la voz) ────────────
     const subs = await runStage(
       "CREATING_SUBTITLES",
-      async () => buildSubtitles(script, voiceDuration, { niche: nicheInfo.niche }),
+      async () =>
+        buildSubtitles(script, voiceDuration, {
+          niche: nicheInfo.niche,
+          segTimings: input.onlyMusic ? undefined : segTimings,
+        }),
       h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.CREATING_SUBTITLES, retries: 0 }
     );
 
@@ -306,7 +359,9 @@ export async function runCreationPipeline(
       musicTrackName: music.label,
       cuesCount: subs.cues.length,
       niche: nicheInfo,
-      errors: validation,
+      errors: [...validation, ...validationWarnings],
+      styleId: input.onlyMusic ? null : styleId,
+      targetSeconds: input.targetDurationSec ?? input.targetSeconds ?? null,
     };
     tracker.done();
     return result;

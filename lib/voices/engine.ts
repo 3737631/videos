@@ -312,3 +312,136 @@ export async function deleteVoice(voiceId: string): Promise<void> {
   }
   await cacheDel("voices", voiceId);
 }
+
+// ── Síntesis con ENTONACIÓN por segmentos (timestamps REALES) ───────────
+
+export interface ProsodyTiming {
+  text: string;
+  start: number;
+  end: number;
+}
+
+export interface ProsodyResult {
+  blob: Blob;
+  duration: number;
+  timings: ProsodyTiming[];
+}
+
+/** Puro: acumula duraciones+pausas en una línea de tiempo real */
+export function computeProsodyTimings(
+  items: Array<{ text: string; duration: number }>,
+  pausesMs: number[]
+): ProsodyTiming[] {
+  let t = 0;
+  return items.map((it, i) => {
+    const start = t;
+    t += it.duration + Math.max(0, pausesMs[i] ?? 0) / 1000;
+    return { text: it.text, start, end: start + it.duration };
+  });
+}
+
+function silenceWav(sec: number): Blob {
+  const rate = 24000;
+  const n = Math.max(1, Math.round(rate * sec));
+  const view = new DataView(new ArrayBuffer(44 + n * 2));
+  const ws = (o: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
+  };
+  ws(0, "RIFF");
+  view.setUint32(4, 36 + n * 2, true);
+  ws(8, "WAVE");
+  ws(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true);
+  view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  ws(36, "data");
+  view.setUint32(40, n * 2, true);
+  return new Blob([view.buffer], { type: "audio/wav" });
+}
+
+export interface ProsodyOptions {
+  signal?: AbortSignal;
+  onProgress?: (pct: number | null) => void;
+  speed?: number;
+  /** Estilo de entonación (params reales: velocidad por rol + pausas) */
+  styleId?: string;
+}
+
+/**
+ * Sintetiza frase a frase con velocidad/pausa según estilo y rol.
+ * Devuelve timestamps REALES medidos del audio generado.
+ */
+export async function synthesizeProsody(
+  text: string,
+  voiceId: string,
+  opts: ProsodyOptions = {}
+): Promise<ProsodyResult> {
+  const voice = getVoiceById(voiceId);
+  if (!voice) throw new Error("Voz desconocida");
+  const clean = text.trim();
+  if (!clean) throw new Error("Guion vacío");
+
+  const { segmentRoles, getStyle, roleSpeedOf } = await import("@/lib/script/styles");
+  const style = getStyle(opts.styleId);
+  const baseSpeed = opts.speed ?? 1;
+  const segs = segmentRoles(clean);
+
+  const blobs: Blob[] = [];
+  const durations: number[] = [];
+  const pauses: number[] = [];
+  for (let i = 0; i < segs.length; i++) {
+    if (opts.signal?.aborted) throw new DOMException("cancelado", "AbortError");
+    const s = segs[i];
+    const eff = Math.min(1.5, Math.max(0.7, baseSpeed * roleSpeedOf(style, s.role)));
+    // Reutiliza cache por frase+velocidad
+    const r = await synthesize(s.text, voiceId, {
+      speed: eff,
+      signal: opts.signal,
+    });
+    blobs.push(r.blob);
+    durations.push(r.duration);
+    pauses.push(i === segs.length - 1 ? 0 : style.pauseMs);
+    opts.onProgress?.(Math.round(((i + 1) / segs.length) * 100));
+  }
+
+  // Inserta silencios entre frases
+  const parts: Blob[] = [];
+  blobs.forEach((b, i) => {
+    parts.push(b);
+    if (pauses[i] > 60) parts.push(silenceWav(pauses[i] / 1000));
+  });
+  const merged = parts.length === 1 ? parts[0] : await concatWavs(parts, opts.signal);
+  const duration = await blobDuration(merged);
+  const timings = computeProsodyTimings(
+    segs.map((s, i) => ({ text: s.text, duration: durations[i] })),
+    pauses
+  );
+  return { blob: merged, duration, timings };
+}
+
+/** Igual que synthesizeProsody pero con fallback a otra voz instalada */
+export async function synthesizeProsodyWithFallback(
+  text: string,
+  preferredId: string,
+  opts: ProsodyOptions = {}
+): Promise<ProsodyResult & { voiceId: string; usedFallback: boolean }> {
+  const candidates = [preferredId, ...sameLanguageAlternates(preferredId).map((v) => v.id)];
+  let lastErr: unknown;
+  for (let i = 0; i < candidates.length; i++) {
+    const id = candidates[i];
+    if (!getVoiceById(id)) continue;
+    if (i > 0 && !(await isVoiceInstalled(id))) continue;
+    try {
+      const res = await synthesizeProsody(text, id, opts);
+      return { ...res, voiceId: id, usedFallback: i > 0 };
+    } catch (err) {
+      lastErr = err;
+      if (opts.signal?.aborted || err instanceof DOMException) throw err;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("No se pudo generar la voz.");
+}

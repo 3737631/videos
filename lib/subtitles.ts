@@ -48,63 +48,108 @@ function pickEmoji(text: string, used: number): string | null {
 }
 
 /**
- * Construye las tarjetas de subtítulo repartiendo la duración real de la voz
- * proporcionalmente al peso (longitud) de cada palabra.
+ * Construye las tarjetas de subtítulo.
+ * · Con `segTimings` (timestamps REALES por frase, medidos del audio):
+ *   cada grupo de tarjetas se recorta dentro de SU ventana real.
+ * · Sin ellos: reparto proporcional sobre la duración total (fallback).
  */
 export function buildSubtitles(
   scriptText: string,
   voiceDuration: number | null,
-  opts: { charsPerLine?: number; niche?: Niche } = {}
+  opts: {
+    charsPerLine?: number;
+    niche?: Niche;
+    segTimings?: Array<{ text: string; start: number; end: number }>;
+  } = {}
 ): BuiltSubtitles {
   const style = styleForNiche(opts.niche || "generico");
   if (!voiceDuration || voiceDuration <= 0.3) return { cues: [], style };
 
-  const charsPerLine = opts.charsPerLine ?? 24;
-  const words: WordItem[] = scriptText
+  const segs =
+    opts.segTimings && opts.segTimings.length
+      ? mergeSegments(scriptText, opts.segTimings)
+      : null;
+  if (segs) {
+    const cues: SubtitleCue[] = [];
+    for (const seg of segs) {
+      cues.push(...cuesForWindow(seg.text, seg.start, seg.end, opts.charsPerLine ?? 24));
+    }
+    return { cues, style };
+  }
+  return { cues: cuesProportional(scriptText, voiceDuration, opts.charsPerLine ?? 24), style };
+}
+
+/** Une timings con el guion real (recorte/edición del usuario) por prefijo */
+function mergeSegments(
+  scriptText: string,
+  timings: Array<{ text: string; start: number; end: number }>
+): Array<{ text: string; start: number; end: number }> {
+  const scriptWords = scriptText.replace(/\s+/g, " ").trim().split(" ");
+  let cursor = 0;
+  const out: Array<{ text: string; start: number; end: number }> = [];
+  for (const t of timings) {
+    const n = t.text.split(/\s+/).filter(Boolean).length;
+    const slice = scriptWords.slice(cursor, cursor + n).join(" ");
+    cursor += n;
+    out.push({ text: slice || t.text, start: t.start, end: t.end });
+    if (cursor >= scriptWords.length) break;
+  }
+  // Palabras restantes tras edición → añádelas al último segmento
+  if (cursor < scriptWords.length && out.length) {
+    out[out.length - 1].text += " " + scriptWords.slice(cursor).join(" ");
+  }
+  return out;
+}
+
+/** Tarjetas dentro de una ventana REAL [start,end] (máx. 2 líneas + resaltado) */
+function cuesForWindow(
+  text: string,
+  winStart: number,
+  winEnd: number,
+  charsPerLine: number
+): SubtitleCue[] {
+  const words: WordItem[] = text
     .replace(/\s+/g, " ")
     .trim()
     .split(" ")
     .filter(Boolean)
     .map((w) => ({ word: w, weight: Math.max(2, w.replace(/[^\p{L}\p{N}]/gu, "").length || 2) }));
-  if (!words.length) return { cues: [], style };
+  if (!words.length) return [];
 
-  const speechSpan = voiceDuration * 0.97;
+  const span = Math.max(0.4, winEnd - winStart);
   const totalWeight = words.reduce((a, w) => a + w.weight, 0);
-  let t = Math.min(0.15, voiceDuration * 0.02);
-
-  const cues: SubtitleCue[] = [];
-  let emojisUsed = 0;
+  const groups: WordItem[][] = [];
   let i = 0;
-
   while (i < words.length) {
     const group: WordItem[] = [];
     let lines = 1;
     let lineLen = 0;
     while (i < words.length) {
       const w = words[i];
-      const addLen = (lineLen === 0 ? w.word.length : lineLen + 1 + w.word.length);
-      const wouldWrap = addLen > charsPerLine;
-      if (wouldWrap) {
+      const addLen = lineLen === 0 ? w.word.length : lineLen + 1 + w.word.length;
+      if (addLen > charsPerLine) {
         if (lines >= 2) break;
         lines++;
         lineLen = w.word.length;
-      } else {
-        lineLen = addLen;
-      }
+      } else lineLen = addLen;
       group.push(w);
       i++;
-      // cortes naturales suaves
       if (/[.!?…]$/.test(w.word)) break;
     }
     if (!group.length) break;
+    groups.push(group);
+  }
 
+  let emojisUsedGlobal = 0;
+  const cues: SubtitleCue[] = [];
+  let t = winStart;
+  for (const group of groups) {
     const gWeight = group.reduce((a, w) => a + w.weight, 0);
-    const dur = Math.max(0.5, (gWeight / totalWeight) * speechSpan);
+    const dur = Math.max(0.45, (gWeight / totalWeight) * span);
     const start = t;
-    const end = Math.min(voiceDuration - 0.05, start + dur);
+    const end = Math.min(winEnd, start + dur);
     t = end;
 
-    // Reparto interno de tiempos por palabra
     let wt = start;
     const wts = group.map((w) => {
       const d = (w.weight / gWeight) * dur;
@@ -113,14 +158,14 @@ export function buildSubtitles(
       return item;
     });
 
-    // Dos líneas equilibradas
+    const lineLen = group.reduce((a, w) => a + w.word.length + 1, 0);
     let text: string;
-    if (lines >= 2) {
+    if (group.length > 2 && lineLen > charsPerLine) {
       let acc = 0;
-      let splitAt = 0;
+      let splitAt = 1;
       for (let k = 0; k < group.length; k++) {
         acc += group[k].word.length + 1;
-        if (acc >= (lineLen || 1) / 2) {
+        if (acc >= lineLen / 2) {
           splitAt = k + 1;
           break;
         }
@@ -130,13 +175,11 @@ export function buildSubtitles(
         group.slice(0, splitAt).map((w) => w.word).join(" ") +
         "\n" +
         group.slice(splitAt).map((w) => w.word).join(" ");
-    } else {
-      text = group.map((w) => w.word).join(" ");
-    }
+    } else text = group.map((w) => w.word).join(" ");
 
-    const emoji = pickEmoji(text, emojisUsed);
+    const emoji = pickEmoji(text, emojisUsedGlobal);
     if (emoji) {
-      emojisUsed++;
+      emojisUsedGlobal++;
       text += ` ${emoji}`;
     }
 
@@ -148,7 +191,21 @@ export function buildSubtitles(
       highlight: group.map((w) => isHighlight(w.word)),
     });
   }
-  return { cues, style };
+  return cues;
+}
+
+/** Fallback original: proporcional sobre toda la voz */
+function cuesProportional(
+  scriptText: string,
+  voiceDuration: number,
+  charsPerLine: number
+): SubtitleCue[] {
+  return cuesForWindow(
+    scriptText,
+    Math.min(0.15, voiceDuration * 0.02),
+    voiceDuration * 0.995,
+    charsPerLine
+  );
 }
 
 export function styleForNiche(niche: Niche): SubtitleStyle {

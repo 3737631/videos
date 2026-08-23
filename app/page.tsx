@@ -7,15 +7,14 @@ import { AppShell } from "@/components/AppShell";
 import { useProjects } from "@/lib/useStore";
 
 export default function HomePage() {
-  const [script, setScript] = useState("");
+  const [link, setLink] = useState("");
   const router = useRouter();
   const [projects] = useProjects();
 
-  const start = () => {
-    try {
-      sessionStorage.setItem("cc-script-draft", script.trim());
-    } catch {}
-    router.push("/crear");
+  const goLink = () => {
+    const u = link.trim();
+    if (!u) return;
+    router.push(`/crear?url=${encodeURIComponent(u)}`);
   };
 
   return (
@@ -35,30 +34,44 @@ export default function HomePage() {
             Crea anuncios virales en segundos.
           </p>
           <p className="cc-fade-up cc-fade-up-2 mt-2 text-sm text-gray-400 sm:text-base">
-            Escribe tu guion → voz, música, subtítulos y vídeo listos. Todo en tu dispositivo.
+            Producto o vídeo → guion, voz, música, subtítulos y render. Todo en tu dispositivo.
           </p>
 
-          <div className="cc-fade-up cc-fade-up-3 mt-8">
-            <textarea
-              value={script}
-              onChange={(e) => setScript(e.target.value)}
-              rows={6}
-              placeholder={"Pega aquí tu guion…\n\nEj: Este gadget convierte tu cocina en el futuro. Cuesta menos de 20€ y hoy tienes envío gratis."}
-              className="w-full resize-none rounded-3xl border border-white/12 bg-white/[0.05] px-5 py-4 text-left text-base text-gray-100 placeholder:text-gray-500 outline-none backdrop-blur-md focus:border-violet-400/60 focus:ring-4 focus:ring-violet-500/15"
-            />
+          <div className="cc-fade-up cc-fade-up-3 mx-auto mt-8 max-w-md space-y-4 text-left">
+            {/* A · Enlace de AliExpress */}
+            <div className="rounded-3xl border border-white/12 bg-white/[0.05] p-4 backdrop-blur-md">
+              <label className="text-sm font-semibold text-gray-100">🔗 Enlace de AliExpress</label>
+              <input
+                value={link}
+                onChange={(e) => setLink(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && goLink()}
+                placeholder="Pega aquí el enlace…"
+                inputMode="url"
+                className="mt-2 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm outline-none focus:border-violet-400/60 focus:ring-4 focus:ring-violet-500/10"
+              />
+              <button
+                onClick={goLink}
+                disabled={!link.trim()}
+                className="cc-btn-primary mt-3 w-full rounded-xl px-6 py-3 text-sm font-bold text-white disabled:opacity-40"
+              >
+                Analizar producto →
+              </button>
+            </div>
+
+            <div className="flex items-center gap-3 text-xs text-gray-600">
+              <span className="h-px flex-1 bg-white/10" /> O <span className="h-px flex-1 bg-white/10" />
+            </div>
+
+            {/* B · Subir vídeos */}
             <button
-              onClick={start}
-              disabled={!script.trim()}
-              className="cc-btn-primary mt-4 w-full rounded-2xl px-8 py-4 text-lg font-bold text-white"
+              onClick={() => router.push("/crear")}
+              className="block w-full rounded-3xl border border-white/12 bg-white/[0.05] p-4 backdrop-blur-md transition-colors hover:border-violet-400/40"
             >
-              Generar vídeo ⚡
+              <span className="block text-left text-sm font-semibold text-gray-100">🎥 Subir vídeos</span>
+              <span className="mt-1 block text-left text-xs text-gray-500">
+                Usa tus propios clips como base del anuncio
+              </span>
             </button>
-            <p className="mt-3 text-xs text-gray-500">
-              ¿Solo música?{" "}
-              <Link href="/crear?modo=musica" className="text-violet-300 hover:text-violet-200">
-                Prueba el modo solo-música
-              </Link>
-            </p>
           </div>
         </section>
 

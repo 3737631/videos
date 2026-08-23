@@ -19,6 +19,32 @@ import {
 } from "../lib/progress";
 import { toFriendlyError, fetchBinaryWithProgress, TimeoutError } from "../lib/net";
 import { hashKey } from "../lib/idb";
+import {
+  parseAliUrl,
+  extractFromMarkdown,
+  productMissing,
+} from "../lib/product/aliextract";
+import {
+  wordsForDuration,
+  generateScript,
+  correctiveSpeed,
+  countWords,
+} from "../lib/script/generator";
+import {
+  VOICE_STYLES,
+  getStyle,
+  roleSpeedOf,
+  segmentRoles,
+  recommendStyle,
+} from "../lib/script/styles";
+import {
+  orientationOf,
+  nearestFps,
+} from "../lib/media/probe";
+import {
+  computeProsodyTimings,
+} from "../lib/voices/engine";
+import { classifyMusic } from "../lib/audio/musicClassifier";
 
 let passed = 0;
 let failed = 0;
@@ -255,6 +281,143 @@ async function main() {
     } finally {
       server.close();
     }
+  });
+
+  console.log("\n── Enlace AliExpress ──");
+  await t("parseAliUrl acepta formatos reales y normaliza", () => {
+    const a = parseAliUrl("https://es.aliexpress.com/item/1005006123456789.html?spm=x");
+    assert.ok(a && a.itemId === "1005006123456789");
+    const b = parseAliUrl("http://a.aliexpress.com/_mKXYZ123"); // sin ID → null (no se inventa)
+    assert.equal(b, null);
+    const c = parseAliUrl("https://www.youtube.com/watch?v=x");
+    assert.equal(c, null);
+    const d = parseAliUrl("https://www.aliexpress.com/item/1005001111111111.html");
+    assert.ok(d && d.itemId === "1005001111111111");
+  });
+  await t("extractFromMarkdown saca título/precio/imágenes/vendedor", () => {
+    const md = [
+      "# Mini sellador de bolsas portátil",
+      "Price: US $3.98",
+      "![img](https://ae-pic.alicdn.com/x/y.jpg_.webp)",
+      "<video src='https://o.aliexpress.com/a/b.mp4'></video>",
+      "Store: HomeGadgets Store",
+      "- Cierre hermético en segundos",
+      "- Funciona con pilas AAA",
+    ].join("\n");
+    const info = extractFromMarkdown(md, "https://es.aliexpress.com/item/1005009999.html");
+    assert.match(info.title ?? "", /sellador/i);
+    assert.equal(info.price, "3.98");
+    assert.equal(info.images.length, 1);
+    assert.equal(info.videoUrls.length, 1);
+    assert.match(info.seller ?? "", /HomeGadgets/);
+    assert.equal(info.features.length, 2);
+  });
+  await t("productMissing lista lo ausente sin bloquear", () => {
+    const miss = productMissing(extractFromMarkdown("", "https://x.com/item/1.html"));
+    assert.ok(miss.includes("nombre") && miss.includes("precio"));
+  });
+
+  console.log("\n── Guion ajustado a duración ──");
+  await t("presupuesto de palabras para 10/15/30/60 s", () => {
+    for (const sec of [10, 15, 30, 60]) {
+      const w = wordsForDuration(sec, "es", 1);
+      assert.ok(Math.abs(w - sec * 2.45) <= 1.5, `${sec}s → ${w}`);
+    }
+  });
+  await t("generateScript encaja el presupuesto y no inventa specs", () => {
+    const product = { title: "Mini selladora de bolsas", price: "3.98", currency: "USD" };
+    for (const sec of [10, 15, 30]) {
+      const g = generateScript({ durationSec: sec, lang: "es", product, seed: "u1" });
+      assert.ok(Math.abs(g.words - g.targetWords) <= 12, `${sec}s: ${g.words}/${g.targetWords}`);
+      // nunca inventa un precio distinto del dado
+      if (!g.text.includes("3.98") && !g.text.includes("$")) {
+        assert.fail("no usa el precio real ni frase genérica de oferta");
+      }
+      assert.ok(!/\b\d{4,}\b/.test(g.text), "sin cifras inventadas largas");
+    }
+  });
+  await t("correctiveSpeed solo actúa fuera de tolerancia y acota", () => {
+    assert.equal(correctiveSpeed(17.0, 17.0, 0.25), null);
+    assert.equal(correctiveSpeed(17.2, 17.0, 0.25), null);
+    const s = correctiveSpeed(20, 17, 0.25)!;
+    assert.ok(s > 1 && s <= 1.35);
+    const s2 = correctiveSpeed(10, 17, 0.25)!;
+    assert.ok(s2 >= 0.78 && s2 < 1);
+  });
+
+  console.log("\n── Estilos de voz (params reales) ──");
+  await t("estilos dentro de límites TTS y roles coherentes", () => {
+    for (const st of VOICE_STYLES) {
+      for (const role of ["hook", "problema", "cta"] as const) {
+        const sp = roleSpeedOf(st, role);
+        assert.ok(sp >= 0.7 && sp <= 1.5, `${st.id}/${role}=${sp}`);
+      }
+    }
+    assert.ok(roleSpeedOf(getStyle("urgente"), "cta") > roleSpeedOf(getStyle("natural"), "cta"));
+  });
+  await t("segmentRoles: primera=hook, última=cta, medios por palabras clave", () => {
+    const segs = segmentRoles(
+      "Espera… esto lo cambia todo. Si llevas meses con este problema ya está bien. Con esto lo resuelves en segundos. Corre, toca el enlace antes de que se agote."
+    );
+    assert.equal(segs[0].role, "hook");
+    assert.equal(segs[segs.length - 1].role, "cta");
+    assert.ok(segs.some((s) => s.role === "problema"));
+    assert.ok(segs.some((s) => s.role === "beneficio"));
+  });
+  await t("recommendStyle según contenido y duración", () => {
+    assert.equal(recommendStyle({ scriptText: "Corre, se agota, solo hoy" }), "urgente");
+    assert.equal(recommendStyle({ scriptText: "Un día cualquiera… resulta que todo cambió", isDropshipping: false }), "storytelling");
+    assert.equal(recommendStyle({ scriptText: "Mira este producto viral", isDropshipping: true, durationSec: 10 }), "viral");
+  });
+
+  console.log("\n── Timestamps reales (prosodia) ──");
+  await t("computeProsodyTimings acumula monótono e inserta pausas", () => {
+    const tl = computeProsodyTimings(
+      [{ text: "a", duration: 1 }, { text: "b", duration: 2 }],
+      [300, 0]
+    );
+    assert.equal(tl[0].start, 0);
+    assert.equal(tl[0].end, 1);
+    assert.equal(tl[1].start, 1.3); // pausa 300 ms
+    assert.equal(tl[1].end, 3.3);
+    for (let i = 1; i < tl.length; i++) assert.ok(tl[i].start >= tl[i - 1].end - 1e-9);
+  });
+
+  console.log("\n── Análisis de vídeos subidos (helpers puros) ──");
+  await t("orientación y FPS estimado", () => {
+    assert.equal(orientationOf(1080, 1920), "vertical");
+    assert.equal(orientationOf(1920, 1080), "horizontal");
+    assert.equal(orientationOf(1000, 1000), "cuadrado");
+    assert.equal(nearestFps(29.97), 30);
+    assert.equal(nearestFps(59.8), 60);
+    assert.equal(nearestFps(24.5), 24);
+  });
+
+  console.log("\n── Subtítulos anclados a segmentos reales ──");
+  await t("los cues respetan las ventanas reales de cada frase", () => {
+    const script = "Hola mundo esto es una prueba larga. Y aquí va la segunda parte final.";
+    const timings = [
+      { text: "Hola mundo esto es una prueba larga.", start: 0, end: 2.4 },
+      { text: "Y aquí va la segunda parte final.", start: 2.65, end: 4.1 },
+    ];
+    const { cues } = buildSubtitles(script, 4.1, { segTimings: timings });
+    assert.ok(cues.length >= 2);
+    // ninguna tarjeta empieza fuera de su ventana
+    for (const c of cues) {
+      const win = c.start < 2.5 ? timings[0] : timings[1];
+      assert.ok(c.start >= win.start - 1e-6 && c.end <= win.end + 0.05);
+    }
+    assert.notEqual(cues[cues.length - 1].end, cues[0].end);
+  });
+
+  console.log("\n── Música contextual extendida ──");
+  await t("classifyMusic acepta tono/duración y devuelve categorías válidas", () => {
+    const libCats = new Set(buildLibrary().map((t) => t.category));
+    const a = classifyMusic({ scriptText: "compra ahora", projectStyle: "urgente", goal: "ventas", durationSec: 12 });
+    assert.ok(libCats.has(a.primaryCategory));
+    const b = classifyMusic({ scriptText: "", projectStyle: "emocional", durationSec: 55 });
+    assert.ok(libCats.has(b.primaryCategory));
+    assert.ok(a.energy >= 0 && a.energy <= 1);
   });
 
   console.log(`\n════════ RESULTADO: ${passed} pasan · ${failed} fallan ════════`);
