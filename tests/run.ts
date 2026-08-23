@@ -41,6 +41,7 @@ import {
   orientationOf,
   nearestFps,
 } from "../lib/media/probe";
+import { selectSegments, pickTargetDuration } from "../lib/video/highlights";
 import {
   computeProsodyTimings,
 } from "../lib/voices/engine";
@@ -418,6 +419,52 @@ async function main() {
     const b = classifyMusic({ scriptText: "", projectStyle: "emocional", durationSec: 55 });
     assert.ok(libCats.has(b.primaryCategory));
     assert.ok(a.energy >= 0 && a.energy <= 1);
+  });
+
+  console.log("\n── Momentos virales (highlights) ──");
+  await t("pickTargetDuration acota segun fuente y modo", () => {
+    assert.equal(pickTargetDuration(8, false), 8); // corto: usa todo
+    assert.equal(pickTargetDuration(30, false), 17); // 30*0.55=16.5 -> 17
+    assert.equal(pickTargetDuration(30, true), 21); // 30*0.7=21
+    assert.equal(pickTargetDuration(200, false), 34); // tope 34
+    assert.equal(pickTargetDuration(0, false), 12); // sin dato -> 12
+  });
+  await t("selectSegments elige el tramo mas movido y encaja el objetivo", () => {
+    const scores = [0, 0, 0, 0, 9, 9, 9, 9, 0, 0];
+    const segs = selectSegments(scores, 1, 4);
+    assert.equal(segs.length, 1);
+    assert.equal(segs[0].start, 4);
+    assert.equal(segs[0].end, 8);
+    const total = segs.reduce((a, s) => a + (s.end - s.start), 0);
+    assert.ok(total >= 3 && total <= 5);
+  });
+  await t("selectSegments devuelve todo si el video cabe en el objetivo", () => {
+    const segs = selectSegments([1, 1, 1, 1], 1, 20);
+    assert.equal(segs.length, 1);
+    assert.equal(segs[0].start, 0);
+    assert.equal(segs[0].end, 4);
+  });
+  await t("selectSegments no solapa y ordena cronologicamente", () => {
+    // dos picos bien separados
+    const scores = Array.from({ length: 20 }, (_, i) =>
+      i >= 2 && i <= 5 ? 9 : i >= 14 && i <= 17 ? 8 : 0
+    );
+    const segs = selectSegments(scores, 1, 8);
+    assert.ok(segs.length >= 2);
+    for (let i = 1; i < segs.length; i++) assert.ok(segs[i].start >= segs[i - 1].end - 1e-6);
+    const total = segs.reduce((a, s) => a + (s.end - s.start), 0);
+    assert.ok(total >= 8 && total <= 9, `total=${total}`);
+  });
+
+  console.log("\n── AliExpress: deteccion ampliada ──");
+  await t("parseAliUrl acepta /i/ y ?itemId= y rechaza hosts ajenos", () => {
+    const a = parseAliUrl("https://es.aliexpress.com/i/1005002222222222.html");
+    assert.ok(a && a.itemId === "1005002222222222");
+    const b = parseAliUrl("https://www.aliexpress.us/item/1005003333333333.html?spm=x");
+    assert.ok(b && b.itemId === "1005003333333333");
+    const c = parseAliUrl("https://es.aliexpress.com/item/1005004444444444.html?itemId=1005004444444444");
+    assert.ok(c && c.itemId === "1005004444444444");
+    assert.equal(parseAliUrl("https://www.amazon.com/dp/B012345678"), null);
   });
 
   console.log(`\n════════ RESULTADO: ${passed} pasan · ${failed} fallan ════════`);

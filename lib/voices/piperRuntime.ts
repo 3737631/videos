@@ -8,9 +8,13 @@ import * as Ort from "onnxruntime-web";
 import { cacheGet, cachePut } from "@/lib/idb";
 import { fetchBinaryWithProgress, TimeoutError } from "@/lib/net";
 
-const CDN_ORT = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort-wasm-simd-threaded.wasm";
-const CDN_PHO_WASM = "https://cdn.jsdelivr.net/npm/piper-tts-web@1.1.2/dist/piper/piper_phonemize.wasm";
-const CDN_PHO_DATA = "https://cdn.jsdelivr.net/npm/piper-tts-web@1.1.2/dist/piper/piper_phonemize.data";
+// Assets auto-hospedados en /piper/ (mismo origen → sin CORS, funciona en iPhone).
+// Se resuelven contra baseURI para que funcione igual en dev (/piper/) y en
+// producción (basePath /videos → /videos/piper/).
+function piperAssetUrl(file: string): string {
+  if (typeof document === "undefined") return file;
+  return new URL("piper/" + file, document.baseURI).href;
+}
 
 export type ProgressFn = (loaded: number, total: number) => void;
 
@@ -30,40 +34,19 @@ const blobs = new Map<string, string>(); // cacheKey → blobURL
 const sessions = new Map<string, Promise<Ort.InferenceSession>>();
 let configured = false;
 
-/**
- * Garantiza los 3 binarios del runtime (~30 MB la primera vez).
- * onProgress recibe progreso AGREGADO en bytes sobre un total fijo.
- */
-const RUNTIME_TOTAL_BYTES = 11_133_407 + 629_166 + 18_077_249;
+const PHO_WASM = piperAssetUrl("piper_phonemize.wasm");
+const PHO_DATA = piperAssetUrl("piper_phonemize.data");
+const ORT_WASM_DIR = piperAssetUrl(""); // directorio que contiene ort-wasm-simd-threaded.wasm
 
 export async function ensurePiperRuntime(
-  onProgress: ProgressFn,
-  signal?: AbortSignal
+  _onProgress?: ProgressFn,
+  _signal?: AbortSignal
 ): Promise<void> {
-  let done = 0;
-  const track = async (key: string, url: string, size: number): Promise<string> => {
-    let buf = await cacheGet<ArrayBuffer>("models", key);
-    if (!buf) {
-      buf = await fetchBinaryWithProgress(url, (l) => onProgress(done + Math.min(l, size), RUNTIME_TOTAL_BYTES), { signal });
-      await cachePut("models", key, buf);
-    }
-    done += size;
-    onProgress(Math.min(done, RUNTIME_TOTAL_BYTES), RUNTIME_TOTAL_BYTES);
-    return URL.createObjectURL(new Blob([buf]));
-  };
-
-  const ortUrl = await track("ort-wasm", CDN_ORT, 11_133_407);
-  const phoW = await track("pho-wasm", CDN_PHO_WASM, 629_166);
-  const phoD = await track("pho-data", CDN_PHO_DATA, 18_077_249);
-  blobs.set("ort-wasm", ortUrl);
-  blobs.set("pho-wasm", phoW);
-  blobs.set("pho-data", phoD);
-
   if (!configured) {
     Ort.env.wasm.numThreads = 1;
     Ort.env.wasm.simd = true;
     Ort.env.wasm.proxy = false;
-    Ort.env.wasm.wasmPaths = { wasm: ortUrl };
+    Ort.env.wasm.wasmPaths = { wasm: ORT_WASM_DIR };
     configured = true;
   }
 }
@@ -87,9 +70,6 @@ function nextPho<T>(msg: unknown): Promise<T> {
 async function getPhonemizer(): Promise<Worker> {
   if (phoReady) return phoReady;
   phoReady = (async () => {
-    const wasmUrl = blobs.get("pho-wasm");
-    const dataUrl = blobs.get("pho-data");
-    if (!wasmUrl || !dataUrl) throw new Error("Runtime de voz no inicializado");
     const w = new Worker(new URL("piper/PhonemizeWebWorker.js", document.baseURI));
     try {
       await new Promise<void>((resolve, reject) => {
@@ -102,7 +82,7 @@ async function getPhonemizer(): Promise<Worker> {
           clearTimeout(timer);
           reject(new Error(e.message || "No se pudo iniciar el fonetizador"));
         };
-        w.postMessage({ type: "loadModule", data: [wasmUrl, dataUrl] });
+        w.postMessage({ type: "loadModule", data: [PHO_WASM, PHO_DATA] });
       });
     } catch (err) {
       w.terminate();

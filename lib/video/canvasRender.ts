@@ -1,10 +1,12 @@
 /**
- * RENDER V3 — un solo motor multiplataforma (Safari iPhone incluido):
- * Canvas animado + captura de stream + MediaRecorder con audio MEZCLADO.
- * Sin FFmpeg gigante en móvil, sin workers extra, memoria liberada al terminar.
+ * RENDER — dibuja el VÍDEO REAL del usuario (ajuste "cover") sobre un canvas,
+ * reproduciendo únicamente los MOMENTOS VIRALES (segmentos) y superponiendo
+ * los subtítulos. Captura con MediaRecorder (mp4 en iPhone). Sin pantalla de
+ * colores ni marca de agua: el resultado es el vídeo del usuario, no la app.
  */
 import type { SubtitleCue, SubtitleStyle } from "@/types";
 import type { NichePalette } from "@/lib/niche";
+import type { Segment } from "@/lib/video/highlights";
 
 export interface CaptionVideoOptions {
   durationSec: number;
@@ -17,6 +19,10 @@ export interface CaptionVideoOptions {
   fps?: number;
   signal?: AbortSignal;
   onPct?: (pctInBand: number) => void;
+  /** Vídeo fuente del usuario (obligatorio salvo en tests). */
+  videoBlob?: Blob | null;
+  /** Momentos a usar, en segundos. Si falta, se usa el vídeo completo. */
+  segments?: Segment[];
 }
 
 export interface CaptionVideoResult {
@@ -44,7 +50,6 @@ function pickMime(): { mime: string; ext: string } {
   return { mime: "", ext: "webm" };
 }
 
-/** Safari exige AudioContext tras gesto de usuario; resume() defensivo */
 async function ensureRunning(ctx: AudioContext): Promise<void> {
   if (ctx.state === "suspended") {
     try {
@@ -65,6 +70,8 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
     fps = 30,
     signal,
     onPct,
+    videoBlob,
+    segments,
   } = opts;
 
   if (typeof document === "undefined") throw new Error("El render necesita navegador");
@@ -74,7 +81,35 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
   const g = canvas.getContext("2d", { alpha: false });
   if (!g) throw new Error("Canvas no disponible");
 
-  // ── Audio: mezclar en vivo hacia el stream del recorder ──────────────
+  // ── Vídeo fuente ──────────────────────────────────────────────────────
+  const segList = segments && segments.length ? segments : [{ start: 0, end: durationSec }];
+  const totalSec = segList.reduce((a, s) => a + (s.end - s.start), 0) || durationSec;
+  let video: HTMLVideoElement | null = null;
+  let videoUrl: string | null = null;
+  if (videoBlob) {
+    videoUrl = URL.createObjectURL(videoBlob);
+    video = document.createElement("video");
+    video.src = videoUrl;
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "auto";
+    video.crossOrigin = "anonymous";
+    try {
+      await new Promise<void>((res) => {
+        const t = setTimeout(res, 8000);
+        video!.onloadeddata = () => {
+          clearTimeout(t);
+          res();
+        };
+        video!.onerror = () => {
+          clearTimeout(t);
+          res();
+        };
+      });
+    } catch {}
+  }
+
+  // ── Audio mezclado en vivo ────────────────────────────────────────────
   const AC: typeof AudioContext =
     (window as unknown as { AudioContext: typeof AudioContext }).AudioContext ||
     (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -112,19 +147,59 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
   const startedAt = performance.now();
   let rafId = 0;
   let stopped = false;
+  let curSeg = -1;
+
+  const drawVideo = () => {
+    if (!video || video.readyState < 2) {
+      g.fillStyle = "#0B0D14";
+      g.fillRect(0, 0, width, height);
+      return;
+    }
+    drawCover(g, video, width, height);
+  };
 
   const drawFrame = () => {
     if (stopped) return;
     const t = (performance.now() - startedAt) / 1000;
-    drawBackground(g, width, height, t, palette);
-    drawWatermark(g, width, height);
-    const cue = cues.find((c) => t >= c.start && t < c.end) || null;
-    if (cue) drawCue(g, canvas, cue, t, style, palette);
-    onPct?.(Math.min(100, (t / durationSec) * 100));
-    if (t >= durationSec) {
+    if (t >= totalSec) {
       finish();
       return;
     }
+    // ¿en qué segmento estamos?
+    let acc = 0;
+    let segIdx = 0;
+    for (let i = 0; i < segList.length; i++) {
+      const len = segList[i].end - segList[i].start;
+      if (t < acc + len) {
+        segIdx = i;
+        break;
+      }
+      acc += len;
+    }
+    const local = t - acc;
+    const seg = segList[segIdx];
+    const want = seg.start + local;
+    if (video) {
+      if (segIdx !== curSeg) {
+        curSeg = segIdx;
+        try {
+          video.currentTime = want;
+          const p = video.play();
+          if (p && p.catch) p.catch(() => {});
+        } catch {}
+      } else if (Math.abs((video.currentTime || 0) - want) > 0.3) {
+        try {
+          video.currentTime = want;
+        } catch {}
+      }
+      drawVideo();
+    } else {
+      g.fillStyle = "#0B0D14";
+      g.fillRect(0, 0, width, height);
+    }
+    const cue = cues.find((c) => t >= c.start && t < c.end) || null;
+    if (cue) drawCue(g, canvas, cue, t, style, palette);
+    onPct?.(Math.min(100, (t / totalSec) * 100));
     rafId = requestAnimationFrame(drawFrame);
   };
 
@@ -146,6 +221,10 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
   rec.onstop = async () => {
     try {
       tracks.forEach((tr) => tr.stop());
+      try {
+        video?.pause();
+      } catch {}
+      if (videoUrl) URL.revokeObjectURL(videoUrl);
       try {
         await actx?.close();
       } catch {}
@@ -175,65 +254,23 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
 
 // ── Pintado ─────────────────────────────────────────────────────────────
 
-function drawBackground(
+function drawCover(
   g: CanvasRenderingContext2D,
+  v: HTMLVideoElement,
   w: number,
-  h: number,
-  t: number,
-  pal: NichePalette
+  h: number
 ): void {
-  g.fillStyle = "#0B0D14";
-  g.fillRect(0, 0, w, h);
-  const blob = (cx: number, cy: number, r: number, color: string, alpha: number) => {
-    const grad = g.createRadialGradient(cx, cy, 0, cx, cy, r);
-    grad.addColorStop(0, hexA(color, alpha));
-    grad.addColorStop(1, hexA(color, 0));
-    g.fillStyle = grad;
+  const vw = v.videoWidth || w;
+  const vh = v.videoHeight || h;
+  if (!vw || !vh) {
+    g.fillStyle = "#0B0D14";
     g.fillRect(0, 0, w, h);
-  };
-  const s = Math.min(w, h);
-  blob(
-    w * (0.5 + 0.35 * Math.sin(t * 0.6)),
-    h * (0.3 + 0.18 * Math.cos(t * 0.45)),
-    s * 0.75,
-    pal.activeColor,
-    0.22
-  );
-  blob(
-    w * (0.5 + 0.4 * Math.cos(t * 0.37 + 2)),
-    h * (0.7 + 0.15 * Math.sin(t * 0.52 + 1)),
-    s * 0.8,
-    pal.accent,
-    0.2
-  );
-  // grano suave para vida visual
-  g.globalAlpha = 0.03;
-  for (let i = 0; i < 40; i++) {
-    const x = ((i * 977) % w) + Math.sin(t * 2 + i) * 2;
-    const y = ((i * 613) % h);
-    g.fillRect(x, y, 2, 2);
+    return;
   }
-  g.globalAlpha = 1;
-}
-
-function hexA(hex: string, a: number): string {
-  const n = parseInt(hex.slice(1), 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
-}
-
-function drawWatermark(g: CanvasRenderingContext2D, w: number, _h: number): void {
-  g.save();
-  g.font = "600 26px Inter, system-ui, sans-serif";
-  g.fillStyle = "rgba(255,255,255,0.55)";
-  g.textAlign = "center";
-  g.fillText("✦ ClipCraft", w / 2, 64);
-  g.restore();
-}
-
-function wrapTwoLines(text: string): string[] {
-  const parts = text.split("\n");
-  if (parts.length >= 2) return [parts[0], parts.slice(1).join(" ")];
-  return [text];
+  const scale = Math.max(w / vw, h / vh);
+  const dw = vw * scale;
+  const dh = vh * scale;
+  g.drawImage(v, (w - dw) / 2, (h - dh) / 2, dw, dh);
 }
 
 function drawCue(
@@ -246,9 +283,8 @@ function drawCue(
 ): void {
   const w = canvas.width;
   const h = canvas.height;
-  const lines = wrapTwoLines(cue.text);
+  const lines = cue.text.split("\n");
 
-  // tamaño adaptativo: que la línea más larga quepe ~86% del ancho
   let fontSize = Math.round(style.size * (w / 1080));
   g.font = `${style.weight} ${fontSize}px Inter, system-ui, sans-serif`;
   const longest = Math.max(...lines.map((l) => measureWithEmoji(g, l)));
@@ -258,7 +294,6 @@ function drawCue(
     g.font = `${style.weight} ${fontSize}px Inter, system-ui, sans-serif`;
   }
 
-  // pop de entrada
   const age = t - cue.start;
   let scale = 1;
   if (age < 0.16) scale = 0.92 + 0.08 * (age / 0.16) * 1.08;
@@ -296,8 +331,7 @@ function drawCue(
         g.shadowBlur = fontSize * 0.12;
         g.shadowOffsetY = 2;
       }
-      g.fillStyle =
-        hi && active ? "#FFFFFF" : active || hi ? pal.activeColor : style.color;
+      g.fillStyle = hi && active ? "#FFFFFF" : active || hi ? pal.activeColor : style.color;
       g.fillText(token, x, y);
       x += tw;
       if (isWord) wordIdx++;

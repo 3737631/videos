@@ -7,6 +7,7 @@ import { createProgressTracker, type StageName } from "@/lib/progress";
 import { toFriendlyError, TimeoutError } from "@/lib/net";
 import { detectNiche, NICHE_PALETTES, suggestedSpeechRate, suggestedCTA, type NicheInfo } from "@/lib/niche";
 import { buildSubtitles } from "@/lib/subtitles";
+import { defaultSubtitleStyle } from "@/lib/editplan";
 import {
   defaultVoiceForLocale,
   getVoiceById,
@@ -20,10 +21,12 @@ import { recommendStyle, getStyle } from "@/lib/script/styles";
 import { correctiveSpeed } from "@/lib/script/generator";
 import { classifyMusic } from "@/lib/audio/musicClassifier";
 import { selectTrack } from "@/lib/audio/musicSelector";
+import type { MusicCategory } from "@/lib/audio/musicLibrary";
 import { renderTrack } from "@/lib/audio/musicLibrary";
 import { mixVoiceAndMusic } from "@/lib/audio/audioMixer";
 import { assertFinalAudio } from "@/lib/audio/validation";
 import { renderCaptionsVideo } from "@/lib/video/canvasRender";
+import { detectHighlights, pickTargetDuration, type Segment } from "@/lib/video/highlights";
 
 export interface CreationInput {
   script: string;
@@ -32,8 +35,12 @@ export interface CreationInput {
   targetSeconds?: number;
   /** Estilo de entonación (natural, viral, urgente…) */
   styleId?: string;
-  /** Duración del vídeo fuente a la que debe encajar la voz */
-  targetDurationSec?: number;
+  /** Vídeo fuente subido por el usuario (obligatorio) */
+  videoBlob: Blob;
+  /** Duración del vídeo fuente en segundos */
+  videoDuration: number;
+  /** Categoría de música preferida (modo solo música); null = automático */
+  preferredCategory?: string | null;
   /** Tolerancia del ajuste de duración (def. 0.25 s) */
   toleranceSec?: number;
 }
@@ -167,6 +174,20 @@ export async function runCreationPipeline(
     tracker.set("PREPARING");
     const script = input.script.trim();
     if (!script && !input.onlyMusic) throw new Error("Escribe el guion de tu anuncio primero.");
+    if (!input.videoBlob) throw new Error("Falta el vídeo fuente");
+
+    // Duración objetivo + MOMENTOS VIRALES del vídeo (los que más enganchan)
+    const targetSec = pickTargetDuration(input.videoDuration, !!input.onlyMusic);
+    let segments: Segment[] = [];
+    try {
+      segments = await detectHighlights(input.videoBlob, { targetSec, signal: h.signal });
+    } catch {
+      segments = [{ start: 0, end: input.videoDuration || targetSec }];
+    }
+    const durationSec = Math.max(
+      3,
+      Math.round(segments.reduce((a, s) => a + (s.end - s.start), 0) || targetSec)
+    );
 
     // ── Analizar guion ─────────────────────────────────────────────────
     const nicheInfo = await runStage(
@@ -183,7 +204,7 @@ export async function runCreationPipeline(
         : recommendStyle({
             scriptText: script,
             isDropshipping: nicheInfo.isDropshipping,
-            durationSec: input.targetDurationSec ?? null,
+            durationSec: targetSec,
           });
     const validationWarnings: string[] = [];
 
@@ -207,7 +228,7 @@ export async function runCreationPipeline(
     let usedFallback = false;
     const segTimings: Array<{ text: string; start: number; end: number }> = [];
     if (!input.onlyMusic) {
-      const target = input.targetDurationSec ?? input.targetSeconds ?? null;
+      const target = targetSec;
       const tol = input.toleranceSec ?? 0.25;
       const baseSpeed = suggestedSpeechRate(nicheInfo);
       let attemptSpeed = baseSpeed;
@@ -257,10 +278,11 @@ export async function runCreationPipeline(
           scriptText: script,
           projectStyle: styleId,
           goal: "ventas",
-          durationSec: Math.round(voiceDuration ?? input.targetDurationSec ?? input.targetSeconds ?? 15),
+          durationSec: durationSec,
         });
-        const sel = selectTrack(cls.primaryCategory, cls.secondaryCategory, projectId);
-        const secs = Math.max(8, voiceDuration ?? input.targetSeconds ?? 15);
+        const primaryCat = (input.preferredCategory || cls.primaryCategory) as MusicCategory;
+        const sel = selectTrack(primaryCat, cls.secondaryCategory, projectId);
+        const secs = Math.max(8, durationSec);
         const rendered = await renderTrack(sel.track, secs, undefined);
         music.trackId = sel.track.id;
         music.label = `${sel.track.category} · ${rendered.bpm} BPM`;
@@ -276,31 +298,30 @@ export async function runCreationPipeline(
     });
 
     // ── Subtítulos (anclados a timestamps REALES de la voz) ────────────
-    const subs = await runStage(
-      "CREATING_SUBTITLES",
-      async () =>
-        buildSubtitles(script, voiceDuration, {
-          niche: nicheInfo.niche,
-          segTimings: input.onlyMusic ? undefined : segTimings,
-        }),
-      h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.CREATING_SUBTITLES, retries: 0 }
-    );
+    const subs = input.onlyMusic
+      ? { cues: [], style: defaultSubtitleStyle() }
+      : await runStage(
+          "CREATING_SUBTITLES",
+          async () =>
+            buildSubtitles(script, voiceDuration, {
+              niche: nicheInfo.niche,
+              segTimings,
+            }),
+          h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.CREATING_SUBTITLES, retries: 0 }
+        );
 
     // ── Mezcla ─────────────────────────────────────────────────────────
     mixBlob = await runStage(
       "MIXING_AUDIO",
       async () => {
-        const target = voiceDuration ?? music.duration ?? 15;
         return await mixVoiceAndMusic(voiceBlob, music.blob, {
-          durationSec: target,
+          durationSec,
           musicVolume: voiceBlob ? 0.14 : 0.9,
           voiceVolume: 1,
         });
       },
       h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.MIXING_AUDIO }
     );
-
-    const durationSec = Math.max(3, voiceDuration ?? music.duration ?? 15);
 
     // ── Render (canvas + MediaRecorder) ────────────────────────────────
     const isMobileLike =
@@ -317,6 +338,8 @@ export async function runCreationPipeline(
           style: subs.style,
           palette,
           width,
+          videoBlob: input.videoBlob,
+          segments,
           height,
           fps: isMobileLike ? 30 : 30,
           signal,
@@ -361,7 +384,7 @@ export async function runCreationPipeline(
       niche: nicheInfo,
       errors: [...validation, ...validationWarnings],
       styleId: input.onlyMusic ? null : styleId,
-      targetSeconds: input.targetDurationSec ?? input.targetSeconds ?? null,
+      targetSeconds: null,
     };
     tracker.done();
     return result;

@@ -41,9 +41,9 @@ export function emptyProduct(url: string): ProductInfo {
 }
 
 const ID_RE =
-  /(?:\/item\/|itemId=|\bid=)(\d{6,25})/i;
+  /(?:\/item\/|\/i\/|itemId=|productId[=:]?|id[=:]?)(\d{10,20})/i;
 
-/** Valida host AliExpress y extrae el ID numérico del ítem. */
+/** Valida host AliExpress y extrae el ID numérico del ítem (10-20 dígitos). */
 export function parseAliUrl(raw: string): { itemId: string; normalized: string } | null {
   let u: URL;
   try {
@@ -51,10 +51,15 @@ export function parseAliUrl(raw: string): { itemId: string; normalized: string }
   } catch {
     return null;
   }
-  if (!/aliexpress\.(com|[a-z.]+)$/i.test(u.hostname) && !/ali\.express/i.test(u.hostname)) {
+  const host = u.hostname.toLowerCase();
+  if (!/aliexpress\.(com|us|[a-z.]+)$/.test(host) && !/ali\.express/.test(host)) {
     return null;
   }
-  const m = raw.match(ID_RE) || `${u.pathname}${u.search}`.match(ID_RE);
+  const m =
+    raw.match(ID_RE) ||
+    `${u.pathname}${u.search}`.match(ID_RE) ||
+    host.match(/(\d{10,20})/) ||
+    u.pathname.match(/\/(\d{10,20})(?:\.html|\/|$)/);
   const itemId = m?.[1] ?? null;
   if (!itemId) return null;
   const normalized = `https://es.aliexpress.com/item/${itemId}.html`;
@@ -77,11 +82,13 @@ export function extractFromMarkdown(md: string, baseUrl: string): ProductInfo {
   const info = emptyProduct(baseUrl);
   info.itemId = parseAliUrl(baseUrl)?.itemId ?? null;
 
-  // Título: primera cabecera # o línea "Title:"
+  // Título: <title>, og:title, cabecera # o línea "Title:"
+  const titleTag = md.match(/<title>([^<]{6,200})<\/title>/i);
+  const ogTitle = md.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']{6,200})["']/i);
   const h1 = md.match(/^#\s+(.{6,180})$/m);
-  const titleTag = md.match(/^Title:\s*(.+)$/m);
-  const meta = md.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']{6,200})["']/i);
-  info.title = (titleTag?.[1] || h1?.[1] || meta?.[1] || "").trim() || null;
+  const tLine = md.match(/^Title:\s*(.+)$/m);
+  const jsonLd = md.match(/"name"\s*:\s*"([^"]{6,200})"/);
+  info.title = (ogTitle?.[1] || titleTag?.[1] || tLine?.[1] || h1?.[1] || jsonLd?.[1] || "").trim() || null;
 
   // Precio
   const pm = md.match(PRICE_RE);

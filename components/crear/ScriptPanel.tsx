@@ -53,15 +53,15 @@ export function ScriptPanel({ script, onChange, targetSec, lang, styleId }: Prop
     <section className="cc-card p-5">
       <div className="flex items-center justify-between">
         <label className="text-sm font-semibold text-gray-200">Guion</label>
-        <button
-          onClick={() => {
-            if (!open) setDraft(script);
-            setOpen((x) => !x);
-          }}
-          className="text-xs font-medium text-violet-300 hover:text-violet-200"
-        >
-          {open ? "▲ Cerrar editor" : "▼ Editar guion"}
-        </button>
+          <button
+            onClick={() => {
+              if (!open) setDraft(script);
+              setOpen((x) => !x);
+            }}
+            className="text-xs font-medium text-violet-300 hover:text-violet-200"
+          >
+            {open ? "Cerrar editor" : "Editar guion"}
+          </button>
       </div>
 
       {!open ? (
@@ -91,12 +91,12 @@ export function ScriptPanel({ script, onChange, targetSec, lang, styleId }: Prop
 
           {tooLong && (
             <div className="mt-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-              ⚠ El guion es demasiado largo para el vídeo.
+              El guion es demasiado largo para el vídeo.
             </div>
           )}
           {tooShort && (
             <div className="mt-2 rounded-xl border border-sky-400/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
-              ⚠ El guion es demasiado corto: sobrará vídeo sin voz.
+              El guion es demasiado corto: sobrará vídeo sin voz.
             </div>
           )}
 

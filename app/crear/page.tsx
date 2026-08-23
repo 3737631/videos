@@ -1,506 +1,571 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { AppShell } from "@/components/AppShell";
-import { ScriptPanel } from "@/components/crear/ScriptPanel";
-import { VoicePanel } from "@/components/crear/VoicePanel";
-import { runCreationPipeline, type CreationResult } from "@/lib/pipeline";
-import { STAGE_LABELS, type StageName } from "@/lib/progress";
-import { analyzeVideoFile, type VideoProbe } from "@/lib/media/probe";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { analyzeVideoFile } from "@/lib/media/probe";
 import { fetchProduct, parseAliUrl, type ProductInfo } from "@/lib/product/aliextract";
-import { VOICE_CATALOG, getVoiceById, defaultVoiceForLocale } from "@/lib/voices/catalog";
-import { ensureVoiceInstalled, listInstalled } from "@/lib/voices/engine";
-import { generateScript, normalizeGenLang } from "@/lib/script/generator";
-import { recommendStyle, type VoiceStyleId } from "@/lib/script/styles";
-import { useSettings, useProjectActions, formatDuration } from "@/lib/useStore";
-import { defaultSubtitleStyle } from "@/lib/editplan";
+import { generateScript } from "@/lib/script/generator";
+import { defaultVoiceForLocale, getVoiceById, VOICE_CATALOG } from "@/lib/voices/catalog";
+import { ensureVoiceInstalled, isVoiceInstalled } from "@/lib/voices/engine";
+import { recommendStyle, VOICE_STYLES, type VoiceStyleId } from "@/lib/script/styles";
+import { runCreationPipeline } from "@/lib/pipeline";
+import { saveClip } from "@/lib/clips";
+import { pickTargetDuration } from "@/lib/video/highlights";
+import { VoicePanel } from "@/components/crear/VoicePanel";
+import { ScriptPanel } from "@/components/crear/ScriptPanel";
+import { AppShell } from "@/components/AppShell";
 
-type Step = 1 | 2 | 3;
 type Mode = "voice" | "music";
+type Step = 1 | 2 | 3;
+type Phase = "setup" | "running" | "done" | "error";
 
-const STEPS: Exclude<StageName, "ERROR" | "DONE">[] = [
-  "PREPARING", "ANALYZING_SCRIPT", "GENERATING_VOICE", "GENERATING_MUSIC",
-  "CREATING_SUBTITLES", "MIXING_AUDIO", "RENDERING", "VERIFYING", "EXPORTING",
+const MUSIC_CHOICES: Array<{ label: string; cat: string | null }> = [
+  { label: "Automatica", cat: null },
+  { label: "Viral", cat: "viral" },
+  { label: "Estilo de vida", cat: "lifestyle" },
+  { label: "Romantica", cat: "romantic" },
+  { label: "Misteriosa", cat: "mysterious" },
+  { label: "Motivadora", cat: "motivational" },
+  { label: "Relajante", cat: "relaxing" },
+  { label: "Dramatica", cat: "dramatic" },
+  { label: "Historia", cat: "storytelling" },
 ];
-const ORDER_INDEX = new Map(STEPS.map((s, i) => [s, i]));
 
 export default function CrearPage() {
-  const [settings] = useSettings();
-  const [projects, saveProject] = useProjectActionsSafe();
+  const router = useRouter();
 
-  // Paso 1
   const [step, setStep] = useState<Step>(1);
   const [file, setFile] = useState<File | null>(null);
-  const [probe, setProbe] = useState<VideoProbe | null>(null);
-  const [probing, setProbing] = useState(false);
+  const [thumb, setThumb] = useState<string | null>(null);
+  const [videoDuration, setVideoDuration] = useState(0);
   const [mode, setMode] = useState<Mode>("voice");
 
-  // Paso 2
-  const [link, setLink] = useState("");
+  const [url, setUrl] = useState("");
   const [product, setProduct] = useState<ProductInfo | null>(null);
-  const [analizing, setAnalizing] = useState(false);
-  const [script, setScript] = useState("");
-  const [scriptEdited, setScriptEdited] = useState(false);
-  const [voiceId, setVoiceId] = useState(settings.ttsVoiceId);
-  const [styleId, setStyleId] = useState<VoiceStyleId>("viral");
-  const [installedIds, setInstalledIds] = useState<string[]>([]);
-  const [preparingVoice, setPreparingVoice] = useState<string | null>(null);
-  const [preparePct, setPreparePct] = useState<number | null>(null);
-  const prepareSeq = useRef(0);
+  const [productNote, setProductNote] = useState("");
+  const [manualName, setManualName] = useState("");
+  const [loadingProduct, setLoadingProduct] = useState(false);
 
-  // Generación
-  const [stage, setStage] = useState<StageName>("PREPARING");
+  const [voiceId, setVoiceId] = useState<string>(defaultVoiceForLocale("es-XX"));
+  const [styleId, setStyleId] = useState<VoiceStyleId | null>(null);
+  const [script, setScript] = useState("");
+  const [lang, setLang] = useState("es");
+
+  const [musicCat, setMusicCat] = useState<string | null>(null);
+
+  const [phase, setPhase] = useState<Phase>("setup");
+  const [stageLabel, setStageLabel] = useState("");
   const [pct, setPct] = useState(0);
   const [eta, setEta] = useState<number | null>(null);
-  const [phase, setPhase] = useState<"setup" | "running" | "result">("setup");
-  const [error, setError] = useState("");
-  const [result, setResult] = useState<CreationResult | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const [result, setResult] = useState<null | Awaited<ReturnType<typeof runCreationPipeline>>>(null);
+  const [errMsg, setErrMsg] = useState("");
 
+  const [preparingVoice, setPreparingVoice] = useState<string | null>(null);
+  const [preparePct, setPreparePct] = useState<number | null>(null);
+  const [installedIds, setInstalledIds] = useState<string[]>([]);
+  const [recommended, setRecommended] = useState<VoiceStyleId>(VOICE_STYLES[0].id);
+
+  const abortRef = useRef<AbortController | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const thumbUrlRef = useRef<string | null>(null);
+
+  // Refresca la lista de voces instaladas
   useEffect(() => {
-    listInstalled().then(setInstalledIds).catch(() => {});
+    setInstalledIds(VOICE_CATALOG.filter((v) => isVoiceInstalled(v.id)).map((v) => v.id));
   }, []);
 
-  // ── Subir vídeo ────────────────────────────────────────────────────────
-  const onFile = async (list: FileList | null) => {
-    const f = list?.[0];
-    if (!f) return;
-    setError("");
-    setFile(f);
-    setProbing(true);
-    try {
-      const p = await analyzeVideoFile(f, { timeoutMs: 15000 });
-      setProbe(p);
-      setStep(2);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo leer el vídeo");
-    } finally {
-      setProbing(false);
-    }
-  };
+  // Prepara la voz en segundo plano (modo voz)
+  useEffect(() => {
+    if (mode !== "voice" || !file) return;
+    let alive = true;
+    const ctrl = new AbortController();
+    setPreparingVoice(voiceId);
+    setPreparePct(0);
+    ensureVoiceInstalled(voiceId, {
+      signal: ctrl.signal,
+      onProgress: (p) => {
+        if (alive) setPreparePct(Math.round((p ?? 0) * 100));
+      },
+    })
+      .then(() => {
+        if (!alive) return;
+        setInstalledIds(VOICE_CATALOG.filter((v) => isVoiceInstalled(v.id)).map((v) => v.id));
+        setPreparingVoice(null);
+        setPreparePct(null);
+      })
+      .catch(() => {
+        if (alive) {
+          setPreparingVoice(null);
+          setPreparePct(null);
+        }
+      });
+    return () => {
+      alive = false;
+      ctrl.abort();
+    };
+  }, [mode, voiceId, file]);
 
-  // ── Enlace AliExpress (solo modo voz) ──────────────────────────────────
-  const loadProduct = async () => {
-    if (!parseAliUrl(link)) {
-      setError("Pega un enlace válido de AliExpress (o deja el campo vacío para voz genérica).");
+  const onPickFile = useCallback(async (f: File) => {
+    setFile(f);
+    setStep(1);
+    try {
+      const probe = await analyzeVideoFile(f, { timeoutMs: 20000 });
+      setVideoDuration(probe.duration || 0);
+      const t = document.createElement("video");
+      const u = URL.createObjectURL(f);
+      thumbUrlRef.current = u;
+      t.src = u;
+      t.muted = true;
+      t.onloadeddata = () => {
+        const cv = document.createElement("canvas");
+        cv.width = 240;
+        cv.height = Math.round((240 * t.videoHeight) / t.videoWidth) || 420;
+        cv.getContext("2d")?.drawImage(t, 0, 0, cv.width, cv.height);
+        try {
+          setThumb(cv.toDataURL("image/jpeg", 0.7));
+        } catch {}
+      };
+    } catch {
+      setVideoDuration(0);
+    }
+  }, []);
+
+  const loadProduct = useCallback(async () => {
+    const raw = url.trim();
+    if (!parseAliUrl(raw)) {
+      setProductNote("Pega un enlace valido de AliExpress.");
       return;
     }
-    setAnalizing(true);
-    setError("");
+    setLoadingProduct(true);
+    setProductNote("");
     try {
-      const res = await fetchProduct(link);
+      const res = await fetchProduct(raw, { timeoutMs: 20000 });
       setProduct(res.info);
       if (res.source === "none") {
-        setError("No se pudo leer el producto; se usará voz y guion genéricos.");
+        setProductNote("No se pudo leer el producto automaticamente. Escribe su nombre abajo.");
+      } else if (!res.info.title) {
+        setProductNote("Falta el nombre del producto. Escribelo abajo.");
       }
-    } catch (e) {
-      setError("No se pudo leer el producto; seguimos con voz genérica.");
+      setManualName(res.info.title ?? "");
+    } catch {
+      setProduct(null);
+      setProductNote("No se pudo leer el producto. Escribe su nombre abajo.");
     } finally {
-      setAnalizing(false);
+      setLoadingProduct(false);
     }
-  };
+  }, [url]);
 
-  // Guion auto al entrar al detalle
-  const ensureScript = () => {
-    if (scriptEdited && script.trim()) return;
-    const gen = generateScript({
-      durationSec: probe?.duration ?? 15,
-      lang: "es",
-      product: product
-        ? { title: product.title, price: product.price, currency: product.currency, seller: product.seller, features: product.features }
-        : undefined,
-      seed: product?.itemId ?? file?.name ?? "manual",
-    });
-    setScript(gen.text);
-    setScriptEdited(false);
-  };
+  const productTitle = manualName.trim() || product?.title || null;
 
-  useEffect(() => {
-    if (step === 2 && mode === "voice") ensureScript();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, mode, product]);
-
-  // Voz recomendada automática por idioma
-  const autoVoice = defaultVoiceForLocale("es-ES");
-  useEffect(() => {
-    if (mode === "voice" && !installedIds.includes(voiceId)) {
-      setVoiceId(autoVoice);
+  const goStep2 = useCallback(() => {
+    setStep(2);
+    if (mode === "voice") {
+      setRecommended(recommendStyle({ scriptText: "", isDropshipping: true, durationSec: null }));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
-  // Puerta de voces antes de generar
-  useEffect(() => {
-    if (mode !== "voice") return;
-    if (installedIds.includes(voiceId)) {
-      setPreparingVoice(null);
-      return;
-    }
-    const seq = ++prepareSeq.current;
-    setPreparingVoice(voiceId);
-    setPreparePct(null);
-    ensureVoiceInstalled(voiceId, {
-      onProgress: (p) => seq === prepareSeq.current && setPreparePct(p),
-    })
-      .then(() => listInstalled().then(setInstalledIds))
-      .catch((e) =>
-        seq === prepareSeq.current && setError(e instanceof Error ? e.message : "No se pudo preparar la voz")
-      )
-      .finally(() => seq === prepareSeq.current && setPreparingVoice(null));
-  }, [voiceId, installedIds, mode]);
+  const buildScript = useCallback(() => {
+    const target = pickTargetDuration(videoDuration, false);
+    const g = generateScript({
+      durationSec: target,
+      lang,
+      product: { title: productTitle },
+      seed: product?.url ?? url,
+    });
+    setScript(g.text);
+    const rec = recommendStyle({ scriptText: g.text, isDropshipping: true, durationSec: target });
+    setStyleId(rec);
+    setRecommended(rec);
+  }, [product, url, productTitle, lang, videoDuration]);
 
-  const recommended = recommendStyle({ scriptText: script, isDropshipping: true, durationSec: probe?.duration ?? null });
+  const canCreate =
+    phase === "setup" &&
+    !!file &&
+    (mode === "music" ||
+      (!preparingVoice && installedIds.includes(voiceId) && script.trim().length > 0));
 
-  // ── Generar ────────────────────────────────────────────────────────────
-  const start = async () => {
-    if (!file || !probe) return;
-    setError("");
-    if (result?.url) URL.revokeObjectURL(result.url);
-    setResult(null);
+  const start = useCallback(async () => {
+    if (!file || !canCreate) return;
+    if (mode === "voice" && !script.trim()) buildScript();
     setPhase("running");
-    setStage("PREPARING");
     setPct(0);
     setEta(null);
+    setStageLabel("Preparando");
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     try {
-      const res = await runCreationPipeline(
+      const target = pickTargetDuration(videoDuration, mode === "music");
+      const finalScript =
+        script.trim() ||
+        (mode === "voice"
+          ? generateScript({
+              durationSec: target,
+              lang,
+              product: { title: productTitle },
+              seed: product?.url ?? url,
+            }).text
+          : "");
+      const r = await runCreationPipeline(
         {
-          script: mode === "voice" ? script : "",
+          script: mode === "music" ? "" : finalScript,
           voiceId: mode === "voice" ? voiceId : null,
           onlyMusic: mode === "music",
-          styleId: mode === "voice" ? styleId : undefined,
-          targetDurationSec: probe.duration,
+          videoBlob: file,
+          videoDuration,
+          preferredCategory: mode === "music" ? musicCat : null,
+          styleId: mode === "voice" ? styleId ?? undefined : undefined,
         },
         {
           signal: ctrl.signal,
-          onStage: (s, _l, p, etaSec) => {
-            setStage(s);
-            setPct(p);
+          onStage: (_s, _l, p, etaSec) => {
+            setPct(Math.round(p));
             setEta(etaSec ?? null);
           },
         }
       );
-      setResult(res);
-      setPhase("result");
-      try {
-        saveProject({
-          id: crypto.randomUUID(),
-          name: product?.title || `Anuncio ${mode === "music" ? "con música" : "con voz"}`,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          status: "ready",
-          sources: [],
-          metadata: {
-            scenes: [], duration: probe.duration, resolution: { width: probe.width, height: probe.height },
-            fps: probe.fps ?? 30, people: 0, objects: [], speech: 0, silenceSegments: [],
-            sceneChanges: 0, interestingSegments: [], audioLevel: 0, qualityScore: 0, analysisText: "",
-          },
-          style: "anuncio", goal: "ventas", targetDuration: "auto",
-          hooks: [], selectedHook: "", script: [], voice: null, subtitles: { cues: [], style: defaultSubtitleStyle() },
-          music: null, editPlan: null, renders: [],
-          thumbnail: res.thumbnail, renderUrl: res.url, renderValidation: undefined,
-          removeWatermark: true,
-        });
-      } catch {}
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setPhase("setup");
-    } finally {
-      abortRef.current = null;
+      const name = mode === "music" ? productTitle || "Video con musica" : productTitle || finalScript.slice(0, 42);
+      await saveClip(
+        {
+          id: r.projectId,
+          name,
+          thumbnail: r.thumbnail,
+          duration: r.duration,
+          width: r.width,
+          height: r.height,
+          voiceName: r.voiceName,
+          musicTrack: r.musicTrackName,
+          cuesCount: r.cuesCount,
+          onlyMusic: mode === "music",
+          createdAt: Date.now(),
+        },
+        r.blob
+      );
+      setResult(r);
+      setPhase("done");
+    } catch (e) {
+      setErrMsg(e instanceof Error ? e.message : "Fallo al crear el video");
+      setPhase("error");
     }
-  };
+  }, [file, canCreate, mode, script, buildScript, product, url, productTitle, lang, voiceId, videoDuration, musicCat, styleId, saveClip]);
 
-  const canGenerate =
-    !!file && !!probe && (mode === "music" || (script.trim() && installedIds.includes(voiceId) && !preparingVoice));
+  const reset = useCallback(() => {
+    abortRef.current?.abort();
+    setPhase("setup");
+    setStep(1);
+    setResult(null);
+    setErrMsg("");
+    setFile(null);
+    setThumb(null);
+    setProduct(null);
+    setManualName("");
+    setUrl("");
+    setScript("");
+  }, []);
 
   return (
     <AppShell>
-      <div className="mx-auto max-w-xl px-5 py-8 pb-24">
-        {phase === "setup" && (
-          <div className="cc-fade-up space-y-5">
-            {/* Stepper minimal */}
-            <div className="flex items-center gap-2 text-xs text-gray-500">
-              {[1, 2, 3].map((s) => (
-                <span
-                  key={s}
-                  className={`flex h-6 w-6 items-center justify-center rounded-full ${
-                    step >= s ? "bg-violet-500 text-white" : "bg-white/10 text-gray-400"
-                  }`}
-                >
-                  {s}
-                </span>
-              ))}
-              <span className="ml-1">Vídeo · Detalles · Crear</span>
+      <div className="mx-auto max-w-2xl px-4 pb-28 pt-6">
+      <header className="mb-6">
+        <h1 className="text-xl font-bold text-white">Crear anuncio</h1>
+        <p className="mt-1 text-sm text-gray-400">
+          Sube tu video, elige el modo y creamos el anuncio con los mejores momentos.
+        </p>
+      </header>
+
+      {phase === "setup" && (
+        <Stepper step={step} />
+      )}
+
+      {/* PASO 1: video + modo */}
+      {phase === "setup" && step === 1 && (
+        <div className="space-y-4">
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="flex w-full flex-col items-center justify-center rounded-2xl border border-dashed border-white/20 bg-white/[0.02] px-6 py-10 text-center hover:border-violet-400/60"
+          >
+            {thumb ? (
+              <img src={thumb} alt="video" className="mb-3 max-h-44 rounded-xl" />
+            ) : (
+              <div className="mb-2 text-3xl text-violet-300">+</div>
+            )}
+            <div className="text-sm font-semibold text-gray-100">
+              {file ? file.name : "Toca para subir video"}
             </div>
+            {videoDuration > 0 && (
+              <div className="mt-1 text-xs text-gray-400">Duracion {videoDuration.toFixed(1)} s</div>
+            )}
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="video/*"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) onPickFile(f);
+            }}
+          />
 
-            {step === 1 && (
-              <section className="cc-card p-6 text-center">
-                <h1 className="text-xl font-bold">Crea tu anuncio</h1>
-                <p className="mt-1 text-sm text-gray-400">Sube tu vídeo. Todo se hace en tu dispositivo.</p>
+          <div className="grid grid-cols-2 gap-3">
+            {(["voice", "music"] as Mode[]).map((m) => (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                className={`rounded-2xl border px-4 py-4 text-left ${
+                  mode === m ? "border-violet-400/70 bg-violet-500/10" : "border-white/10 bg-white/[0.02]"
+                }`}
+              >
+                <div className="text-sm font-semibold text-white">
+                  {m === "voice" ? "Voz y subtitulos" : "Solo musica"}
+                </div>
+                <div className="mt-1 text-xs text-gray-400">
+                  {m === "voice"
+                    ? "Locucion + texto en pantalla."
+                    : "Tu video con musica de fondo."}
+                </div>
+              </button>
+            ))}
+          </div>
 
-                <label className="mt-5 block cursor-pointer rounded-2xl border border-dashed border-white/25 bg-black/20 px-4 py-10 transition-colors hover:border-violet-400/50">
-                  <input type="file" accept="video/*" className="hidden" onChange={(e) => void onFile(e.target.files)} />
-                  {probing ? (
-                    <span className="text-sm text-violet-300">Analizando vídeo…</span>
-                  ) : (
-                    <>
-                      <span className="block text-4xl">🎥</span>
-                      <span className="mt-2 block text-sm font-semibold text-gray-200">Toca para subir vídeo</span>
-                      <span className="mt-1 block text-xs text-gray-500">MP4 · MOV · WebM</span>
-                    </>
-                  )}
-                </label>
+          <button
+            disabled={!file}
+            onClick={goStep2}
+            className="cc-btn-primary w-full rounded-xl px-4 py-3 text-sm font-bold text-white disabled:opacity-40"
+          >
+            Continuar
+          </button>
+        </div>
+      )}
 
-                {probe && (
-                  <div className="mt-4 rounded-xl bg-white/5 px-4 py-3 text-left text-sm text-gray-200">
-                    ✓ {file?.name} · {probe.duration.toFixed(1)} s · {probe.orientation}
+      {/* PASO 2: detalles */}
+      {phase === "setup" && step === 2 && (
+        <div className="space-y-4">
+          {mode === "voice" ? (
+            <>
+              <section className="cc-card p-5">
+                <label className="text-sm font-semibold text-gray-200">Producto (AliExpress)</label>
+                <div className="mt-3 flex gap-2">
+                  <input
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && loadProduct()}
+                    placeholder="https://es.aliexpress.com/item/..."
+                    className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none focus:border-violet-400/60"
+                  />
+                  <button
+                    onClick={loadProduct}
+                    disabled={loadingProduct}
+                    className="rounded-xl border border-white/15 px-4 py-2.5 text-sm font-medium hover:bg-white/5 disabled:opacity-50"
+                  >
+                    {loadingProduct ? "Buscando" : "Usar"}
+                  </button>
+                </div>
+                {productNote && <div className="mt-2 text-xs text-amber-200">{productNote}</div>}
+                <input
+                  value={manualName}
+                  onChange={(e) => setManualName(e.target.value)}
+                  placeholder="Nombre del producto (opcional)"
+                  className="mt-3 w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none focus:border-violet-400/60"
+                />
+                {product && (product.price || product.images.length > 0) && (
+                  <div className="mt-3 flex items-center gap-3 text-xs text-gray-400">
+                    {product.images[0] && (
+                      <img src={product.images[0]} alt="" className="h-12 w-12 rounded-lg object-cover" />
+                    )}
+                    <div>
+                      <div className="text-gray-200">{product.title || manualName || "Producto"}</div>
+                      {product.price && <div className="text-emerald-300">{product.price} {product.currency}</div>}
+                    </div>
                   </div>
                 )}
-
-                <div className="mt-5">
-                  <p className="mb-2 text-sm font-semibold text-gray-200">¿Qué quieres en el anuncio?</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      onClick={() => setMode("voice")}
-                      className={`rounded-xl border px-3 py-4 text-left ${
-                        mode === "voice" ? "border-violet-400/70 bg-violet-500/10" : "border-white/10 bg-white/[0.02]"
-                      }`}
-                    >
-                      <div className="text-lg">🎙️</div>
-                      <div className="mt-1 text-sm font-semibold text-white">Voz + subtítulos</div>
-                      <div className="text-[11px] text-gray-500">Lee el guion del producto</div>
-                    </button>
-                    <button
-                      onClick={() => setMode("music")}
-                      className={`rounded-xl border px-3 py-4 text-left ${
-                        mode === "music" ? "border-violet-400/70 bg-violet-500/10" : "border-white/10 bg-white/[0.02]"
-                      }`}
-                    >
-                      <div className="text-lg">🎵</div>
-                      <div className="mt-1 text-sm font-semibold text-white">Solo música</div>
-                      <div className="text-[11px] text-gray-500">Rápido, sin voz</div>
-                    </button>
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => setStep(2)}
-                  disabled={!probe}
-                  className="cc-btn-primary mt-5 w-full rounded-2xl px-6 py-4 text-base font-bold text-white disabled:opacity-40"
-                >
-                  Continuar
-                </button>
               </section>
-            )}
 
-            {step === 2 && (
-              <div className="space-y-4">
-                {mode === "voice" && (
-                  <>
-                    <section className="cc-card p-5">
-                      <label className="text-sm font-semibold text-gray-200">
-                        Enlace de AliExpress <span className="text-gray-500">(opcional)</span>
-                      </label>
-                      <p className="mt-1 text-[11px] text-gray-500">
-                        Lo analizamos para el guion. Si lo dejas vacío usamos una voz genérica.
-                      </p>
-                      <div className="mt-2 flex gap-2">
-                        <input
-                          value={link}
-                          onChange={(e) => setLink(e.target.value)}
-                          onKeyDown={(e) => e.key === "Enter" && loadProduct()}
-                          placeholder="https://es.aliexpress.com/item/…"
-                          inputMode="url"
-                          className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm outline-none focus:border-violet-400/60"
-                        />
-                        <button onClick={loadProduct} disabled={analizing} className="rounded-xl border border-white/15 px-4 py-3 text-sm hover:bg-white/5">
-                          {analizing ? "…" : "Usar"}
-                        </button>
-                      </div>
-                      {product?.title && (
-                        <div className="mt-3 rounded-xl bg-white/5 px-4 py-3 text-sm">
-                          <div className="font-semibold text-gray-100">🛒 {product.title}</div>
-                          <div className="mt-1 text-xs text-gray-400">
-                            {product.price && (
-                              <span className="text-emerald-300">
-                                {product.currency === "EUR" ? `${product.price} €` : `$${product.price}`} ·{" "}
-                              </span>
-                            )}
-                            Voz: <b className="text-gray-200">{getVoiceById(autoVoice)?.name}</b> (se elige sola)
-                          </div>
-                        </div>
-                      )}
-                    </section>
+              <VoicePanel
+                voiceId={voiceId}
+                onVoice={setVoiceId}
+                styleId={styleId}
+                onStyle={setStyleId}
+                recommended={recommended}
+                lang={lang}
+                installedIds={installedIds}
+                preparingVoice={preparingVoice}
+                preparePct={preparePct}
+                scriptText={script}
+              />
 
-                    <ScriptPanel
-                      script={script}
-                      onChange={(t) => {
-                        setScript(t);
-                        setScriptEdited(true);
-                      }}
-                      targetSec={probe?.duration ?? null}
-                      lang={normalizeGenLang(getVoiceById(voiceId)?.locale ?? "es-ES")}
-                      styleId={styleId}
-                    />
-
-                    <VoicePanel
-                      voiceId={voiceId}
-                      onVoice={setVoiceId}
-                      styleId={styleId}
-                      onStyle={setStyleId}
-                      recommended={recommended}
-                      lang={normalizeGenLang(getVoiceById(voiceId)?.locale ?? "es-ES")}
-                      installedIds={installedIds}
-                      preparingVoice={preparingVoice}
-                      preparePct={preparePct}
-                      scriptText={script}
-                    />
-                  </>
-                )}
-
-                {mode === "music" && (
-                  <section className="cc-card p-5 text-sm text-gray-300">
-                    🎵 Música automática seleccionada según la duración del vídeo. Sin voz ni subtítulos.
-                  </section>
-                )}
-
-                <div className="flex gap-3">
-                  <button onClick={() => setStep(1)} className="rounded-2xl border border-white/15 px-5 py-4 text-sm hover:bg-white/5">
-                    ← Atrás
-                  </button>
+              <section className="cc-card p-5">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-semibold text-gray-200">Guion</label>
                   <button
-                    onClick={() => setStep(3)}
-                    disabled={mode === "voice" && !script.trim()}
-                    className="cc-btn-primary flex-1 rounded-2xl px-6 py-4 text-base font-bold text-white disabled:opacity-40"
+                    onClick={buildScript}
+                    className="text-xs font-medium text-violet-300 hover:text-violet-200"
                   >
-                    Revisar
+                    Generar guion
                   </button>
                 </div>
-              </div>
-            )}
-
-            {step === 3 && (
-              <section className="cc-card space-y-3 p-5">
-                <h1 className="text-xl font-bold">Listo para crear</h1>
-                <ul className="space-y-1.5 text-sm text-gray-300">
-                  <li>🎥 Vídeo: {probe?.duration.toFixed(1)} s ({mode === "voice" ? "voz + subtítulos" : "solo música"})</li>
-                  {mode === "voice" && (
-                    <>
-                      <li>🎙️ Voz: {getVoiceById(voiceId)?.name} · tono {recommended}</li>
-                      <li>✍️ Guion: {script.split(/\s+/).filter(Boolean).length} palabras</li>
-                    </>
-                  )}
-                </ul>
-
-                {error && (
-                  <div className="rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                    {error}
-                  </div>
-                )}
-
-                <div className="flex gap-3">
-                  <button onClick={() => setStep(2)} className="rounded-2xl border border-white/15 px-5 py-4 text-sm hover:bg-white/5">
-                    ← Atrás
-                  </button>
-                  <button
-                    onClick={start}
-                    disabled={!canGenerate}
-                    className="cc-btn-primary flex-1 rounded-2xl px-6 py-4 text-base font-bold text-white disabled:opacity-40"
-                  >
-                    🎬 Crear anuncio
-                  </button>
-                </div>
-                {!canGenerate && mode === "voice" && (
-                  <p className="-mt-1 text-center text-xs text-gray-500">
-                    {preparingVoice ? "Preparando voces…" : "Falta preparar la voz"}
+                {script ? (
+                  <ScriptPanel script={script} onChange={setScript} targetSec={videoDuration} lang={lang} styleId={styleId ?? recommended} />
+                ) : (
+                  <p className="mt-3 text-sm text-gray-500">
+                    Pulsa Generar guion para crear el texto desde el producto.
                   </p>
                 )}
               </section>
-            )}
-
-            {error && step !== 2 && step !== 3 && (
-              <div className="rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                {error}
+            </>
+          ) : (
+            <section className="cc-card p-5">
+              <label className="text-sm font-semibold text-gray-200">Estilo de musica</label>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {MUSIC_CHOICES.map((c) => (
+                  <button
+                    key={c.label}
+                    onClick={() => setMusicCat(c.cat)}
+                    className={`rounded-full border px-3 py-1.5 text-xs ${
+                      musicCat === c.cat ? "border-violet-400/70 bg-violet-500/10 text-white" : "border-white/10 text-gray-300 hover:bg-white/5"
+                    }`}
+                  >
+                    {c.label}
+                  </button>
+                ))}
               </div>
-            )}
-          </div>
-        )}
+              <p className="mt-3 text-xs text-gray-500">
+                Eligemos la musica que mejor encaja. Tu video se monta con sus mejores momentos.
+              </p>
+            </section>
+          )}
 
-        {phase === "running" && (
-          <div className="cc-fade-up space-y-6 py-10">
-            <div className="text-center">
-              <h1 className="text-2xl font-bold">{STAGE_LABELS[stage]}</h1>
-              {eta != null && <p className="mt-1 text-sm text-gray-400">Quedan ~{eta} s · {pct}%</p>}
-              <p className="mt-1 text-sm text-gray-400">Puedes cancelar en cualquier momento.</p>
-            </div>
-            <div className="h-3 overflow-hidden rounded-full bg-white/8">
-              <div className="h-full rounded-full transition-all duration-500" style={{ width: `${Math.max(4, pct)}%`, background: "linear-gradient(90deg,#8B7CFF,#22D3EE)" }} />
-            </div>
-            <div className="text-center text-3xl font-extrabold tabular-nums">{pct}%</div>
-            <ol className="space-y-2">
-              {STEPS.map((s, i) => {
-                const done = i < (ORDER_INDEX.get(stage as never) ?? -1) || stage === "DONE";
-                const active = s === stage;
-                return (
-                  <li key={s} className={`flex items-center gap-3 rounded-xl border px-4 py-3 text-sm ${active ? "border-violet-400/50 bg-violet-500/10 text-white" : done ? "border-emerald-400/25 bg-emerald-500/5 text-gray-300" : "border-white/8 bg-white/[0.02] text-gray-500"}`}>
-                    <span className="w-5 text-center">{done ? "✓" : active ? <Spinner /> : "○"}</span>
-                    {STAGE_LABELS[s].replace("…", "")}
-                  </li>
-                );
-              })}
-            </ol>
-            <button onClick={() => abortRef.current?.abort()} className="w-full rounded-xl border border-white/15 px-4 py-3 text-sm hover:bg-white/5">
-              Cancelar
+          <div className="flex gap-3">
+            <button
+              onClick={() => setStep(1)}
+              className="rounded-xl border border-white/15 px-4 py-3 text-sm font-medium text-gray-300 hover:bg-white/5"
+            >
+              Atras
+            </button>
+            <button
+              onClick={() => setStep(3)}
+              className="cc-btn-primary flex-1 rounded-xl px-4 py-3 text-sm font-bold text-white"
+            >
+              Revisar
             </button>
           </div>
-        )}
+        </div>
+      )}
 
-        {phase === "result" && result && (
-          <div className="cc-fade-up space-y-5">
-            <div className="text-center">
-              <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/20 text-2xl">✓</div>
-              <h1 className="text-2xl font-bold">Tu anuncio está listo</h1>
-            </div>
-            <video src={result.url} controls autoPlay playsInline poster={result.thumbnail || undefined} className="mx-auto max-h-[58vh] rounded-2xl border border-white/10 bg-black shadow-2xl" />
-            <dl className="cc-card divide-y divide-white/6 text-sm">
-              <Row k="Duración" v={`${formatDuration(result.duration)}${result.targetSeconds ? ` (obj ${result.targetSeconds.toFixed(1)} s)` : ""}`} />
-              {result.voiceName && <Row k="Voz" v={result.voiceName} />}
-              <Row k="Música" v={result.musicTrackName ?? "Sin música"} />
-              <Row k="Subtítulos" v={result.cuesCount > 0 ? `${result.cuesCount} tarjetas` : "Ninguno"} />
-            </dl>
-            {result.errors.length > 0 && (
-              <div className="rounded-xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
-                {result.errors.join(" · ")}
+      {/* PASO 3: revisar + crear */}
+      {phase === "setup" && step === 3 && (
+        <div className="space-y-4">
+          <section className="cc-card p-5">
+            <div className="flex items-center gap-3">
+              {thumb && <img src={thumb} alt="" className="h-20 w-14 rounded-lg object-cover" />}
+              <div>
+                <div className="text-sm font-semibold text-white">
+                  {mode === "voice" ? "Voz y subtitulos" : "Solo musica"}
+                </div>
+                <div className="text-xs text-gray-400">
+                  {mode === "voice"
+                    ? `${getVoiceById(voiceId)?.name} · ${productTitle || "Producto"}`
+                    : `Musica: ${MUSIC_CHOICES.find((c) => c.cat === musicCat)?.label ?? "Automatica"}`}
+                </div>
               </div>
+            </div>
+            {mode === "voice" && script && (
+              <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-gray-300">{script}</p>
             )}
-            <a href={result.url} download={`clipcraft-${result.projectId.slice(0, 8)}.${result.ext}`} className="cc-btn-primary block w-full rounded-2xl px-6 py-4 text-center text-base font-bold text-white">
-              ⬇ Descargar
-            </a>
-            <button onClick={() => { if (result.url) URL.revokeObjectURL(result.url); setResult(null); setPhase("setup"); setStep(1); setFile(null); setProbe(null); setScript(""); }} className="w-full rounded-xl border border-white/15 px-4 py-3 text-sm font-medium hover:bg-white/5">
-              🔄 Crear otro
-            </button>
+          </section>
+
+          <button
+            disabled={!canCreate}
+            onClick={start}
+            className="cc-btn-primary w-full rounded-xl px-4 py-3.5 text-base font-bold text-white disabled:opacity-40"
+          >
+            Crear anuncio
+          </button>
+          <button
+            onClick={() => setStep(2)}
+            className="w-full rounded-xl border border-white/15 px-4 py-3 text-sm font-medium text-gray-300 hover:bg-white/5"
+          >
+            Atras
+          </button>
+        </div>
+      )}
+
+      {/* PROGRESO */}
+      {phase === "running" && (
+        <div className="cc-card p-6 text-center">
+          <div className="text-sm font-semibold text-white">{stageLabel}</div>
+          <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10">
+            <div className="h-full rounded-full bg-violet-400 transition-all" style={{ width: `${Math.max(3, pct)}%` }} />
           </div>
-        )}
-      </div>
+          <div className="mt-2 text-xs text-gray-400">
+            {pct}%{eta != null && eta > 0 ? ` · Quedan ~${Math.ceil(eta)} s` : ""}
+          </div>
+          <p className="mt-3 text-xs text-gray-600">Puedes cerrar esta pantalla; el proceso sigue en tu dispositivo.</p>
+        </div>
+      )}
+
+      {/* ERROR */}
+      {phase === "error" && (
+        <div className="cc-card p-6 text-center">
+          <div className="text-sm font-semibold text-red-300">No se pudo crear</div>
+          <p className="mt-2 text-xs text-gray-400">{errMsg}</p>
+          <button onClick={reset} className="cc-btn-primary mt-4 rounded-xl px-4 py-3 text-sm font-bold text-white">
+            Intentar de nuevo
+          </button>
+        </div>
+      )}
+
+      {/* RESULTADO */}
+      {phase === "done" && result && (
+        <div className="space-y-4">
+          <div className="cc-card overflow-hidden p-0">
+            <video src={result.url} controls className="w-full bg-black" />
+          </div>
+          <div className="cc-card p-5">
+            <div className="text-sm font-semibold text-white">{result.name}</div>
+            <div className="mt-1 text-xs text-gray-400">
+              {result.duration.toFixed(1)} s · {result.width}x{result.height}
+              {result.voiceName ? ` · Voz: ${result.voiceName}` : ""}
+              {result.musicTrackName ? ` · ${result.musicTrackName}` : ""}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <a href={result.url} download className="cc-btn-primary rounded-xl px-4 py-2.5 text-sm font-bold text-white">
+                Descargar
+              </a>
+              <button onClick={reset} className="rounded-xl border border-white/15 px-4 py-2.5 text-sm font-medium text-gray-300 hover:bg-white/5">
+                Crear otro
+              </button>
+              <button onClick={() => router.push("/videos")} className="rounded-xl border border-white/15 px-4 py-2.5 text-sm font-medium text-gray-300 hover:bg-white/5">
+                Mis videos
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
     </AppShell>
   );
 }
 
-function useProjectActionsSafe() {
-  const { projects, saveProject } = useProjectActions();
-  return [projects, saveProject] as const;
-}
-
-function Spinner() {
-  return <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-violet-300 border-t-transparent align-middle" />;
-}
-
-function Row({ k, v }: { k: string; v: string }) {
+function Stepper({ step }: { step: Step }) {
+  const labels = ["Video", "Detalles", "Crear"];
   return (
-    <div className="flex items-center justify-between px-5 py-3">
-      <dt className="text-gray-400">{k}</dt>
-      <dd className="font-medium text-gray-100">{v}</dd>
+    <div className="mb-5 flex items-center gap-2">
+      {labels.map((l, i) => {
+        const n = (i + 1) as Step;
+        return (
+          <div key={l} className="flex flex-1 items-center gap-2">
+            <div
+              className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold ${
+                step >= n ? "bg-violet-500 text-white" : "bg-white/10 text-gray-400"
+              }`}
+            >
+              {i + 1}
+            </div>
+            <span className={`text-xs ${step >= n ? "text-gray-200" : "text-gray-500"}`}>{l}</span>
+            {i < labels.length - 1 && <div className="h-px flex-1 bg-white/10" />}
+          </div>
+        );
+      })}
     </div>
   );
 }

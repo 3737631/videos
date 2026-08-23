@@ -26,7 +26,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 active ? "text-violet-300" : "text-gray-500"
               }`}
             >
-              <span className="text-lg leading-none" aria-hidden>
+              <span className="flex text-lg leading-none" aria-hidden>
                 {item.icon}
               </span>
               {item.label}
