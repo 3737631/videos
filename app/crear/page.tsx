@@ -287,6 +287,7 @@ export default function CrearPage() {
     } finally {
       abortRef.current = null;
     }
+  };
 
   const cancel = () => abortRef.current?.abort();
   const activeIdx = ORDER_INDEX.get(stage as never) ?? -1;
@@ -729,5 +730,4 @@ function Row({ k, v }: { k: string; v: string }) {
     </div>
   );
 }
-  };
 

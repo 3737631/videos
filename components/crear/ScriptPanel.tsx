@@ -1,8 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { countWords, wordsForDuration } from "@/lib/script/generator";
-import { normalizeGenLang } from "@/lib/script/generator";
+import { countWords } from "@/lib/script/generator";
+import { WORDS_PER_SEC, normalizeGenLang } from "@/lib/script/generator";
 import { getStyle } from "@/lib/script/styles";
 
 const SAMPLE_PHRASES: Record<string, string> = {
@@ -20,7 +20,7 @@ export function estimateSeconds(
   styleMul: number
 ): number {
   const words = countWords(text);
-  const wps = wordsForDuration(1, lang, 1); // palabras por segundo
+  const wps = WORDS_PER_SEC[normalizeGenLang(lang)];
   return words / Math.max(0.5, wps * Math.min(1.5, Math.max(0.7, styleMul)));
 }
 
