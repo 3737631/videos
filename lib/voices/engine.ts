@@ -6,7 +6,7 @@
  */
 import { cacheDel, cacheGet, cachePut, hashKey } from "@/lib/idb";
 import { fetchBinaryWithProgress, fetchJsonWithTimeout } from "@/lib/net";
-import { getVoiceById, sameLanguageAlternates, VOICE_CATALOG, type CatalogVoice } from "./catalog";
+import { getVoiceById, resolveVoiceUrl, sameLanguageAlternates, VOICE_CATALOG, type CatalogVoice } from "./catalog";
 import {
   ensurePiperRuntime,
   synthesizeWithPiper,
@@ -62,12 +62,14 @@ async function downloadPiperVoice(
 ): Promise<void> {
   const existing = await cacheGet<PiperVoiceRecord>("voices", voice.id);
   if (existing?.onnx && existing.onnx.byteLength > 0) return;
-  const config = await fetchJsonWithTimeout<PiperVoiceRecord["config"]>(voice.configUrl!, {
+  const configUrl = resolveVoiceUrl(voice.configUrl);
+  const modelUrl = resolveVoiceUrl(voice.modelUrl);
+  const config = await fetchJsonWithTimeout<PiperVoiceRecord["config"]>(configUrl!, {
     timeoutMs: 30000,
     signal,
   });
   const onnx = await fetchBinaryWithProgress(
-    voice.modelUrl!,
+    modelUrl!,
     (l, t) => report?.(l, t || voice.sizeBytes),
     { signal, timeoutMs: 600000 }
   );

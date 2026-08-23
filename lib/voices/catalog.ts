@@ -26,6 +26,20 @@ export interface CatalogVoice {
 
 const PIPER_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0";
 
+/** Ruta de los modelos de voz auto-alojados (mismo origen, sin CORS). */
+export function voiceRoot(): string {
+  if (typeof window === "undefined") return "/voices/";
+  const base = window.location.pathname.startsWith("/videos") ? "/videos" : "";
+  return base + "/voices/";
+}
+
+/** Marca "local:..." → se resuelve contra el origen en tiempo de descarga. */
+export function resolveVoiceUrl(u?: string): string | undefined {
+  if (!u) return u;
+  if (u.startsWith("local:")) return voiceRoot() + u.slice("local:".length);
+  return u;
+}
+
 function piper(
   path: string,
   id: string,
@@ -67,7 +81,7 @@ export const VOICE_CATALOG: CatalogVoice[] = [
   piper(
     "es/es_ES/sharvard/medium/es_ES-sharvard-medium", "es_ES-sharvard-medium", "Sharvard", "femenina",
     "es-ES", "España", "🇪🇸", "Cálida y profesional, perfecta para reseñas", 76_733_615,
-    "Lo probé durante treinta días y el resultado me sorprendió.",
+     "Lo probé durante treinta días y el resultado me sorprendió.",
     0
   ),
   // ── Inglés (Kokoro, modelo compartido) ───────────────────────────────
@@ -125,6 +139,14 @@ export const VOICE_CATALOG: CatalogVoice[] = [
     "Esse gadget vai mudar a sua cozinha. Olha isso!"
   ),
 ];
+
+// Voces en español auto-alojadas (mismo origen): cero dependencia externa.
+for (const v of VOICE_CATALOG) {
+  if (v.id === "es_ES-carlfm-x_low") {
+    v.modelUrl = "local:es_ES-carlfm-x_low.onnx";
+    v.configUrl = "local:es_ES-carlfm-x_low.onnx.json";
+  }
+}
 
 export function getVoiceById(id: string): CatalogVoice | undefined {
   return VOICE_CATALOG.find((v) => v.id === id);

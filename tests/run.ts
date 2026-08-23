@@ -76,7 +76,12 @@ async function main() {
   });
   await t("Voces Piper con URL y tamaño reales", () => {
     for (const v of VOICE_CATALOG.filter((x) => x.runtime === "piper")) {
-      assert.ok(v.modelUrl!.startsWith("https://huggingface.co/rhasspy/piper-voices/"));
+      // URL de HuggingFace o auto-alojada en el mismo origen ("local:")
+      assert.ok(
+        v.modelUrl!.startsWith("https://huggingface.co/rhasspy/piper-voices/") ||
+          v.modelUrl!.startsWith("local:"),
+        `${v.id} URL inesperada: ${v.modelUrl}`
+      );
       assert.ok(v.configUrl!.endsWith(".onnx.json"));
       assert.ok(v.sizeBytes > 20_000_000, `${v.id} sin tamaño real`);
       assert.match(v.id, /^(es|fr|de|it|pt)_/);
