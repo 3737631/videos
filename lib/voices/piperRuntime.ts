@@ -40,7 +40,11 @@ let configured = false;
 
 const PHO_WASM = piperAssetUrl("piper_phonemize.wasm");
 const PHO_DATA = piperAssetUrl("piper_phonemize.data");
-const ORT_WASM_DIR = piperAssetUrl(""); // directorio que contiene ort-wasm-simd-threaded.wasm
+// ORT 1.20.x carga el PEGAMENTO ES módulo (ort-wasm-simd-threaded.mjs), no el .wasm.
+// Lo servimos como .js para evitar problemas de MIME en GitHub Pages; el .wasm
+// se resuelve vía locateFile con esta URL explícita.
+const ORT_WASM_MJS = piperAssetUrl("ort-wasm-simd-threaded.js");
+const ORT_WASM_WASM = piperAssetUrl("ort-wasm-simd-threaded.wasm");
 
 export async function ensurePiperRuntime(
   _onProgress?: ProgressFn,
@@ -50,8 +54,9 @@ export async function ensurePiperRuntime(
     Ort.env.wasm.numThreads = 1;
     Ort.env.wasm.simd = true;
     Ort.env.wasm.proxy = false;
-    // Directorio (con barra final): ORT resuelve él mismo ort-wasm-simd-threaded.wasm
-    Ort.env.wasm.wasmPaths = ORT_WASM_DIR;
+    // Objeto explícito: mjs = pegamento ES módulo, wasm = binario. Así ORT no
+    // falla intentando import() un .mjs 404.
+    Ort.env.wasm.wasmPaths = { mjs: ORT_WASM_MJS, wasm: ORT_WASM_WASM };
     configured = true;
   }
 }

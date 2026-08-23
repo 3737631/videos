@@ -42,6 +42,7 @@ export default function CrearPage() {
   const [productNote, setProductNote] = useState("");
   const [manualName, setManualName] = useState("");
   const [loadingProduct, setLoadingProduct] = useState(false);
+  const [loadedUrl, setLoadedUrl] = useState("");
 
   const [musicCat, setMusicCat] = useState<string | null>(null);
 
@@ -141,6 +142,7 @@ export default function CrearPage() {
     }
     setLoadingProduct(true);
     setProductNote("");
+    setLoadedUrl(raw);
     try {
       const res = await fetchProduct(raw, { timeoutMs: 20000 });
       setProduct(res.info);
@@ -155,6 +157,13 @@ export default function CrearPage() {
     }
   }, [url]);
 
+  // AliExpress es OBLIGATORIO: si la URL es valida, se analiza siempre
+  // (para el guion personalizado), sin esperar a que el usuario pulse "Usar".
+  useEffect(() => {
+    const raw = url.trim();
+    if (parseAliUrl(raw) && raw !== loadedUrl) loadProduct();
+  }, [url, loadedUrl, loadProduct]);
+
   const productTitle = manualName.trim() || product?.title || null;
 
   const buildScript = useCallback(() => {
@@ -166,9 +175,11 @@ export default function CrearPage() {
     setRecommended(rec);
   }, [videoDuration, lang, productTitle]);
 
+  const aliOk = !!parseAliUrl(url.trim()) && !!productTitle;
   const canCreate =
     phase === "setup" &&
     !!mergedBlob &&
+    aliOk &&
     (mode === "music" || (!preparingVoice && installedIds.includes(voiceId)));
 
   const start = useCallback(async () => {
@@ -241,6 +252,7 @@ export default function CrearPage() {
     setProduct(null);
     setManualName("");
     setUrl("");
+    setLoadedUrl("");
     setScript("");
   }, []);
 
@@ -324,38 +336,39 @@ export default function CrearPage() {
               </div>
             </section>
 
-            {mode === "voice" && (
-              <section className="cc-card p-4">
-                <details>
-                  <summary className="cursor-pointer text-xs font-semibold text-gray-300">
-                    Producto de AliExpress (opcional)
-                  </summary>
-                  <div className="mt-3 flex gap-2">
-                    <input
-                      value={url}
-                      onChange={(e) => setUrl(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && loadProduct()}
-                      placeholder="https://es.aliexpress.com/item/..."
-                      className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm outline-none focus:border-violet-400/60"
-                    />
-                    <button
-                      onClick={loadProduct}
-                      disabled={loadingProduct}
-                      className="rounded-xl border border-white/15 px-3 py-2 text-sm font-medium hover:bg-white/5 disabled:opacity-50"
-                    >
-                      {loadingProduct ? "Buscando" : "Usar"}
-                    </button>
-                  </div>
-                  {productNote && <div className="mt-2 text-xs text-amber-200">{productNote}</div>}
-                  <input
-                    value={manualName}
-                    onChange={(e) => setManualName(e.target.value)}
-                    placeholder="Nombre del producto (opcional)"
-                    className="mt-3 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm outline-none focus:border-violet-400/60"
-                  />
-                </details>
-              </section>
-            )}
+            <section className="cc-card p-4">
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold text-gray-200">
+                  Producto de AliExpress <span className="text-rose-300">* obligatorio</span>
+                </div>
+                {productTitle && (
+                  <div className="text-xs font-medium text-emerald-300">Analizado</div>
+                )}
+              </div>
+              <div className="mt-3 flex gap-2">
+                <input
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && loadProduct()}
+                  placeholder="https://es.aliexpress.com/item/..."
+                  className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm outline-none focus:border-violet-400/60"
+                />
+                <button
+                  onClick={loadProduct}
+                  disabled={loadingProduct}
+                  className="rounded-xl border border-white/15 px-3 py-2 text-sm font-medium hover:bg-white/5 disabled:opacity-50"
+                >
+                  {loadingProduct ? "Buscando" : "Usar"}
+                </button>
+              </div>
+              {productNote && <div className="mt-2 text-xs text-amber-200">{productNote}</div>}
+              <input
+                value={manualName}
+                onChange={(e) => setManualName(e.target.value)}
+                placeholder="Nombre del producto (se rellena solo; corrigelo si hace falta)"
+                className="mt-3 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm outline-none focus:border-violet-400/60"
+              />
+            </section>
 
             {mode === "voice" && preparingVoice && (
               <div className="rounded-xl border border-violet-400/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-200">
