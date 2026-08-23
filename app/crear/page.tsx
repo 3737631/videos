@@ -416,6 +416,13 @@ export default function CrearPage() {
             <div className="cc-card overflow-hidden p-0">
               <video src={result.url} controls className="w-full bg-black" />
             </div>
+            {result.voiceError && (
+              <div className="rounded-2xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
+                <div className="font-semibold">La voz falló (se usó solo música). Error real:</div>
+                <div className="mt-1 break-words font-mono text-xs">{result.voiceError}</div>
+                <div className="mt-2 text-xs text-rose-200/80">Copia este texto y envíamelo para arreglar la causa exacta.</div>
+              </div>
+            )}
             <div className="cc-card p-5">
               <div className="text-sm font-semibold text-white">{result.name}</div>
               <div className="mt-1 text-xs text-gray-400">

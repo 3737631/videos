@@ -59,6 +59,8 @@ export interface CreationResult {
   voiceId: string | null;
   voiceName: string | null;
   usedFallback: boolean;
+  /** Error real de la voz (si falló y se degradó a solo música) */
+  voiceError: string | null;
   musicTrackName: string | null;
   cuesCount: number;
   niche: NicheInfo;
@@ -267,6 +269,7 @@ export async function runCreationPipeline(
         : defaultVoiceForLocale(lang + "-XX");
     let voiceDuration: number | null = null;
     let usedFallback = false;
+    let voiceError: string | null = null;
     const segTimings: Array<{ text: string; start: number; end: number }> = [];
     if (!input.onlyMusic) {
       try {
@@ -313,11 +316,12 @@ export async function runCreationPipeline(
         }
       } catch (e) {
         // Red de seguridad: si la voz falla, el vídeo se crea igual (solo música)
+        voiceError = e instanceof Error ? e.message : String(e);
         console.warn("voz omitida, vídeo solo con música:", e);
         input.onlyMusic = true;
         voiceBlob = null;
         voiceDuration = null;
-        validationWarnings.push("No se pudo generar la voz; se creó el vídeo solo con música.");
+        validationWarnings.push("No se pudo generar la voz: " + voiceError);
       }
     }
 
@@ -429,9 +433,10 @@ export async function runCreationPipeline(
       height,
       fps: 30,
       thumbnail: rendered.thumbnail,
-      voiceId: input.onlyMusic ? null : chosenId,
-      voiceName: input.onlyMusic ? null : voiceMeta?.name ?? null,
-      usedFallback,
+       voiceId: input.onlyMusic ? null : chosenId,
+       voiceName: input.onlyMusic ? null : voiceMeta?.name ?? null,
+       usedFallback,
+       voiceError,
       musicTrackName: music.label,
       cuesCount: subs.cues.length,
       niche: nicheInfo,
