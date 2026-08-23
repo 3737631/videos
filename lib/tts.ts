@@ -150,21 +150,60 @@ export async function generateSpeech(
   }
   const errs: string[] = [];
   let result: TtsResult | null = null;
-  try {
-    result = await generateKokoroTts(text, voiceId, options?.onProgress);
-  } catch (e) {
-    errs.push(e instanceof Error ? e.message : "local");
-  }
-  if (!result) {
+  // En MÓVIL StreamElements va primero: es inmediato y evita descargar el modelo
+  // neuronal (Kokoro) que en iPhone tarda minutos o se queda colgado.
+  const isMobile =
+    typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const chain: Array<() => Promise<TtsResult>> = isMobile
+    ? [
+        () => generateStreamElementsTts(text, voiceId),
+        () => generateGoogleTts(text),
+        () => generateKokoroTts(text, voiceId, options?.onProgress),
+      ]
+    : [
+        () => generateKokoroTts(text, voiceId, options?.onProgress),
+        () => generateStreamElementsTts(text, voiceId),
+        () => generateGoogleTts(text),
+      ];
+  for (const step of chain) {
+    if (result) break;
     try {
-      result = await generateGoogleTts(text);
+      result = await step();
     } catch (e) {
-      errs.push(e instanceof Error ? e.message : "google");
+      errs.push(e instanceof Error ? e.message : "proveedor");
     }
   }
   if (!result) throw new Error(`No se pudo generar la voz (${errs.join(" · ")})`);
   void putCachedVoice(key, result.blob);
   return result;
+}
+
+// ===== Voz Polly gratuita vía StreamElements (CORS abierto, sin claves, ~1s) =====
+const SE_VOICE_MAP: Record<string, string> = {
+  alloy: "Joanna",
+  nova: "Salli",
+  shimmer: "Kimberly",
+  echo: "Matthew",
+  onyx: "Joey",
+  fable: "Brian",
+};
+
+async function generateStreamElementsTts(text: string, voiceId: string): Promise<TtsResult> {
+  const chunks = splitForTts(text, 280);
+  const parts: Blob[] = [];
+  for (const chunk of chunks) {
+    const target = `https://api.streamelements.com/kappa/v2/speech?voice=${
+      SE_VOICE_MAP[voiceId] || "Joanna"
+    }&text=${encodeURIComponent(chunk)}`;
+    const res = await fetchWithTimeout(target, 15000);
+    if (!res.ok) throw new Error(`StreamElements HTTP ${res.status}`);
+    const b = await res.blob();
+    if (b.size < 1024) throw new Error("StreamElements devolvió audio vacío");
+    parts.push(b);
+    if (chunks.length > 1) await new Promise((r) => setTimeout(r, 120));
+  }
+  const blob = parts.length === 1 ? parts[0] : new Blob(parts, { type: "audio/mpeg" });
+  return finalizeTts(blob, "streamelements-polly");
 }
 
 // ===== Voz neuronal LOCAL (Kokoro-82M vía WASM): ilimitada, sin claves =====

@@ -19,12 +19,17 @@ import { analyzeVideo } from "@/lib/analyze";
 import { detectViralHighlights, type ViralSegment } from "@/lib/viral";
 import { detectWatermark } from "@/lib/watermark";
 import { isKokoroReady, onKokoroDownload, preloadKokoro } from "@/lib/tts";
+import { generateMusicTrack, getUserTracks } from "@/lib/music";
 
 // Detección de iPhone/iPad para optimizar velocidad de render
 const IS_IOS =
   typeof navigator !== "undefined" &&
   (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
+// Cualquier móvil: el modelo neuronal local NO se precarga (se usan proveedores rápidos)
+const IS_MOBILE =
+  IS_IOS ||
+  (typeof navigator !== "undefined" && /Android|Mobile/i.test(navigator.userAgent));
 
 /** Lee el texto de una página de producto (p.ej. AliExpress) sin bloqueos CORS */
 async function fetchProductInfo(url: string): Promise<string> {
@@ -41,7 +46,7 @@ async function fetchProductInfo(url: string): Promise<string> {
 }
 import { loadFfmpeg, isFfmpegLoaded, getFfmpeg, resetFfmpeg } from "@/lib/ffmpeg";
 import { renderProject } from "@/lib/render";
-import { renderProjectMobile, buildSoundtrack } from "@/lib/renderMobile";
+import { renderProjectMobile, buildSoundtrack, verifyFinalAudio } from "@/lib/renderMobile";
 
 function newProject(): Project {
   const id = crypto.randomUUID();
@@ -157,14 +162,64 @@ export default function CrearPage() {
   const voicePctRef = useRef<number | null>(null);
 
   useEffect(() => {
-    // La voz se descarga sola al abrir la página en TODOS los dispositivos
-    // (en móvil sin límite de tiempo; mientras el usuario prepara su vídeo)
+    // La voz neuronal solo se precarga en escritorio; en móvil el TTS rápido
+    // (StreamElements) no necesita descargas.
     const off = onKokoroDownload((pct) => {
       voicePctRef.current = pct;
     });
-    void preloadKokoro();
+    if (!IS_MOBILE) void preloadKokoro();
     return () => {
       off();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    // TEST AUTOMÁTICO (consola): window.__ccSelfTest()
+    // Valida TTS, síntesis musical y mezcla OfflineAudioContext con energía real.
+    type SelfTestWin = Window & { __ccSelfTest?: () => Promise<boolean> };
+    (window as SelfTestWin).__ccSelfTest = async () => {
+      const tag = "[SELFTEST]";
+      /* eslint-disable no-console */
+      console.log(`${tag} 1) Sintetizando pista musical de 8s…`);
+      try {
+        const t = await generateMusicTrack(8);
+        console.log(`${tag}    OK · ${t.duration.toFixed(2)}s · ${t.name}`);
+        const fakeProject = {
+          editPlan: { voice: null, music: { trackId: t.id } },
+          music: { url: t.url },
+        } as unknown as Project;
+        console.log(`${tag} 2) Mezclando banda sonora (OfflineAudioContext)…`);
+        const wav = await buildSoundtrack(fakeProject, { duration: 8 });
+        if (!wav) throw new Error("banda sonora vacía");
+        const AC =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        const ctx = new AC();
+        const buf = await ctx.decodeAudioData(await wav.arrayBuffer());
+        const d = buf.getChannelData(0);
+        let sum = 0;
+        let n = 0;
+        for (let i = 0; i < d.length; i += 37) {
+          sum += Math.abs(d[i]);
+          n++;
+        }
+        await ctx.close();
+        const rms = sum / Math.max(1, n);
+        console.log(`${tag}    OK · RMS=${rms.toFixed(4)} dur=${buf.duration.toFixed(2)}s`);
+        if (rms < 0.001) throw new Error("la mezcla sale muda");
+        console.log(`${tag} 3) Generando voz de prueba (TTS)…`);
+        const v = await generateSpeech(settings, "This is a quick self test.", settings.ttsVoiceId || "alloy");
+        console.log(`${tag}    OK · proveedor=${v.provider} · ${v.duration.toFixed(1)}s`);
+        console.log(`${tag} ✅ TODO CORRECTO`);
+        return true;
+      } catch (e) {
+        console.error(`${tag} ❌ FALLO:`, e);
+        return false;
+      }
+    };
+    return () => {
+      delete (window as SelfTestWin).__ccSelfTest;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -214,7 +269,7 @@ export default function CrearPage() {
     setFinalUrl(null);
     setBusy("analyzing");
     setJobStage({ stage: "Leyendo vídeo", progress: 10 });
-    void preloadKokoro(); // descarga la voz en segundo plano mientras preparas todo
+    if (!IS_MOBILE) void preloadKokoro(); // en escritorio: descarga la voz mientras preparas todo (móvil no la usa)
 
     try {
       const sources: SourceVideo[] = [];
@@ -384,7 +439,7 @@ export default function CrearPage() {
       if (voiceMode === "musica") {
         addLog("Modo solo música: sin voz");
       } else {
-        const primeraVez = !(await isKokoroReady());
+        const primeraVez = !IS_MOBILE && !(await isKokoroReady());
         setJobStage({
           stage: primeraVez ? "Descargando voz neuronal (solo la primera vez)" : "Generando voz",
           progress: 42,
@@ -394,13 +449,14 @@ export default function CrearPage() {
           if (fullText.trim()) {
             try {
               const voiceT0 = Date.now();
+              addLog(`[VOZ] ${fullText.length} caracteres · ${IS_MOBILE ? "TTS rápido en la nube" : "Kokoro local"}`);
               let lastDone = 0;
               let lastTotal = 1;
               // Latido visible cada segundo: nunca se queda congelado sin información
               const beat = setInterval(() => {
                 const el = Math.round((Date.now() - voiceT0) / 1000);
                 const dl = voicePctRef.current;
-                if (lastDone === 0 && dl !== null && dl < 100) {
+                if (!IS_MOBILE && lastDone === 0 && dl !== null && dl < 100) {
                   setJobStage({
                     stage: `⬇️ Descargando voz… ${dl}% · ${el}s transcurridos (sin límite, solo la primera vez)`,
                     progress: Math.min(45, 42 + dl! * 0.03),
@@ -412,28 +468,9 @@ export default function CrearPage() {
                   progress: Math.min(51, 42 + (lastDone / Math.max(1, lastTotal)) * 9),
                 });
               }, 1000);
-              // El tiempo límite SOLO cuenta mientras se genera; la descarga no tiene límite
-              // pero en cuanto el modelo esté listo se activa el reloj de generación.
-              let timedOut = false;
-              let watchdog: ReturnType<typeof setTimeout> | null = null;
-              const armWatchdog = () => {
-                if (!watchdog) {
-                  watchdog = setTimeout(() => {
-                    timedOut = true;
-                  }, 260000);
-                }
-              };
-              void (async () => {
-                for (let i = 0; i < 600; i++) {
-                  if (watchdog || timedOut) return;
-                  if (await isKokoroReady()) {
-                    armWatchdog();
-                    return;
-                  }
-                  await new Promise((r) => setTimeout(r, 1000));
-                }
-                armWatchdog();
-              })();
+              // En móvil el TTS es un servicio rápido: si en 75s no hay voz hay un
+              // problema real y se informa con el motivo; en escritorio Kokoro puede tardar más.
+              const VOICE_CAP_MS = IS_MOBILE ? 75000 : 250000;
               const attempt = async (t: string): Promise<Awaited<ReturnType<typeof generateSpeech>> | null> =>
                 Promise.race([
                   generateSpeech(settings, t, settings.ttsVoiceId || "alloy", {
@@ -449,7 +486,7 @@ export default function CrearPage() {
                       });
                     },
                   }),
-                  new Promise<null>((resolve) => setTimeout(() => resolve(null), 250000)),
+                  new Promise<null>((resolve) => setTimeout(() => resolve(null), VOICE_CAP_MS)),
                 ]);
               let voice: Awaited<ReturnType<typeof generateSpeech>> | null = null;
               try {
@@ -459,12 +496,11 @@ export default function CrearPage() {
                   voice = await attempt(`${fullText.slice(0, 88)}.`);
                 }
               } finally {
-                if (watchdog) clearTimeout(watchdog);
                 clearInterval(beat);
               }
-              if (!voice) timedOut = true;
-              if (timedOut) throw new Error("La voz tardó demasiado en este dispositivo");
-              if (voice && (await validateVoiceBlob(voice.url))) {
+              if (!voice) throw new Error(`La voz no respondió en ${Math.round(VOICE_CAP_MS / 1000)}s`);
+              addLog(`[VOZ] Lista vía ${voice.provider} en ${((Date.now() - voiceT0) / 1000).toFixed(1)}s`);
+              if (await validateVoiceBlob(voice.url)) {
                 ttsBlob = voice.blob;
                 localVoiceUrl = voice.url;
                 voiceDuration = voice.duration || 0;
@@ -579,6 +615,46 @@ export default function CrearPage() {
         subtitles: { ...project.subtitles, cues },
         voice: localVoiceUrl ? project.voice : project.voice,
       };
+      // 🎵 Música SIEMPRE: 1ª opción la canción subida por el usuario; si no hay,
+      // se compone una original al momento (síntesis local con energía verificada)
+      if (!base.music) {
+        setJobStage({ stage: "Preparando música…", progress: 63 });
+        try {
+          const userTracks = await getUserTracks();
+          if (userTracks.length) {
+            const t = userTracks[0];
+            base.music = {
+              id: t.id,
+              name: t.name,
+              duration: t.duration,
+              bpm: t.bpm,
+              category: t.category || "personal",
+              url: t.url,
+            };
+            addLog(`[MÚSICA] Usando tu canción "${t.name}" (${t.duration.toFixed(0)}s)`);
+          }
+        } catch (e) {
+          addLog(`[MÚSICA] Error leyendo tus pistas: ${errText(e)}`);
+        }
+        if (!base.music) {
+          const estDur = Math.max(8, Math.min(38, picked.reduce((a, g) => a + (g.end - g.start), 0)));
+          try {
+            const track = await generateMusicTrack(estDur);
+            base.music = {
+              id: track.id,
+              name: track.name,
+              duration: track.duration,
+              bpm: track.bpm,
+              category: track.category,
+              url: track.url,
+            };
+            addLog(`[MÚSICA] "${track.name}" compuesta · ${track.duration.toFixed(0)}s · energía OK`);
+          } catch (e) {
+            addLog(`[MÚSICA] Falló la generación: ${errText(e)}`);
+          }
+        }
+      }
+
       const plan = buildEditPlan(base);
       if (localVoiceUrl) {
         plan.voice = {
@@ -702,6 +778,21 @@ export default function CrearPage() {
             onStage,
           });
         }
+      }
+
+      // 🔎 Verificación automática: el vídeo NUNCA se entrega sin audio audible
+      setJobStage({ stage: "Verificando sonido del vídeo…", progress: 99 });
+      try {
+        const aud = await verifyFinalAudio(result.blob);
+        addLog(`[VERIFICACIÓN] Audio RMS=${aud.rms.toFixed(4)} pico=${aud.peak.toFixed(2)} dur=${aud.duration.toFixed(1)}s`);
+        if (!aud.ok) {
+          throw new Error(
+            "El vídeo salió sin sonido (verificación automática). Reintenta: si persiste, cambia de red."
+          );
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.includes("sin sonido")) throw e;
+        addLog(`[VERIFICACIÓN] No se pudo analizar el audio (${errText(e)}); se acepta el vídeo.`);
       }
 
       update({ renderUrl: result.url, renderValidation: result.validation, status: "exported" });

@@ -165,6 +165,38 @@ export async function buildSoundtrack(
   return new Blob([buffer], { type: "audio/wav" });
 }
 
+/** ¿El archivo de vídeo contiene audio audible? (decodificación nativa, sin ffmpeg) */
+export async function verifyFinalAudio(
+  blob: Blob
+): Promise<{ ok: boolean; rms: number; peak: number; duration: number }> {
+  const AC: typeof AudioContext =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  const ctx = new AC();
+  try {
+    const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
+    const ch = buf.getChannelData(0);
+    let sum = 0;
+    let peak = 0;
+    let n = 0;
+    for (let i = 0; i < ch.length; i += 41) {
+      const v = Math.abs(ch[i]);
+      sum += v;
+      if (v > peak) peak = v;
+      n++;
+    }
+    const rms = n ? sum / n : 0;
+    return {
+      ok: rms > 0.0012 && peak > 0.02 && buf.duration > 0.5,
+      rms,
+      peak,
+      duration: buf.duration,
+    };
+  } finally {
+    ctx.close().catch(() => {});
+  }
+}
+
 /**
  * Render NATIVO para iPhone/iPad: graba SOLO IMAGEN con MediaRecorder (codificador
  * del sistema, tiempo real). El sonido se añade después de forma determinista con

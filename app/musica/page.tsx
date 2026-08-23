@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { createMusicTrack } from "@/lib/music";
+import { saveUserTrack, createMusicTrack } from "@/lib/music";
 
 export default function MusicaPage() {
   const input = useRef<HTMLInputElement>(null);
@@ -15,7 +15,8 @@ export default function MusicaPage() {
     if (!files) return;
     const list = Array.from(files).filter((f) => f.type.startsWith("audio/"));
     for (const f of list) {
-      const t = await createMusicTrack(f);
+      // Se guarda en el dispositivo: la pista queda disponible para los vídeos nuevos
+      const t = (await saveUserTrack(f)) || (await createMusicTrack(f));
       setTracks((prev) => [...prev, t]);
     }
   }
