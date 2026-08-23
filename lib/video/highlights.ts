@@ -106,27 +106,39 @@ export async function detectHighlights(
     cv.height = 64;
     const g = cv.getContext("2d", { willReadFrequently: true });
     if (!g) return { segments: [{ start: 0, end: dur }], energy: 0.5 };
-    const dt = Math.max(0.2, dur / maxSamples);
+    const dt = Math.max(0.15, dur / maxSamples);
     const scores: number[] = [];
-    let prev: Uint8ClampedArray | null = null;
+    const W = cv.width;
+    const H = cv.height;
+    const N = W * H;
+    let prevLum: Float32Array | null = null;
     for (let t = 0; t < dur; t += dt) {
       if (signal?.aborted) break;
       await seekTo(video, t);
-      g.drawImage(video, 0, 0, cv.width, cv.height);
-      const cur = g.getImageData(0, 0, cv.width, cv.height).data;
-      if (prev) {
-        let d = 0;
-        for (let p = 0; p < cur.length; p += 4) {
-          d +=
-            Math.abs(cur[p] - prev[p]) +
-            Math.abs(cur[p + 1] - prev[p + 1]) +
-            Math.abs(cur[p + 2] - prev[p + 2]);
-        }
-        scores.push(d / (cur.length / 4) / 255);
+      g.drawImage(video, 0, 0, W, H);
+      const data = g.getImageData(0, 0, W, H).data;
+      // Luminancia por píxel (más sensible al movimiento real que RGB crudo)
+      const cur = new Float32Array(N);
+      let sum = 0;
+      let sum2 = 0;
+      for (let p = 0, i = 0; p < data.length; p += 4, i++) {
+        const l = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
+        cur[i] = l;
+        sum += l;
+        sum2 += l * l;
+      }
+      if (prevLum) {
+        let diff = 0;
+        for (let i = 0; i < N; i++) diff += Math.abs(cur[i] - prevLum[i]);
+        const motion = diff / N / 30; // 0..~1 (corte brusco = pico)
+        const mean = sum / N;
+        const variance = Math.max(0, sum2 / N - mean * mean);
+        const busy = Math.min(1, Math.sqrt(variance) / 60); // caras, texto, contraste
+        scores.push(Math.min(1, motion * 0.75 + busy * 0.3));
       } else {
         scores.push(0);
       }
-      prev = cur;
+      prevLum = cur;
       if (scores.length >= maxSamples) break;
     }
     if (scores.length < 3)

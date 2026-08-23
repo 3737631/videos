@@ -264,13 +264,23 @@ export async function renderTrack(
   const L = rendered.getChannelData(0);
   const R = rendered.numberOfChannels > 1 ? rendered.getChannelData(1) : L;
 
+  // Normalización de pico: la pista suena con cuerpo y energía (no apagada)
+  let peak = 0;
+  for (let i = 0; i < L.length; i++) {
+    const a = Math.abs(L[i]);
+    const b = Math.abs(R[i]);
+    if (a > peak) peak = a;
+    if (b > peak) peak = b;
+  }
+  const norm = peak > 0 ? Math.min(3, 0.92 / peak) : 1;
+
   // WAV PCM16 estéreo
   const frames = L.length;
   const data = new Int16Array(frames * 2);
   let o = 0;
   for (let i = 0; i < frames; i++) {
-    let l = Math.max(-1, Math.min(1, L[i]));
-    let r = Math.max(-1, Math.min(1, R[i]));
+    let l = Math.max(-1, Math.min(1, L[i] * norm));
+    let r = Math.max(-1, Math.min(1, R[i] * norm));
     data[o++] = l < 0 ? l * 0x8000 : l * 0x7fff;
     data[o++] = r < 0 ? r * 0x8000 : r * 0x7fff;
   }

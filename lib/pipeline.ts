@@ -173,10 +173,29 @@ const NICHE_MUSIC: Partial<Record<string, MusicCategory>> = {
  * (movimiento de los momentos virales) y el nicho, nunca fijada a "viral".
  * Así cada vídeo suena distinto según su contenido.
  */
+const CALM_NICHES = new Set(["romantic", "relaxing", "sad"]);
+
+/** Trocea un vídeo en `cuts` partes iguales (fallback si el análisis falla). */
+function splitEqual(duration: number, cuts: number): Segment[] {
+  const n = Math.max(2, Math.min(6, cuts));
+  const step = duration / n;
+  const out: Segment[] = [];
+  for (let i = 0; i < n; i++)
+    out.push({ start: +(i * step).toFixed(3), end: +((i + 1) * step).toFixed(3) });
+  return out;
+}
+
+/**
+ * En "Automático", la música se elige por el nicho del guion y la energía del
+ * vídeo. El contenido de anuncio/viral debe sonar ENÉRGICO (no relajante).
+ */
 function pickEnergyCategory(energy: number, niche: string): MusicCategory {
-  const group = energy >= 0.6 ? ENERGY_HIGH : energy <= 0.35 ? ENERGY_LOW : ENERGY_MID;
+  let group: MusicCategory[];
+  if (CALM_NICHES.has(niche)) group = energy < 0.45 ? ENERGY_LOW : ENERGY_MID;
+  else if (energy >= 0.55) group = ENERGY_HIGH;
+  else group = ENERGY_MID;
   const nic = NICHE_MUSIC[niche];
-  const pool: MusicCategory[] = nic && group.includes(nic) ? group : (nic ? [nic, ...group] : group);
+  const pool = nic && group.includes(nic) ? group : nic ? [nic, ...group] : group;
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
@@ -214,7 +233,8 @@ export async function runCreationPipeline(
       segments = hl.segments;
       energy = hl.energy;
     } catch {
-      segments = [{ start: 0, end: input.videoDuration || targetSec }];
+      // Si el análisis falla, igual CORTAMOS el vídeo en trozos (nunca el vídeo entero)
+      segments = splitEqual(input.videoDuration || targetSec, 4);
     }
     const durationSec = Math.max(
       3,
@@ -349,7 +369,7 @@ export async function runCreationPipeline(
       async () => {
         return await mixVoiceAndMusic(voiceBlob, music.blob, {
           durationSec,
-          musicVolume: voiceBlob ? 0.14 : 0.9,
+          musicVolume: voiceBlob ? 0.22 : 0.95,
           voiceVolume: 1,
         });
       },
