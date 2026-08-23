@@ -19,7 +19,7 @@ import { analyzeVideo } from "@/lib/analyze";
 import { detectViralHighlights, type ViralSegment } from "@/lib/viral";
 import { detectWatermark } from "@/lib/watermark";
 import { isKokoroReady, onKokoroDownload, preloadKokoro } from "@/lib/tts";
-import { generateMusicTrack, getUserTracks } from "@/lib/music";
+import { generateMusicTrack, getUserTracks, pickMusicCategory } from "@/lib/music";
 
 // Detección de iPhone/iPad para optimizar velocidad de render
 const IS_IOS =
@@ -211,6 +211,8 @@ export default function CrearPage() {
         console.log(`${tag} 3) Generando voz de prueba (TTS)…`);
         const v = await generateSpeech(settings, "This is a quick self test.", settings.ttsVoiceId || "alloy");
         console.log(`${tag}    OK · proveedor=${v.provider} · ${v.duration.toFixed(1)}s`);
+        const cat = pickMusicCategory("my morning routine lifestyle vlog");
+        console.log(`${tag} 4) Categoría automática de ejemplo: ${cat}`);
         console.log(`${tag} ✅ TODO CORRECTO`);
         return true;
       } catch (e) {
@@ -638,8 +640,15 @@ export default function CrearPage() {
         }
         if (!base.music) {
           const estDur = Math.max(8, Math.min(38, picked.reduce((a, g) => a + (g.end - g.start), 0)));
+          // Categoría musical elegida automáticamente por el tono del guion/estilo
+          const musicCat = pickMusicCategory(
+            script.map((s) => s.text).join(" "),
+            project.style,
+            project.goal
+          );
+          addLog(`[MÚSICA] Categoría automática: ${musicCat}`);
           try {
-            const track = await generateMusicTrack(estDur);
+            const track = await generateMusicTrack(estDur, musicCat);
             base.music = {
               id: track.id,
               name: track.name,

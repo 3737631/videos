@@ -150,19 +150,18 @@ export async function generateSpeech(
   }
   const errs: string[] = [];
   let result: TtsResult | null = null;
-  // En MÓVIL StreamElements va primero: es inmediato y evita descargar el modelo
-  // neuronal (Kokoro) que en iPhone tarda minutos o se queda colgado.
+  // En MÓVIL la cadena NO incluye Kokoro: descargar ~86MB en un iPhone es lo que
+  // provocaba el bloqueo del 42%. TikTok-TTS es inmediato y tiene CORS abierto.
   const isMobile =
     typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
   const chain: Array<() => Promise<TtsResult>> = isMobile
     ? [
-        () => generateStreamElementsTts(text, voiceId),
+        () => generateTiktokTts(text, voiceId),
         () => generateGoogleTts(text),
-        () => generateKokoroTts(text, voiceId, options?.onProgress),
       ]
     : [
         () => generateKokoroTts(text, voiceId, options?.onProgress),
-        () => generateStreamElementsTts(text, voiceId),
+        () => generateTiktokTts(text, voiceId),
         () => generateGoogleTts(text),
       ];
   for (const step of chain) {
@@ -178,32 +177,58 @@ export async function generateSpeech(
   return result;
 }
 
-// ===== Voz Polly gratuita vía StreamElements (CORS abierto, sin claves, ~1s) =====
-const SE_VOICE_MAP: Record<string, string> = {
-  alloy: "Joanna",
-  nova: "Salli",
-  shimmer: "Kimberly",
-  echo: "Matthew",
-  onyx: "Joey",
-  fable: "Brian",
+// ===== Voz estilo TikTok vía worker público (CORS abierto, sin claves, ~1s) =====
+const TIKTOK_VOICE_MAP: Record<string, string> = {
+  alloy: "en_us_001",
+  nova: "en_us_002",
+  shimmer: "en_female_samc",
+  echo: "en_male_narration",
+  onyx: "en_us_010",
+  fable: "en_male_cody",
 };
 
-async function generateStreamElementsTts(text: string, voiceId: string): Promise<TtsResult> {
-  const chunks = splitForTts(text, 280);
+const TIKTOK_TTS_URL = "https://tiktok-tts.weilnet.workers.dev/api/generation";
+
+function base64ToBlob(b64: string, type = "audio/mpeg"): Blob {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type });
+}
+
+async function generateTiktokTts(text: string, voiceId: string): Promise<TtsResult> {
+  const chunks = splitForTts(text, 110);
   const parts: Blob[] = [];
   for (const chunk of chunks) {
-    const target = `https://api.streamelements.com/kappa/v2/speech?voice=${
-      SE_VOICE_MAP[voiceId] || "Joanna"
-    }&text=${encodeURIComponent(chunk)}`;
-    const res = await fetchWithTimeout(target, 15000);
-    if (!res.ok) throw new Error(`StreamElements HTTP ${res.status}`);
-    const b = await res.blob();
-    if (b.size < 1024) throw new Error("StreamElements devolvió audio vacío");
-    parts.push(b);
-    if (chunks.length > 1) await new Promise((r) => setTimeout(r, 120));
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 15000);
+    let json: { success?: boolean; data?: string; message?: string };
+    try {
+      const res = await fetch(TIKTOK_TTS_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: chunk, voice: TIKTOK_VOICE_MAP[voiceId] || "en_us_001" }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok) throw new Error(`TikTok-TTS HTTP ${res.status}`);
+      json = await res.json();
+    } catch (e) {
+      clearTimeout(t);
+      throw new Error(
+        e instanceof Error && e.name === "AbortError"
+          ? "TikTok-TTS sin respuesta (15s)"
+          : `TikTok-TTS: ${e instanceof Error ? e.message : "error"}`
+      );
+    }
+    clearTimeout(t);
+    if (!json.success || !json.data) throw new Error(`TikTok-TTS: ${json.message || "sin datos"}`);
+    const blob = base64ToBlob(json.data);
+    if (blob.size < 1024) throw new Error("TikTok-TTS devolvió audio vacío");
+    parts.push(blob);
+    if (chunks.length > 1) await new Promise((r) => setTimeout(r, 150));
   }
   const blob = parts.length === 1 ? parts[0] : new Blob(parts, { type: "audio/mpeg" });
-  return finalizeTts(blob, "streamelements-polly");
+  return finalizeTts(blob, "tiktok-tts");
 }
 
 // ===== Voz neuronal LOCAL (Kokoro-82M vía WASM): ilimitada, sin claves =====

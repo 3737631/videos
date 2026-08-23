@@ -152,21 +152,312 @@ function encodeWavStereo(chans: Float32Array[], sampleRate: number): Blob {
 
 // Notas en Hz
 const N = {
-  A2: 110.0, C3: 130.81, D3: 146.83, E3: 164.81, F3: 174.61, G3: 196.0,
-  A3: 220.0, C4: 261.63, E4: 329.63, F4: 349.23, G4: 392.0, A4: 440.0,
-  B4: 493.88, C5: 523.25, E5: 659.26,
+  A1: 55.0, C2: 65.41, D2: 73.42, E2: 82.41, F2: 87.31, G2: 98.0,
+  A2: 110.0, Bb2: 116.54, C3: 130.81, D3: 146.83, E3: 164.81, F3: 174.61, G3: 196.0,
+  A3: 220.0, B3: 246.94, C4: 261.63, D4: 293.66, E4: 329.63, F4: 349.23, G4: 392.0,
+  A4: 440.0, B4: 493.88, C5: 523.25, D5: 587.33, E5: 659.26, F5: 698.46, G5: 783.99,
 };
 
-const PROG: number[][] = [
-  [N.A2, N.A3, N.C4, N.E4], // Am
-  [N.F3, N.A3, N.C4, N.F4], // F
-  [N.C3, N.G3, N.C4, N.E4], // C
-  [N.G3, N.B4, N.D3 * 2, N.G4], // G
+export type MusicCategory =
+  | "viral"
+  | "lifestyle"
+  | "romantico"
+  | "misterioso"
+  | "triste"
+  | "divertido"
+  | "motivacional"
+  | "storytelling"
+  | "relajado";
+
+interface StylePreset {
+  label: string;
+  bpm: number;
+  /** 4 acordes (compás cada uno), [bajo, voz1, voz2, voz3] */
+  chords: number[][];
+  arp: number[];
+  padType: OscillatorType;
+  padVol: number;
+  bassType: OscillatorType;
+  bassVol: number;
+  bassFilterHz: number;
+  arpType: OscillatorType;
+  arpVol: number;
+  arpEverySteps: number; // en corcheas
+  kickPattern: number[]; // beats (0-3) con bombo
+  hatSteps: number[]; // pasos de corchea (0-7) con hi-hat
+  padAttack: number;
+}
+
+const STYLES: Record<MusicCategory, StylePreset> = {
+  viral: {
+    label: "Energético viral",
+    bpm: 128,
+    chords: [
+      [N.A2, N.A3, N.C4, N.E4],
+      [N.F3, N.A3, N.C4, N.F4],
+      [N.C3, N.G3, N.C4, N.E4],
+      [N.G3, N.B3, N.D4, N.G4],
+    ],
+    arp: [N.A4, N.E5, N.C5, N.E4],
+    padType: "triangle",
+    padVol: 0.07,
+    bassType: "sine",
+    bassVol: 0.32,
+    bassFilterHz: 700,
+    arpType: "square",
+    arpVol: 0.05,
+    arpEverySteps: 2,
+    kickPattern: [0, 1, 2, 3],
+    hatSteps: [1, 3, 5, 7],
+    padAttack: 0.08,
+  },
+  lifestyle: {
+    label: "Lifestyle",
+    bpm: 102,
+    chords: [
+      [N.C3, N.E4, N.G4, N.C5],
+      [N.G3, N.D4, N.G4, N.B4],
+      [N.A2, N.C4, N.E4, N.A4],
+      [N.F3, N.A3, N.C4, N.F4],
+    ],
+    arp: [N.G4, N.C5, N.E5, N.G4],
+    padType: "triangle",
+    padVol: 0.08,
+    bassType: "sine",
+    bassVol: 0.26,
+    bassFilterHz: 600,
+    arpType: "sine",
+    arpVol: 0.06,
+    arpEverySteps: 2,
+    kickPattern: [0, 2],
+    hatSteps: [2, 6],
+    padAttack: 0.12,
+  },
+  romantico: {
+    label: "Romántico",
+    bpm: 76,
+    chords: [
+      [N.F3, N.A3, N.C4, N.F4],
+      [N.G3, N.B3, N.D4, N.G4],
+      [N.C3, N.E4, N.G4, N.C5],
+      [N.A2, N.C4, N.E4, N.A4],
+    ],
+    arp: [N.C5, N.F5, N.E5, N.C5],
+    padType: "sine",
+    padVol: 0.10,
+    bassType: "sine",
+    bassVol: 0.22,
+    bassFilterHz: 500,
+    arpType: "sine",
+    arpVol: 0.05,
+    arpEverySteps: 4,
+    kickPattern: [0],
+    hatSteps: [],
+    padAttack: 0.25,
+  },
+  misterioso: {
+    label: "Misterioso",
+    bpm: 92,
+    chords: [
+      [N.D2 * 2, N.A3, N.D4, N.F4],
+      [N.Bb2, N.D4, N.F4, N.Bb2 * 4],
+      [N.F2 * 2, N.C4, N.F4, N.A4],
+      [N.C3, N.G3, N.C4, N.E4],
+    ],
+    arp: [N.D4, N.F4, N.A4, N.D5],
+    padType: "sawtooth",
+    padVol: 0.05,
+    bassType: "sine",
+    bassVol: 0.34,
+    bassFilterHz: 400,
+    arpType: "triangle",
+    arpVol: 0.04,
+    arpEverySteps: 4,
+    kickPattern: [0, 2],
+    hatSteps: [3, 7],
+    padAttack: 0.18,
+  },
+  triste: {
+    label: "Triste emotivo",
+    bpm: 66,
+    chords: [
+      [N.A2, N.C4, N.E4, N.A4],
+      [N.E2 * 2, N.B3, N.E4, N.G4],
+      [N.F2 * 2, N.A3, N.C4, N.F4],
+      [N.C3, N.E4, N.G4, N.C5],
+    ],
+    arp: [N.E4, N.A4, N.C5, N.E5],
+    padType: "triangle",
+    padVol: 0.09,
+    bassType: "sine",
+    bassVol: 0.20,
+    bassFilterHz: 450,
+    arpType: "sine",
+    arpVol: 0.04,
+    arpEverySteps: 8,
+    kickPattern: [],
+    hatSteps: [],
+    padAttack: 0.35,
+  },
+  divertido: {
+    label: "Divertido",
+    bpm: 134,
+    chords: [
+      [N.C3, N.E4, N.G4, N.C5],
+      [N.G2, N.D4, N.G4, N.B4],
+      [N.F2 * 2, N.A3, N.C4, N.F4],
+      [N.C3, N.E4, N.G4, N.C5],
+    ],
+    arp: [N.C5, N.E5, N.G5, N.E5],
+    padType: "square",
+    padVol: 0.045,
+    bassType: "triangle",
+    bassVol: 0.28,
+    bassFilterHz: 800,
+    arpType: "square",
+    arpVol: 0.055,
+    arpEverySteps: 1,
+    kickPattern: [0, 1, 2, 3],
+    hatSteps: [0, 2, 4, 5, 6, 7],
+    padAttack: 0.02,
+  },
+  motivacional: {
+    label: "Motivacional épico",
+    bpm: 120,
+    chords: [
+      [N.G2, N.D4, N.G4, N.B4],
+      [N.D2 * 2, N.A3, N.D4, N.F4],
+      [N.E2 * 2, N.B3, N.E4, N.G4],
+      [N.C3, N.G3, N.C4, N.E4],
+    ],
+    arp: [N.G4, N.D5, N.G5, N.D5],
+    padType: "sawtooth",
+    padVol: 0.06,
+    bassType: "sine",
+    bassVol: 0.36,
+    bassFilterHz: 750,
+    arpType: "sawtooth",
+    arpVol: 0.04,
+    arpEverySteps: 2,
+    kickPattern: [0, 1, 2, 3],
+    hatSteps: [2, 6],
+    padAttack: 0.06,
+  },
+  storytelling: {
+    label: "Storytelling cálido",
+    bpm: 86,
+    chords: [
+      [N.F3, N.A3, N.C4, N.E4],
+      [N.C3, N.E4, N.G4, N.C5],
+      [N.A2, N.C4, N.E4, N.A4],
+      [N.G3, N.B3, N.D4, N.G4],
+    ],
+    arp: [N.A4, N.C5, N.E5, N.C5],
+    padType: "triangle",
+    padVol: 0.085,
+    bassType: "sine",
+    bassVol: 0.24,
+    bassFilterHz: 550,
+    arpType: "sine",
+    arpVol: 0.05,
+    arpEverySteps: 4,
+    kickPattern: [0],
+    hatSteps: [4],
+    padAttack: 0.2,
+  },
+  relajado: {
+    label: "Relajado ambient",
+    bpm: 72,
+    chords: [
+      [N.A2, N.C4, N.E4, N.G4],
+      [N.F2 * 2, N.A3, N.C4, N.E4],
+      [N.C3, N.E4, N.G4, N.B4],
+      [N.G2, N.B3, N.D4, N.F4],
+    ],
+    arp: [N.E5, N.A4, N.G4, N.E4],
+    padType: "sine",
+    padVol: 0.11,
+    bassType: "sine",
+    bassVol: 0.18,
+    bassFilterHz: 420,
+    arpType: "sine",
+    arpVol: 0.03,
+    arpEverySteps: 8,
+    kickPattern: [],
+    hatSteps: [],
+    padAttack: 0.45,
+  },
+};
+
+const CATEGORY_KEYWORDS: Array<{ cat: MusicCategory; words: string[] }> = [
+  {
+    cat: "divertido",
+    words: ["funny", "gracioso", "divertid", "risa", "reír", "reir", "lol", "meme", "chiste", "cómico", "comico", "broma"],
+  },
+  {
+    cat: "romantico",
+    words: ["amor", "love", "romántic", "romantic", "pareja", "novio", "novia", "boda", "wedding", "corazón", "corazon", "crush"],
+  },
+  {
+    cat: "triste",
+    words: ["triste", "sad", "llorar", "emotivo", "pérdida", "perdida", "adiós", "adios", "nostalgia", "extrañar", "heartbreak", "despedida"],
+  },
+  {
+    cat: "misterioso",
+    words: ["misterio", "mystery", "secreto", "secret", "oculto", "nadie sabe", "escalofriante", "creepy", "enigma", "oscuro"],
+  },
+  {
+    cat: "motivacional",
+    words: ["motiva", "éxito", "exito", "success", "ganar", "win", "logro", "superar", "disciplina", "hustle", "grind", "sueño", "sueno", "dream", "mindset", "esfuerzo"],
+  },
+  {
+    cat: "relajado",
+    words: ["relaj", "calma", "chill", "asmr", "spa", "tranquil", "zen", "descanso", "sleep", "dormir", "satisfying"],
+  },
+  {
+    cat: "storytelling",
+    words: ["historia", "story", "un día", "un dia", "one day", "resulta que", "resultó", "resulto", "cuénta", "cuenta qué", "pasó que", "thread", "sabías", "sabias"],
+  },
+  {
+    cat: "lifestyle",
+    words: ["rutina", "routine", "day in my life", "vlog", "lifestyle", "outfit", "skincare", "café", "cafe", "morning", "hogar", "decor", "viaje", "travel", "playa"],
+  },
 ];
 
-const ARP = [N.A4, N.E5, N.C5, N.E4];
+/** Elige la categoría musical automáticamente según el tono del guion y del proyecto */
+export function pickMusicCategory(
+  scriptText: string,
+  projectStyle?: string,
+  goal?: string
+): MusicCategory {
+  const hay = `${scriptText} ${projectStyle || ""} ${goal || ""}`.toLowerCase();
+  let bestCat: MusicCategory = "viral";
+  let bestScore = 0;
+  for (const { cat, words } of CATEGORY_KEYWORDS) {
+    let score = 0;
+    for (const w of words) {
+      if (hay.includes(w)) score += w.length > 5 ? 2 : 1;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestCat = cat;
+    }
+  }
+  // Sin señales claras: estilo declarado del proyecto como pista secundaria
+  if (bestScore === 0) {
+    const s = `${projectStyle || ""} ${goal || ""}`.toLowerCase();
+    if (/lujo|premium|elegan/.test(s)) return "lifestyle";
+    if (/educativ|tutorial|tip|consejo/.test(s)) return "storytelling";
+    if (/deport|fitness|gym|acción|accion/.test(s)) return "motivacional";
+  }
+  return bestCat;
+}
 
-export async function generateMusicTrack(seconds: number): Promise<GeneratedMusicTrack> {
+export async function generateMusicTrack(
+  seconds: number,
+  category: MusicCategory = "viral"
+): Promise<GeneratedMusicTrack> {
+  const S = STYLES[category] || STYLES.viral;
   const dur = Math.max(8, Math.min(45, seconds + 1));
   const sr = 44100;
   const OC: typeof OfflineAudioContext =
@@ -175,7 +466,7 @@ export async function generateMusicTrack(seconds: number): Promise<GeneratedMusi
       .webkitOfflineAudioContext;
   const ctx = new OC(2, Math.ceil(dur * sr), sr);
 
-  const bpm = 122;
+  const bpm = S.bpm;
   const beat = 60 / bpm;
   const bar = beat * 4;
 
@@ -197,6 +488,7 @@ export async function generateMusicTrack(seconds: number): Promise<GeneratedMusi
     attack = 0.005,
     filterHz?: number
   ) => {
+    if (!isFinite(freq) || freq <= 0) return;
     const osc = ctx.createOscillator();
     osc.type = type;
     osc.frequency.value = freq;
@@ -255,18 +547,18 @@ export async function generateMusicTrack(seconds: number): Promise<GeneratedMusi
   for (let b = 0; b < bars; b++) {
     const t0 = b * bar;
     if (t0 > dur) break;
-    const chord = PROG[b % 4];
+    const chord = S.chords[b % 4];
     // Pad (acorde sostenido)
-    for (const fq of chord.slice(1)) tone(fq, t0, bar * 0.95, "triangle", 0.07, 0.08, 2200);
+    for (const fq of chord.slice(1)) tone(fq, t0, bar * 0.95, S.padType, S.padVol, S.padAttack, 2200);
     // Bajo a negras
-    for (let bt = 0; bt < 4; bt++) tone(chord[0], t0 + bt * beat, beat * 0.85, "sine", 0.30, 0.004, 700);
-    // Arpegio a corcheas alternas
-    for (let st = 0; st < 8; st += 2) {
-      tone(ARP[(b + st) % ARP.length], t0 + st * (beat / 2), beat * 0.42, "square", 0.05, 0.003, 5200);
+    for (let bt = 0; bt < 4; bt++) tone(chord[0], t0 + bt * beat, beat * 0.85, S.bassType, S.bassVol, 0.004, S.bassFilterHz);
+    // Arpegio
+    for (let st = 0; st < 8; st += S.arpEverySteps) {
+      tone(S.arp[(b + st) % S.arp.length], t0 + st * (beat / 2), beat * 0.42, S.arpType, S.arpVol, 0.003, 5200);
     }
-    // Batería
-    for (let bt = 0; bt < 4; bt++) kick(t0 + bt * beat);
-    for (let st = 1; st < 8; st += 2) hat(t0 + st * (beat / 2));
+    // Batería según patrón del estilo
+    for (const bt of S.kickPattern) kick(t0 + bt * beat);
+    for (const st of S.hatSteps) hat(t0 + st * (beat / 2));
   }
 
   const rendered = await ctx.startRendering();
@@ -279,11 +571,11 @@ export async function generateMusicTrack(seconds: number): Promise<GeneratedMusi
   const blob = encodeWavStereo([L, R], sr);
   const url = URL.createObjectURL(blob);
   return {
-    id: `auto-viral-${Date.now().toString(36)}`,
-    name: "Viral Pop (automática)",
+    id: `auto-${category}-${Date.now().toString(36)}`,
+    name: `${S.label} (automática)`,
     duration: rendered.duration,
     bpm,
-    category: "auto",
+    category,
     url,
     blob,
   };
