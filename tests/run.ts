@@ -1,282 +1,267 @@
 ﻿/**
- * Suite de tests Node (sin navegador): clasificador, selector, biblioteca,
- * validación de audio, catálogo de voces, progreso monótono, plan de edición,
- * cliente backend (servidor HTTP real en localhost) y smoke del worker.
- * Ejecutar: npm run test
- *
- * Tests de RED REAL se saltan salvo que definas TEST_TTS_URL.
+ * TESTS V3 — suite Node (tsx). Cubre toda la lógica pura del pipeline:
+ * catálogo, subtítulos, nicho, selector musical, progreso, red y etapas.
  */
-import { classifyMusic } from "../lib/audio/musicClassifier";
-import { selectTrack, loadHistoryForTest } from "../lib/audio/musicSelector";
-import { buildLibrary, mulberry32 } from "../lib/audio/musicLibrary";
-import { computeAudioStats } from "../lib/audio/validation";
-import { VOICES, LEGACY_IDS, sttLanguageFromLocale, getVoiceDef } from "../lib/audio/voices";
-import { STAGE_BANDS, createProgressTracker } from "../lib/progress";
-import { buildEditPlan } from "../lib/editplan";
-import type { Project } from "../types";
+import assert from "node:assert";
+import http from "node:http";
+import { VOICE_CATALOG, getVoiceById, sameLanguageAlternates, DEFAULT_VOICE_BY_LANG } from "../lib/voices/catalog";
+import { splitSentences, synthesize } from "../lib/voices/engine";
+import { buildSubtitles, styleForNiche } from "../lib/subtitles";
+import { detectNiche, suggestedSpeechRate, suggestedCTA, NICHE_PALETTES } from "../lib/niche";
+import { detectScriptLang, runStage, type PipelineHandlers } from "../lib/pipeline";
+import { pickTrackPure } from "../lib/audio/musicSelector";
+import { buildLibrary } from "../lib/audio/musicLibrary";
 import {
-  setApiBaseUrlForTests,
-  llmViaBackend,
-  ttsViaBackend,
-  fetchWithTimeout,
-  TimeoutError,
-  toFriendlyError,
-} from "../lib/apiClient";
-import { createServer, type Server } from "node:http";
-import { AddressInfo } from "node:net";
+  STAGE_BANDS,
+  STAGE_LABELS,
+  createProgressTracker,
+  type StageName,
+} from "../lib/progress";
+import { toFriendlyError, fetchBinaryWithProgress, TimeoutError } from "../lib/net";
+import { hashKey } from "../lib/idb";
 
 let passed = 0;
 let failed = 0;
-function check(name: string, cond: boolean, extra = "") {
-  if (cond) {
-    passed++;
-    console.log(`  OK ${name}`);
-  } else {
-    failed++;
-    console.error(`  FALLO ${name} ${extra}`);
+const failures: string[] = [];
+function t(name: string, fn: () => void | Promise<void>) {
+  return Promise.resolve()
+    .then(fn)
+    .then(() => {
+      passed++;
+      console.log(`  ✓ ${name}`);
+    })
+    .catch((e) => {
+      failed++;
+      failures.push(name);
+      console.error(`  ✗ ${name}\n    ${e?.message ?? e}`);
+    });
+}
+
+function fakeHandlers(signal?: AbortSignal): PipelineHandlers {
+  return { onStage: () => {}, signal };
+}
+
+async function main() {
+  console.log("\n── Catálogo de voces ──");
+  await t("IDs únicos", () => {
+    const ids = new Set(VOICE_CATALOG.map((v) => v.id));
+    assert.equal(ids.size, VOICE_CATALOG.length);
+  });
+  await t("Voces Piper con URL y tamaño reales", () => {
+    for (const v of VOICE_CATALOG.filter((x) => x.runtime === "piper")) {
+      assert.ok(v.modelUrl!.startsWith("https://huggingface.co/rhasspy/piper-voices/"));
+      assert.ok(v.configUrl!.endsWith(".onnx.json"));
+      assert.ok(v.sizeBytes > 20_000_000, `${v.id} sin tamaño real`);
+      assert.match(v.id, /^(es|fr|de|it|pt)_/);
+    }
+  });
+  await t("Idiomas cubiertos ES/EN/FR/DE/IT/PT + fallback mismo idioma", () => {
+    for (const lang of Object.keys(DEFAULT_VOICE_BY_LANG)) {
+      const id = DEFAULT_VOICE_BY_LANG[lang];
+      assert.ok(getVoiceById(id), `falta voz por defecto ${lang}`);
+    }
+    const alts = sameLanguageAlternates("es_ES-carlfm-x_low");
+    assert.ok(alts.length >= 1 && alts.every((v) => v.locale === "es-ES"));
+  });
+
+  console.log("\n── División de frases (TTS) ──");
+  await t("splitSentences: nunca supera el máximo y conserva palabras", () => {
+    const long = Array.from({ length: 40 }, (_, i) => `palabra${i} mas`).join(" ") + ".";
+    const parts = splitSentences(long, 120);
+    for (const p of parts) assert.ok(p.length <= 130);
+    const wordsIn = long.split(/\s+/).filter((w) => w !== ".").length;
+    const wordsOut = parts.join(" ").split(/\s+/).filter(Boolean).length;
+    assert.equal(wordsOut, wordsIn);
+  });
+
+  console.log("\n── Subtítulos estilo CapCut ──");
+  await t("Con voz genera tarjetas de máx. 2 líneas y resaltado coherente", () => {
+    const script =
+      "Este gadget cuesta solo 19 euros con envio GRATIS. Mira lo que hace! Es increíble para tu cocina y llega hoy mismo a tu casa.";
+    const { cues } = buildSubtitles(script, 12.5, { charsPerLine: 24 });
+    assert.ok(cues.length >= 3);
+    let emojis = 0;
+    for (const c of cues) {
+      assert.ok(c.text.split("\n").length <= 2, "más de 2 líneas");
+      assert.equal(c.highlight!.length, c.words.length);
+      emojis += (c.text.match(/\p{Extended_Pictographic}/gu) || []).length;
+      assert.ok(c.end > c.start && c.start >= 0 && c.end <= 12.5 + 0.01);
+    }
+    assert.ok(emojis <= 3, "demasiados emojis");
+    assert.ok(cues.some((c) => c.highlight!.some(Boolean)), "sin resaltados");
+  });
+  await t("Modo solo-música = CERO subtítulos", () => {
+    const { cues } = buildSubtitles("hola mundo", null);
+    assert.equal(cues.length, 0);
+  });
+  await t("Estilo usa paleta del nicho y animación pop", () => {
+    const s = styleForNiche("tiktokshop");
+    assert.equal(s.animation, "pop");
+    assert.equal(s.activeColor, NICHE_PALETTES.tiktokshop.activeColor);
+  });
+
+  console.log("\n── Modo dropshipping ──");
+  await t("Detecta TikTok Shop / producto viral", () => {
+    const n = detectNiche("Compra ahora en TikTok Shop, envío gratis solo hoy");
+    assert.ok(n.isDropshipping);
+  });
+  await t("Clasifica nicho por palabras clave", () => {
+    assert.equal(detectNiche("mi rutina skincare con este serum").niche, "belleza");
+    assert.equal(detectNiche("la freidora de aire perfecta en tu cocina").niche, "cocina");
+    assert.equal(detectNiche("este cargador powerbank es un gran gadget").niche, "gadget");
+    assert.ok(!detectNiche("hola que tal").isDropshipping);
+  });
+  await t("Ajustes derivados: velocidad y CTA solo en español", () => {
+    const n = detectNiche("dropshipping gadget");
+    assert.equal(suggestedSpeechRate(n), 1.08);
+    assert.ok(suggestedCTA(n, "es").length > 0);
+    assert.equal(suggestedCTA(n, "en"), "");
+    assert.equal(suggestedSpeechRate(detectNiche("receta de la abuela")), 1);
+  });
+
+  console.log("\n── Idioma del guion ──");
+  await t("Detección heurística ES/EN/FR", () => {
+    assert.equal(detectScriptLang("Mira este truco para tu casa, es gratis y funciona ahora"), "es");
+    assert.equal(detectScriptLang("Look at this best gadget for your kitchen, wait for it"), "en");
+    assert.equal(detectScriptLang("Regarde ce gadget pour la maison avec cette offre"), "fr");
+  });
+
+  console.log("\n── Música: selección anti-repetición ──");
+  await t("Biblioteca con 100 pistas únicas", () => {
+    const lib = buildLibrary();
+    assert.equal(lib.length, 100);
+    assert.equal(new Set(lib.map((x) => x.id)).size, 100);
+  });
+  await t("Anti-repetición: separación mínima de 10 vídeos entre repeticiones", () => {
+    const lib = buildLibrary();
+    const cat = lib[0].category;
+    const recent: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      const { track } = pickTrackPure(cat, cat, 1000 + i * 7919, new Set(recent.slice(-10)), recent);
+      // con categoría de exactamente 10 pistas, la misma puede volver tras el
+      // ciclo completo, pero NUNCA antes de 10 selecciones
+      assert.ok(!recent.slice(-9).includes(track.id), `${track.id} volvió antes de 10`);
+      recent.push(track.id);
+    }
+    const gaps = new Map<string, number>();
+    for (let i = 0; i < recent.length; i++) {
+      const prev = gaps.get(recent[i]);
+      if (prev !== undefined) assert.ok(i - prev >= 10);
+      gaps.set(recent[i], i);
+    }
+  });
+
+  console.log("\n── Progreso monótono ──");
+  await t("Bandas válidas y etiquetas completas", () => {
+    const stages = Object.keys(STAGE_BANDS) as Exclude<StageName, "ERROR">[];
+    let prev = -1;
+    for (const s of stages) {
+      const [a, b] = STAGE_BANDS[s as keyof typeof STAGE_BANDS];
+      assert.ok(b >= a && a >= prev, `banda desordenada en ${s}`);
+      assert.ok(STAGE_LABELS[s as StageName]);
+      prev = b;
+    }
+    assert.equal(STAGE_BANDS.DONE[1], 100);
+  });
+  await t("El % nunca retrocede ni se pasa", () => {
+    const seen: number[] = [];
+    const tr = createProgressTracker((_s, _l, pct) => seen.push(pct));
+    tr.set("GENERATING_VOICE", 50);
+    tr.set("PREPARING"); // retrocedería → se clampa
+    tr.set("RENDERING", 30);
+    tr.done();
+    assert.deepEqual(seen, [...seen].sort((a, b) => a - b));
+    assert.equal(seen[seen.length - 1], 100);
+    assert.equal(tr.current(), 100);
+  });
+
+  console.log("\n── Etapas: timeout / reintento / cancelación ──");
+  await t("runStage reintenta y triunfa en el 2º intento", async () => {
+    let calls = 0;
+    const out = await runStage(
+      "ANALYZING_SCRIPT",
+      async () => {
+        calls++;
+        if (calls < 2) throw new Error("boom");
+        return "ok";
+      },
+      fakeHandlers(),
+      createProgressTracker(() => {}),
+      { timeoutMs: 2000, retries: 2 }
+    );
+    assert.equal(out, "ok");
+    assert.equal(calls, 2);
+  });
+  await t("Timeout duro dispara TimeoutError", async () => {
+    await assert.rejects(
+      runStage("MIXING_AUDIO", () => new Promise(() => {}), fakeHandlers(), createProgressTracker(() => {}), {
+        timeoutMs: 80,
+        retries: 0,
+      }),
+      TimeoutError
+    );
+  });
+  await t("Abort externo cancela al instante", async () => {
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 30);
+    await assert.rejects(
+      runStage("RENDERING", (sig) => new Promise((_, rej) => sig.addEventListener("abort", () => rej(new DOMException("x", "AbortError")))), fakeHandlers(ctrl.signal), createProgressTracker(() => {}), {
+        timeoutMs: 5000,
+        retries: 3,
+      }),
+      (e: unknown) => (e instanceof DOMException ? e.name === "AbortError" : false)
+    );
+  });
+
+  console.log("\n── Cache de audio (clave estable) ──");
+  await t("hashKey determinista y sensible", () => {
+    assert.equal(hashKey("hola|mundo"), hashKey("hola|mundo"));
+    assert.notEqual(hashKey("hola|mundo"), hashKey("hola|mondo"));
+  });
+  await t("synthesize rechaza guion vacío sin tocar red", async () => {
+    await assert.rejects(synthesize("", "es_ES-carlfm-x_low"), /Guion vacío/);
+    await assert.rejects(synthesize("hola", "voz-inexistente"), /Voz desconocida/);
+  });
+
+  console.log("\n── Errores humanizados ──");
+  await t("toFriendlyError mapea fallos comunes", () => {
+    assert.match(toFriendlyError(new Error("Failed to fetch")), /Sin conexión/);
+    assert.match(toFriendlyError(new TimeoutError(30000)), /Tardó demasiado/);
+    assert.equal(toFriendlyError(new DOMException("x", "AbortError")), "Operación cancelada.");
+    assert.equal(toFriendlyError(undefined), "Algo salió mal.");
+  });
+
+  console.log("\n── Red: progreso binario con servidor local ──");
+  await t("fetchBinaryWithProgress reporta bytes y ensambla", async () => {
+    const payload = Buffer.alloc(64 * 1024, 7);
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "Content-Length": String(payload.length) });
+      res.end(payload);
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const addr = server.address() as { port: number };
+    let events = 0;
+    try {
+      const buf = await fetchBinaryWithProgress(
+        `http://127.0.0.1:${addr.port}/bin`,
+        (l, tot) => {
+          events++;
+          if (tot) assert.ok(tot >= l);
+        },
+        { timeoutMs: 5000 }
+      );
+      assert.equal(buf.byteLength, payload.length);
+      assert.ok(events > 0);
+    } finally {
+      server.close();
+    }
+  });
+
+  console.log(`\n════════ RESULTADO: ${passed} pasan · ${failed} fallan ════════`);
+  if (failed > 0) {
+    console.error("Fallan:", failures.join(", "));
+    process.exitCode = 1;
   }
 }
 
-console.log("\n-- Clasificador por scoring --");
-const c1 = classifyMusic({ scriptText: "Hoy te voy a enseñar cómo ganar dinero vendiendo productos" });
-check("dinero/negocio -> motivational", c1.primaryCategory === "motivational", `got ${c1.primaryCategory}`);
-const c2 = classifyMusic({ scriptText: "Mi rutina de mañana skincare café y diario en mi vida" });
-check("rutina -> lifestyle", c2.primaryCategory === "lifestyle", `got ${c2.primaryCategory}`);
-const c3 = classifyMusic({ scriptText: "Esto ocurrió y nadie sabe por qué desapareció sin explicación" });
-check("misterio -> mysterious", c3.primaryCategory === "mysterious", `got ${c3.primaryCategory}`);
-const c4 = classifyMusic({ scriptText: "3 cosas que debes hacer hoy!!! Top trucos increíbles" });
-check("listas+exclamaciones -> viral/motivational", ["viral", "motivational"].includes(c4.primaryCategory), `got ${c4.primaryCategory} conf=${c4.confidence}`);
-const c5 = classifyMusic({ scriptText: "Una historia triste de despedida que me hizo llorar" });
-check("tristeza -> sad", c5.primaryCategory === "sad", `got ${c5.primaryCategory}`);
-const c6 = classifyMusic({ scriptText: "mi novia me confesó algo que jamás imaginé esa noche" });
-check("relato personal -> storytelling/romantic", ["storytelling", "romantic"].includes(c6.primaryCategory), `got ${c6.primaryCategory}`);
-
-console.log("\n-- REGRESIÓN: marcadores de lista (regex rota histórica) --");
-const cList = classifyMusic({ scriptText: "5 razones para empezar hoy mismo" });
-check("'5 razones' puntúa como viral", cList.primaryCategory === "viral", `got ${cList.primaryCategory}`);
-const cPlain = classifyMusic({ scriptText: "el día a día tranquilo en casa cocinando despacio" });
-check("texto sin listas NO es viral", !["viral"].includes(cPlain.primaryCategory), `got ${cPlain.primaryCategory}`);
-
-console.log("\n-- Biblioteca procedural --");
-const lib = buildLibrary();
-check("100 pistas exactas", lib.length === 100, `got ${lib.length}`);
-check("ids únicos", new Set(lib.map((t) => t.id)).size === 100);
-const cats = new Set(lib.map((t) => t.category));
-check("10 categorías", cats.size === 10);
-check("PRNG determinista", mulberry32(42)() === mulberry32(42)());
-
-console.log("\n-- Selector anti-repetición --");
-(globalThis as Record<string, unknown>).localStorage = (() => {
-  const store = new Map<string, string>();
-  return {
-    getItem: (k: string) => store.get(k) ?? null,
-    setItem: (k: string, v: string) => void store.set(k, v),
-  };
-})();
-const picks: string[] = [];
-for (let i = 0; i < 8; i++) {
-  const s = selectTrack("viral", "motivational", `proj-${i}`, 1000 + i * 7919);
-  picks.push(s.track.id);
-}
-check("8 selecciones realizadas", picks.length === 8, picks.join(","));
-const uniqueRecent5 = new Set(picks.slice(-5)).size;
-check("las últimas 5 NO se repiten entre sí (>=4 distintas)", uniqueRecent5 >= 4, picks.join(","));
-const hist = loadHistoryForTest();
-check("historial guarda <=20 y recorta a ventana 5", hist.length <= 20 && hist.length >= 5);
-
-console.log("\n-- Validación de audio (matemática pura) --");
-const mkBuf = (vals: Float32Array, sr = 44100) => ({
-  length: vals.length,
-  sampleRate: sr,
-  getChannelData: () => vals,
-});
-const good = new Float32Array(44100).map((_, i) => Math.sin((2 * Math.PI * 440 * i) / 44100) * 0.5);
-const stGood = computeAudioStats(mkBuf(good));
-check("seno 440Hz válido", stGood.valid && stGood.rms > 0.3, JSON.stringify(stGood));
-const silent = new Float32Array(44100);
-check("silencio inválido (rms=0)", !computeAudioStats(mkBuf(silent)).valid);
-const withNan = good.slice();
-withNan[100] = NaN;
-check("NaN detectado", !computeAudioStats(mkBuf(withNan)).valid);
-const short = good.slice(0, 1000);
-check("duración <0.3s inválida", !computeAudioStats(mkBuf(short)).valid);
-
-// ==== PARTE 2 ====
-
-console.log("\n-- Catálogo único de voces (P2) --");
-check("16 voces definidas", VOICES.length === 16, `got ${VOICES.length}`);
-check("ids únicos", new Set(VOICES.map((v) => v.id)).size === 16);
-check("todas tienen providerVoiceId real", VOICES.every((v) => /^[A-Za-z0-9]{15,40}$/.test(v.providerVoiceId)), VOICES.filter((v) => !/^[A-Za-z0-9]{15,40}$/.test(v.providerVoiceId)).map((v) => v.id).join(","));
-check("solo voces EN tienen kokoro", VOICES.every((v) => v.kokoroVoice === undefined || v.locale.startsWith("en")));
-check("6 idiomas cubiertos", new Set(VOICES.map((v) => v.locale)).size >= 6);
-check("legado alloy -> voz válida", getVoiceDef(LEGACY_IDS.alloy || "").id === "en-US-m");
-check("STT es-ES -> es", sttLanguageFromLocale("es-ES") === "es");
-check("STT en-GB -> en", sttLanguageFromLocale("en-GB") === "en");
-check("STT pt-BR -> pt", sttLanguageFromLocale("pt-BR") === "pt");
-
-console.log("\n-- Progreso monótono (P3) --");
-{
-  const tr = createProgressTracker(() => {});
-  tr.set("RENDERING", 50);
-  const peakAfterRender = tr.current();
-  tr.set("GENERATING_VOICE", 90); // fase "anterior": NO debe bajar el global
-  check("nunca retrocede", tr.current() >= peakAfterRender, `${peakAfterRender} -> ${tr.current()}`);
-  tr.done();
-  check("done() llega a 100", tr.current() === 100);
-  check("bandas ordenadas y dentro de 0..100", Object.values(STAGE_BANDS).every(([a, b]) => a <= b && b <= 100));
-  const tr2 = createProgressTracker(() => {});
-  tr2.set("PREPARING", 10);
-  tr2.fail();
-  check("fail() mantiene % alcanzado", Number.isFinite(tr2.current()) && tr2.current() > 0 && tr2.current() < 20);
-}
-
-console.log("\n-- Precedencia voiceDuration en editplan (P5) --");
-{
-  const baseProject = {
-    id: "t",
-    name: "t",
-    sources: [],
-    subtitles: { cues: [], style: {} },
-    targetDuration: "auto",
-  } as unknown as Project;
-  const p1 = {
-    ...baseProject,
-    editPlan: { voice: { duration: 18, volume: 1 } },
-    subtitles: { cues: [{ start: 0, end: 12, text: "hola", words: [] }], style: {} },
-  } as unknown as Project;
-  const plan1 = buildEditPlan(p1);
-  check("voz (18s) manda sobre cue (12s)", plan1.voice?.duration === 18 && plan1.duration >= 18, JSON.stringify(plan1.duration));
-  const p2 = {
-    ...baseProject,
-    subtitles: { cues: [{ start: 0, end: 9.5, text: "x", words: [] }], style: {} },
-  } as unknown as Project;
-  const plan2 = buildEditPlan(p2);
-  check("sin voz usa último cue (9.5)", plan2.duration >= 9.5, JSON.stringify(plan2.duration));
-}
-
-console.log("\n-- Errores humanos (toFriendlyError) --");
-check("red caída -> mensaje claro", toFriendlyError(new Error("Failed to fetch")).includes("No hay conexión"));
-check("429 -> servidor ocupado", toFriendlyError(new Error("HTTP 429")).includes("ocupado"));
-check("timeout -> consejo útil", toFriendlyError(new TimeoutError(45000)).includes("Tardó demasiado"));
-
-// ==== PARTE 3 ====
-
-async function withMockServer(fn: (port: number) => Promise<void>): Promise<void> {
-  const server: Server = createServer((req, res) => {
-    const url = req.url || "";
-    if (url.startsWith("/health")) {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true }));
-      return;
-    }
-    if (url.startsWith("/llm")) {
-      let body = "";
-      req.on("data", (d) => (body += d));
-      req.on("end", () => {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ content: `eco:${JSON.parse(body || "{}").model || "?"}` }));
-      });
-      return;
-    }
-    if (url.startsWith("/tts-error")) {
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "proveedor caido" }));
-      return;
-    }
-    if (url.includes("delay=")) {
-      const ms = Number(url.match(/delay=(\d+)/)?.[1] || 0);
-      setTimeout(() => {
-        res.writeHead(200, { "Content-Type": "audio/mpeg" });
-        res.end(Buffer.alloc(1200));
-      }, ms);
-      return;
-    }
-    if (url.startsWith("/tts")) {
-      res.writeHead(200, { "Content-Type": "audio/mpeg" });
-      res.end(Buffer.alloc(1200, 1));
-      return;
-    }
-    res.writeHead(404);
-    res.end();
-  });
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  const port = (server.address() as AddressInfo).port;
-  try {
-    await fn(port);
-  } finally {
-    await new Promise<void>((r) => server.close(() => r()));
-  }
-}
-
-async function runNetworkTests(): Promise<void> {
-  console.log("\n-- Cliente backend contra servidor mock (P1/P3) --");
-  await withMockServer(async (port) => {
-    setApiBaseUrlForTests(`http://127.0.0.1:${port}`);
-    const content = await llmViaBackend([{ role: "user", content: "hola" }], "test-model", 64);
-    check("/llm devuelve contenido", content === "eco:test-model", content);
-    const blob = await ttsViaBackend("hola mundo", "VOICEID1234567890", "es-ES");
-    check("/tts devuelve audio >=800B", blob.size >= 800 && blob.type.startsWith("audio/"), `${blob.size}/${blob.type}`);
-    setApiBaseUrlForTests(`http://127.0.0.1:${port}/tts-error`);
-    try {
-      await ttsViaBackend("x", "VOICEID1234567890", "es-ES");
-      check("error del servidor se propaga", false, "no lanzo");
-    } catch (e) {
-      check("error del servidor se propaga", (e instanceof Error ? e.message : "").includes("proveedor caido"));
-    }
-    setApiBaseUrlForTests(`http://127.0.0.1:${port}`);
-    const t0 = Date.now();
-    let timedOut = false;
-    try {
-      await fetchWithTimeout(`http://127.0.0.1:${port}/tts?delay=1200`, {}, 250);
-    } catch (e) {
-      timedOut = e instanceof TimeoutError;
-    }
-    const elapsed = Date.now() - t0;
-    check("timeout corta rápido y limpia timer", timedOut && elapsed < 1100, `${elapsed}ms`);
-    await fetchWithTimeout(`http://127.0.0.1:${port}/health`, {}, 2000);
-    const pendingTimers = process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
-    check("sin timers colgados tras éxito", pendingTimers < 10, `${pendingTimers}`);
-  });
-  setApiBaseUrlForTests(null);
-
-  console.log("\n-- Smoke del worker (worker/src/worker.mjs) --");
-  const mod = await import("../worker/src/worker.mjs");
-  const worker = (mod as { default: { fetch: (req: Request) => Promise<Response> } }).default;
-  const health = await worker.fetch(new Request("http://local/health"));
-  const hj = (await health.json()) as { ok?: boolean };
-  check("/health ok sin secretos", health.status === 200 && hj.ok === true);
-  const pre = await worker.fetch(new Request("http://local/tts", { method: "OPTIONS" }));
-  check("preflight CORS 204", pre.status === 204 && (pre.headers.get("Access-Control-Allow-Origin") || "") !== "");
-  const noKey = await worker.fetch(
-    new Request("http://local/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "hola", voiceId: "XrExE9yKIg1WjnnlVkGX" }) })
-  );
-  check("/tts sin clave -> 503 humano", noKey.status === 503, String(noKey.status));
-  const badVoice = await worker.fetch(
-    new Request("http://local/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "hola", voiceId: "../../etc/passwd" }) })
-  );
-  check("/tts valida voiceId malicioso", [400, 503].includes(badVoice.status), String(badVoice.status));
-
-  if (process.env.TEST_TTS_URL) {
-    console.log("\n-- INTEGRACIÓN REAL contra", process.env.TEST_TTS_URL, "--");
-    setApiBaseUrlForTests(process.env.TEST_TTS_URL);
-    try {
-      const blob = await ttsViaBackend("Esta es una prueba de voz real.", "XrExE9yKIg1WjnnlVkGX", "es-ES", undefined, 30000);
-      check("TTS real devuelve audio", blob.size > 2000, `${blob.size}B`);
-    } catch (e) {
-      check("TTS real devuelve audio", false, e instanceof Error ? e.message : "");
-    }
-    setApiBaseUrlForTests(null);
-  } else {
-    console.log("\n(i) TEST_TTS_URL no definido: pruebas de red real omitidas.");
-  }
-}
-
-runNetworkTests()
-  .catch((e: unknown) => {
-    failed++;
-    console.error("  FALLO error inesperado en tests de red:", e instanceof Error ? e.message : e);
-  })
-  .finally(() => {
-    console.log(`\nRESULTADO: ${passed} pasados · ${failed} fallidos\n`);
-    process.exit(failed > 0 ? 1 : 0);
-  });
+main().finally(() => setTimeout(() => process.exit(process.exitCode ?? 0), 50));

@@ -1,11 +1,11 @@
 /**
  * Selector de pista: weighted-random con semilla del proyecto + historial
- * anti-repetición (nunca repetir las últimas 5 pistas usadas en el dispositivo).
+ * anti-repetición (nunca repetir las últimas 10 pistas usadas).
  */
 import { buildLibrary, type MusicCategory, type TrackDef } from "./musicLibrary";
 
 const HISTORY_KEY = "clipcraft-music-history";
-const HISTORY_MAX = 5;
+const HISTORY_MAX = 10;
 
 export interface MusicSelection {
   track: TrackDef;
@@ -57,33 +57,44 @@ function mulberry32(seed: number): () => number {
 
 /**
  * Elige una pista compatible con primary/secondary evitando el historial.
- * La semilla combina el proyecto (estable) con un contador global, de modo que
- * dos vídeos distintos casi nunca comparten pista aunque sean de la categoría.
+ * Núcleo PURO (testeable): recibe historial y RNG; el envoltorio añade
+ * persistencia local y semilla del proyecto.
  */
-export function selectTrack(
+export function pickTrackPure(
   primary: MusicCategory,
   secondary: MusicCategory,
-  projectId: string,
-  timestampMs = Date.now()
-): MusicSelection {
+  seed: number,
+  recent: Set<string>,
+  /** Orden histórico (más antiguo primero); habilita LRU si todo está usado */
+  recentOrder: string[] = []
+): { track: TrackDef; avoidedRecent: number } {
   const lib = buildLibrary();
-  const recent = new Set(loadHistory());
-
-  // Peso alto a la categoría principal; secundaria entra como alternativa
   const weighted: Array<{ t: TrackDef; w: number }> = [];
   for (const t of lib) {
     if (t.category === primary) weighted.push({ t, w: recent.has(t.id) ? 1 : 10 });
     else if (t.category === secondary) weighted.push({ t, w: recent.has(t.id) ? 1 : 5 });
   }
-
   let avoided = 0;
   for (const item of weighted) if (recent.has(item.t.id)) avoided++;
 
-  // Filtrar recientes si queda suficiente variedad
   const fresh = weighted.filter((x) => !recent.has(x.t.id));
-  const pool = fresh.length >= 3 ? fresh : weighted;
+  if (fresh.length === 0 && recentOrder.length > 0) {
+    // Ventana agotada: LRU global — la usada hace más tiempo (cicla sin repetir)
+    let oldest: TrackDef | null = null;
+    let oldestIdx = Infinity;
+    for (const item of weighted) {
+      const idx = recentOrder.lastIndexOf(item.t.id);
+      if (idx !== -1 && idx < oldestIdx) {
+        oldestIdx = idx;
+        oldest = item.t;
+      }
+    }
+    return { track: oldest ?? weighted[weighted.length - 1].t, avoidedRecent: avoided };
+  }
+  // Mientras haya pistas frescas, el sorteo SOLO considera frescas
+  const pool = fresh.length > 0 ? fresh : weighted;
 
-  const rnd = mulberry32(hashStr(projectId) ^ timestampMs);
+  const rnd = mulberry32(seed);
   const totalW = pool.reduce((a, x) => a + x.w, 0);
   let roll = rnd() * totalW;
   let chosen = pool[pool.length - 1].t;
@@ -94,17 +105,35 @@ export function selectTrack(
       break;
     }
   }
+  return { track: chosen, avoidedRecent: avoided };
+}
 
-  // Registrar en historial
+/**
+ * Elige una pista compatible con primary/secondary evitando el historial.
+ * La semilla combina el proyecto (estable) con un contador global, de modo que
+ * dos vídeos distintos casi nunca comparten pista aunque sean de la categoría.
+ */
+export function selectTrack(
+  primary: MusicCategory,
+  secondary: MusicCategory,
+  projectId: string,
+  timestampMs = Date.now()
+): MusicSelection {
   const hist = loadHistory();
-  hist.push(chosen.id);
+  const { track, avoidedRecent } = pickTrackPure(
+    primary,
+    secondary,
+    hashStr(projectId) ^ timestampMs,
+    new Set(hist),
+    hist
+  );
+  hist.push(track.id);
   while (hist.length > HISTORY_MAX) hist.shift();
   saveHistory(hist);
-
   return {
-    track: chosen,
+    track,
     reasonPrimary: primary,
     reasonSecondary: secondary,
-    avoidedRecent: avoided,
+    avoidedRecent,
   };
 }

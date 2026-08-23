@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ClipCraft - Editor de vídeo vertical con IA",
+  title: "ClipCraft — Crea anuncios virales en segundos",
   description:
-    "Sube tus vídeos, la IA los analiza, genera guion, voz, subtítulos y edición automática. Exporta vertical 9:16 para TikTok, Reels y Shorts.",
+    "Escribe tu guion y obtén voz, música, subtítulos y vídeo vertical listos para TikTok. 100% gratis, sin claves y funcionando en tu propio dispositivo.",
 };
 
 export default function RootLayout({
@@ -14,12 +14,8 @@ export default function RootLayout({
 }) {
   return (
     <html lang="es">
-      <head>
-        {/* URL del servidor de voz (no es un secreto); editable sin recompilar */}
-        <script src="/videos/config.js" defer />
-      </head>
       <body
-        className="bg-[#0b0d12] text-gray-100 antialiased"
+        className="bg-[#0B0D14] text-gray-100 antialiased"
         suppressHydrationWarning
       >
         {children}

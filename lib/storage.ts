@@ -1,34 +1,14 @@
-﻿import type { AppSettings, Project } from "@/types";
-import { hasBackend } from "@/lib/apiClient";
+﻿/**
+ * ALMACENAMIENTO V3 — 100% local, CERO claves de API.
+ * Ajustes: voz preferida + idiomas pre-descargados + preferencias de UI.
+ */
+import type { AppSettings, Project } from "@/types";
 
 const PROJECTS_KEY = "clipcraft.projects.v1";
-const SETTINGS_KEY = "clipcraft.settings.v1";
+const SETTINGS_KEY = "clipcraft.settings.v3";
 
-// Snapshots cacheados: getSnapshot debe devolver SIEMPRE la misma
-// referencia mientras no cambien los datos, o React entra en bucle
-// infinito ("Maximum update depth exceeded" -> Application error).
 let projectsCache: Project[] | null = null;
 let settingsCache: AppSettings | null = null;
-
-// SEGURIDAD: NINGUNA clave de API vive en el frontend. Las credenciales del
-// servidor de voz (ElevenLabs/Groq) viven como secretos del worker backend.
-// El usuario puede añadir su PROPIA clave aquí (localStorage), nunca una
-// clave preinstalada por la app.
-
-const DEFAULT_SETTINGS: AppSettings = {
-  llmProvider: "groq",
-  llmApiKey: "",
-  llmModel: "llama-3.3-70b-versatile",
-  ttsProvider: "elevenlabs",
-  ttsApiKey: "",
-  ttsVoiceId: "en-US-f",
-  sttProvider: "groq",
-  sttApiKey: "",
-};
-
-function pickKey(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
 
 export function loadProjects(): Project[] {
   if (projectsCache !== null) return projectsCache;
@@ -47,9 +27,7 @@ export function loadProjects(): Project[] {
 export function saveProjects(projects: Project[]) {
   try {
     localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
-  } catch {
-    // cuota llena
-  }
+  } catch {}
   projectsCache = projects;
 }
 
@@ -73,20 +51,13 @@ export function deleteProject(id: string): Project[] {
   return next;
 }
 
-export function duplicateProject(id: string): Project | null {
-  const src = getProject(id);
-  if (!src) return null;
-  const copy: Project = {
-    ...src,
-    id: crypto.randomUUID(),
-    name: `${src.name} (copia)`,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    status: "draft",
-    renders: [],
-  };
-  upsertProject(copy);
-  return copy;
+/** IDs antiguos (ElevenLabs u otros) → voz del catálogo V3 por idioma */
+function normalizeVoiceId(raw: unknown): string {
+  if (typeof raw !== "string" || !raw.trim()) return "";
+  // Los IDs V3 son tipo es_ES-carlfm-x_low / af_heart
+  if (/^(es_|fr_|de_|it_|pt_)[A-Za-z0-9-]+$/.test(raw)) return raw;
+  if (/^a[bm]_[a-z]+$/.test(raw)) return raw; // kokoro
+  return "";
 }
 
 export function loadSettings(): AppSettings {
@@ -96,15 +67,25 @@ export function loadSettings(): AppSettings {
     const raw = localStorage.getItem(SETTINGS_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
     loaded = {
-      ...DEFAULT_SETTINGS,
+      ...defaultSettings(),
       ...(parsed && typeof parsed === "object" ? parsed : {}),
-      llmApiKey: pickKey(parsed.llmApiKey),
-      ttsApiKey: pickKey(parsed.ttsApiKey),
-      sttApiKey: pickKey(parsed.sttApiKey),
+      ttsVoiceId: normalizeVoiceId(parsed.ttsVoiceId) || defaultSettings().ttsVoiceId,
+      preferredLanguages: Array.isArray(parsed.preferredLanguages)
+        ? parsed.preferredLanguages.filter((x: unknown) => typeof x === "string")
+        : [],
     };
+    // PURGA: nunca resucitar claves de la v1
+    const purge = loaded as unknown as Record<string, unknown>;
+    delete purge.llmApiKey;
+    delete purge.ttsApiKey;
+    delete purge.sttApiKey;
   } catch {
-    loaded = { ...DEFAULT_SETTINGS };
+    loaded = defaultSettings();
   }
+  try {
+    // limpieza defensiva de restos v1 con claves
+    localStorage.removeItem("clipcraft.settings.v1");
+  } catch {}
   settingsCache = loaded;
   return loaded;
 }
@@ -112,32 +93,13 @@ export function loadSettings(): AppSettings {
 export function saveSettings(settings: AppSettings) {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-  } catch {
-    // ignorar
-  }
+  } catch {}
   settingsCache = settings;
 }
 
 export function defaultSettings(): AppSettings {
-  // Referencia estable: nunca crear objetos nuevos por llamada
-  return DEFAULT_SETTINGS;
-}
-
-/**
- * Un servicio está configurado si el usuario aportó su propia clave O si
- * existe el servidor de voz/backend (que guarda las claves reales).
- */
-export function serviceStatus(settings: AppSettings, service: "llm" | "tts" | "stt") {
-  const keyByService = {
-    llm: settings.llmApiKey,
-    tts: settings.ttsApiKey,
-    stt: settings.sttApiKey,
-  } as const;
-  const hasKey = Boolean(keyByService[service]);
-  const backend = hasBackend();
   return {
-    configured: hasKey || backend,
-    viaBackend: !hasKey && backend,
-    missing: hasKey || backend ? [] : [`${service}ApiKey`],
+    ttsVoiceId: "es_ES-carlfm-x_low",
+    preferredLanguages: ["es"],
   };
 }

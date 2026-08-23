@@ -1,48 +1,56 @@
 /**
- * PROGRESO REAL Y MONÓTONO.
- * Cada fase tiene una banda fija de porcentaje. El tracker GARANTIZA que el
- * porcentaje global nunca retrocede (clamp con máximo visto) y que cada salto
- * corresponde a una operación real completada. Sin heartbeats falsos.
+ * PROGRESO REAL Y MONÓTONO V3 — fases completas del pipeline:
+ *   Preparando proyecto → Analizando guion → Generando voz → Generando música
+ *   → Creando subtítulos → Mezclando audio → Renderizando vídeo
+ *   → Verificando exportación → Exportando → Listo
+ * El % NUNCA retrocede ni se congela: cada banda avanza con trabajo real.
  */
 
 export type StageName =
   | "PREPARING"
+  | "ANALYZING_SCRIPT"
   | "GENERATING_VOICE"
   | "GENERATING_MUSIC"
+  | "CREATING_SUBTITLES"
   | "MIXING_AUDIO"
   | "RENDERING"
   | "VERIFYING"
+  | "EXPORTING"
   | "DONE"
   | "ERROR";
 
 /** Banda [inicio, fin] del % global para cada fase */
 export const STAGE_BANDS: Record<Exclude<StageName, "ERROR">, [number, number]> = {
-  PREPARING: [2, 10],
-  GENERATING_VOICE: [10, 30],
-  GENERATING_MUSIC: [30, 40],
-  MIXING_AUDIO: [40, 55],
-  RENDERING: [55, 90],
-  VERIFYING: [90, 99],
+  PREPARING: [1, 6],
+  ANALYZING_SCRIPT: [6, 12],
+  GENERATING_VOICE: [12, 42],
+  GENERATING_MUSIC: [42, 52],
+  CREATING_SUBTITLES: [52, 58],
+  MIXING_AUDIO: [58, 70],
+  RENDERING: [70, 90],
+  VERIFYING: [90, 96],
+  EXPORTING: [96, 100],
   DONE: [100, 100],
 };
 
 export const STAGE_LABELS: Record<StageName, string> = {
-  PREPARING: "Preparando vídeo…",
-  GENERATING_VOICE: "Creando voz…",
-  GENERATING_MUSIC: "Creando música…",
+  PREPARING: "Preparando proyecto…",
+  ANALYZING_SCRIPT: "Analizando guion…",
+  GENERATING_VOICE: "Generando voz…",
+  GENERATING_MUSIC: "Generando música…",
+  CREATING_SUBTITLES: "Creando subtítulos…",
   MIXING_AUDIO: "Mezclando audio…",
-  RENDERING: "Montando vídeo…",
-  VERIFYING: "Finalizando…",
+  RENDERING: "Renderizando vídeo…",
+  VERIFYING: "Verificando exportación…",
+  EXPORTING: "Exportando…",
   DONE: "¡Tu vídeo está listo!",
   ERROR: "Algo salió mal",
 };
 
 export interface ProgressTracker {
-  /** Marca la fase actual; `pctInBand` es 0..100 DENTRO de la banda */
   set(stage: Exclude<StageName, "ERROR" | "DONE">, pctInBand?: number): void;
   done(): void;
   fail(): void;
-  /** % global máximo alcanzado (para tests) */
   current(): number;
 }
 

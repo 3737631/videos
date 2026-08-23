@@ -1,141 +1,182 @@
 "use client";
 
-import { useState } from "react";
-import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { VOICE_CATALOG, previewVoice, stopPreview, voiceAvailability } from "@/lib/tts";
-import { useSettings } from "@/lib/useStore";
-import { hasBackend } from "@/lib/apiClient";
+import { VOICE_CATALOG, formatMB, type CatalogVoice } from "@/lib/voices/catalog";
+import { deleteVoice, ensureVoiceInstalled, isVoiceInstalled, synthesize } from "@/lib/voices/engine";
+import Link from "next/link";
+
+type Status = "idle" | "downloading" | "installed" | "previewing" | "error";
 
 export default function VocesPage() {
-  const [settings, update] = useSettings();
-  const [filter, setFilter] = useState<string>("Español");
-  const LANGS = ["English", "Español", "Français", "Deutsch", "Italiano", "Português"] as const;
-  const [playingId, setPlayingId] = useState<string | null>(null);
-  const [loadingId, setLoadingId] = useState<string | null>(null);
-  const [error, setError] = useState<string>("");
+  const [status, setStatus] = useState<Record<string, Status>>({});
+  const [pcts, setPcts] = useState<Record<string, number | null>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const urlRef = useRef<string | null>(null);
 
-  const voices = VOICE_CATALOG.filter((v) => v.language === filter);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const next: Record<string, Status> = {};
+      for (const v of VOICE_CATALOG) {
+        next[v.id] = (await isVoiceInstalled(v.id)) ? "installed" : "idle";
+      }
+      if (alive) setStatus(next);
+    })();
+    return () => {
+      alive = false;
+      stopAudio();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  async function listen(id: string) {
-    setError("");
-    if (playingId === id || loadingId === id) {
-      stopPreview();
-      setPlayingId(null);
-      setLoadingId(null);
-      return;
+  function stopAudio() {
+    audioRef.current?.pause();
+    if (urlRef.current) {
+      URL.revokeObjectURL(urlRef.current);
+      urlRef.current = null;
     }
-    stopPreview();
-    setPlayingId(null);
-    setLoadingId(id);
-    const ok = await previewVoice(id); // pipeline REAL: servidor → clave propia → local
-    setLoadingId(null);
-    if (ok) setPlayingId(id);
-    else setError("No se pudo reproducir esta vista previa ahora mismo.");
   }
 
-  function stop() {
-    stopPreview();
-    setPlayingId(null);
-    setLoadingId(null);
+  async function download(v: CatalogVoice) {
+    setErrors((e) => ({ ...e, [v.id]: "" }));
+    setStatus((s) => ({ ...s, [v.id]: "downloading" }));
+    setPcts((p) => ({ ...p, [v.id]: v.runtime === "kokoro" ? null : 0 }));
+    try {
+      await ensureVoiceInstalled(v.id, {
+        onProgress: (pct) => setPcts((p) => ({ ...p, [v.id]: pct })),
+      });
+      setStatus((s) => ({ ...s, [v.id]: "installed" }));
+      setPcts((p) => ({ ...p, [v.id]: 100 }));
+    } catch (err) {
+      setStatus((s) => ({ ...s, [v.id]: "error" }));
+      setErrors((e) => ({ ...e, [v.id]: err instanceof Error ? err.message : String(err) }));
+    }
+  }
+
+  async function preview(v: CatalogVoice) {
+    stopAudio();
+    setStatus((s) => ({ ...s, [v.id]: "previewing" }));
+    try {
+      const res = await synthesize(v.sampleText, v.id);
+      urlRef.current = URL.createObjectURL(res.blob);
+      const a = new Audio(urlRef.current);
+      audioRef.current = a;
+      a.onended = () => {
+        stopAudio();
+        setStatus((s) => ({ ...s, [v.id]: "installed" }));
+      };
+      await a.play();
+    } catch {
+      setStatus((s) => ({ ...s, [v.id]: "installed" }));
+    }
+  }
+
+  async function remove(v: CatalogVoice) {
+    stopAudio();
+    await deleteVoice(v.id);
+    setStatus((s) => ({ ...s, [v.id]: "idle" }));
+    setPcts((p) => ({ ...p, [v.id]: null }));
   }
 
   return (
     <AppShell>
-      <div className="max-w-6xl mx-auto px-6 py-8">
-        <Link href="/crear" className="inline-flex items-center gap-1 text-sm text-gray-300 hover:text-white transition">
-          ← Atrás
-        </Link>
-        <h1 className="mt-3 text-2xl font-bold">Voces</h1>
-        <p className="mt-1 text-sm text-gray-400">
-          Escucha y elige la voz para tus vídeos. La vista previa usa exactamente la misma voz que oirás en el vídeo final.
-        </p>
+      <div className="mx-auto max-w-3xl px-5 py-8">
+        <header className="mb-6">
+          <h1 className="text-2xl font-bold tracking-tight">Catálogo de voces</h1>
+          <p className="mt-1 text-sm text-gray-400">
+            Voces locales y gratuitas. Se descargan una vez y quedan guardadas en tu dispositivo.
+          </p>
+          <p className="mt-1 text-xs text-gray-500">
+            ¿Aún no tienes tu guion?{" "}
+            <Link href="/" className="text-violet-300 hover:text-violet-200">
+              Empieza en la página principal
+            </Link>
+          </p>
+        </header>
 
-        <div className="mt-5 flex items-center gap-2 flex-wrap">
-          {LANGS.map((lang) => (
-            <button
-              key={lang}
-              onClick={() => {
-                stop();
-                setFilter(lang);
-              }}
-              className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
-                filter === lang ? "bg-blue-600 text-white" : "bg-white/5 text-gray-300 hover:bg-white/10"
-              }`}
-            >
-              {lang}
-            </button>
-          ))}
-        </div>
-
-        {error && (
-          <p className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-200">{error}</p>
-        )}
-
-        <div className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {voices.map((v) => (
-            <div
-              key={v.id}
-              className={`rounded-xl border p-5 transition-colors ${
-                settings.ttsVoiceId === v.id ? "border-blue-500 bg-blue-500/10" : "border-white/10 bg-white/[0.02]"
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <div className="text-2xl">{v.gender === "femenina" ? "👩" : "👨"}</div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => listen(v.id)}
-                    aria-label={`Escuchar ${v.name}`}
-                    disabled={loadingId !== null && loadingId !== v.id}
-                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-40 ${
-                      playingId === v.id
-                        ? "bg-emerald-600 text-white"
-                        : "bg-white/10 text-gray-200 hover:bg-white/20"
-                    }`}
-                  >
-                    {loadingId === v.id ? "… Generando" : playingId === v.id ? "⏹ Parar" : "▶ Escuchar"}
-                  </button>
-                  <button
-                    onClick={() => {
-                      stop();
-                      update({ ttsVoiceId: v.id });
-                    }}
-                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-                      settings.ttsVoiceId === v.id ? "bg-blue-600 text-white" : "bg-white/5 text-gray-300 hover:bg-white/10"
-                    }`}
-                  >
-                    {settings.ttsVoiceId === v.id ? "✓ Elegida" : "Usar"}
-                  </button>
+        <div className="space-y-3">
+          {VOICE_CATALOG.map((v) => {
+            const st = status[v.id] ?? "idle";
+            const pct = pcts[v.id];
+            return (
+              <article key={v.id} className="cc-card p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-lg">{v.flag}</span>
+                      <h2 className="text-base font-bold">{v.name}</h2>
+                      <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-400">
+                        {v.gender === "femenina" ? "Femenina" : "Masculina"} · {v.country}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm text-gray-400">{v.style}</p>
+                    <p className="mt-1 text-xs italic text-gray-500">“{v.sampleText}”</p>
+                  </div>
                 </div>
-              </div>
-              <div className="mt-3 font-semibold">{v.name}</div>
-              <div className="mt-1 text-xs text-gray-400">
-                {v.style} · {v.language} ({v.accent})
-              </div>
-            </div>
-          ))}
-        </div>
 
-        <VoiceFooter />
+                {(st === "downloading") && (
+                  <div className="mt-4">
+                    <div className="h-2 overflow-hidden rounded-full bg-white/8">
+                      {pct === null ? (
+                        <div className="cc-shimmer h-full w-full" />
+                      ) : (
+                        <div
+                          className="h-full transition-all"
+                          style={{ width: `${pct}%`, background: "linear-gradient(90deg,#8B7CFF,#22D3EE)" }}
+                        />
+                      )}
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {pct === null ? "Preparando descarga…" : `Descargando… ${pct}%`}
+                    </p>
+                  </div>
+                )}
+
+                {errors[v.id] && (
+                  <p className="mt-3 text-xs text-red-300">{errors[v.id]}</p>
+                )}
+
+                <div className="mt-4 flex items-center gap-2">
+                  {st === "installed" || st === "previewing" ? (
+                    <>
+                      <button
+                        onClick={() => preview(v)}
+                        disabled={st === "previewing"}
+                        className="cc-btn-primary rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                      >
+                        {st === "previewing" ? "Generando…" : "▶ Escuchar"}
+                      </button>
+                      <button
+                        onClick={() => remove(v)}
+                        className="rounded-xl border border-white/12 px-4 py-2 text-sm text-gray-300 hover:bg-white/5"
+                      >
+                        Borrar
+                      </button>
+                      <span className="ml-auto text-[11px] text-emerald-300">En tu dispositivo</span>
+                    </>
+                  ) : st === "downloading" ? (
+                    <span className="text-xs text-gray-400">Una sola descarga · {formatMB(v.sizeBytes)}</span>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => download(v)}
+                        className="cc-btn-primary rounded-xl px-4 py-2 text-sm font-semibold text-white"
+                      >
+                        Descargar voz{v.runtime === "kokoro" && v.sizeBytes > 0 ? ` · ${formatMB(v.sizeBytes)}` : ""}
+                      </button>
+                      {v.runtime === "kokoro" && v.sizeBytes === 0 && (
+                        <span className="text-[11px] text-gray-500">comparte el modelo inglés</span>
+                      )}
+                    </>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+        </div>
       </div>
     </AppShell>
-  );
-}
-
-function VoiceFooter() {
-  const [settings] = useSettings();
-  const avail = voiceAvailability(settings, settings.ttsVoiceId);
-  return (
-    <div className="mt-8 rounded-xl border border-white/10 p-4 text-sm text-gray-400">
-      Proveedor activo para tus vídeos: <span className="text-gray-200">{avail.providerLabel}</span>
-      {!hasBackend() && !settings.ttsApiKey && (
-        <>
-          {" · "}
-          <Link href="/configuracion" className="text-blue-400 hover:text-blue-300">
-            Configurar servidor o clave →
-          </Link>
-        </>
-      )}
-    </div>
   );
 }

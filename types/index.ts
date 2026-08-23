@@ -86,6 +86,8 @@ export interface SubtitleCue {
   end: number;
   text: string;
   words: WordTimestamp[];
+  /** V3: por palabra, true = resaltar con activeColor */
+  highlight?: boolean[];
 }
 
 export interface VoiceOption {
@@ -230,14 +232,10 @@ export interface Project {
 }
 
 export interface AppSettings {
-  llmProvider: "openai" | "groq";
-  llmApiKey: string;
-  llmModel: string;
-  ttsProvider: "openai" | "elevenlabs";
-  ttsApiKey: string;
+  /** Voz preferida del catálogo V3 (local y gratuita) */
   ttsVoiceId: string;
-  sttProvider: "openai" | "groq";
-  sttApiKey: string;
+  /** Idiomas marcados para pre-descarga en Ajustes */
+  preferredLanguages: string[];
 }
 
 export interface ServiceStatus {
