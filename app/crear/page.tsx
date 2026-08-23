@@ -157,12 +157,12 @@ export default function CrearPage() {
   const voicePctRef = useRef<number | null>(null);
 
   useEffect(() => {
-    // La voz local se descarga sola al abrir SOLO en escritorio; en móvil la voz va por la nube
+    // La voz se descarga sola al abrir la página en TODOS los dispositivos
+    // (en móvil sin límite de tiempo; mientras el usuario prepara su vídeo)
     const off = onKokoroDownload((pct) => {
       voicePctRef.current = pct;
     });
-    const isMobileLike = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-    if (!isMobileLike) void preloadKokoro();
+    void preloadKokoro();
     return () => {
       off();
     };
@@ -390,7 +390,7 @@ export default function CrearPage() {
           progress: 42,
         });
         {
-          const fullText = capForViral(getScriptFullText({ ...project, script }), IS_IOS ? 180 : 400);
+          const fullText = capForViral(getScriptFullText({ ...project, script }), IS_IOS ? 140 : 400);
           if (fullText.trim()) {
             try {
               const voiceT0 = Date.now();
@@ -590,29 +590,31 @@ export default function CrearPage() {
         setJobStage({ stage: st, progress: Math.min(99, Math.max(10, p)) });
       let result;
       if (IS_IOS) {
-        // iPhone/iPad: grabación NATIVA; si falla, motor de respaldo automático
-        try {
-          result = await renderProjectMobile(next, {
-            width: 540,
-            height: 960,
-            fps: 30,
-            musicVolume: plan.audio.musicVolume ?? 0.25,
-            voiceVolume: plan.audio.voiceVolume ?? 1,
-            onStage,
-          });
-        } catch (me) {
-          addLog(`Grabación nativa falló: ${errText(me)} → usando motor de respaldo`);
-          setJobStage({ stage: "Usando motor de respaldo…", progress: 70 });
-          await resetFfmpeg();
-          await loadFfmpeg();
-          result = await renderProject(getFfmpeg(), next, {
-            targetWidth: 540,
-            targetHeight: 960,
-            fps: 24,
-            crf: 26,
-            onStage,
-          });
+        // iPhone/iPad: grabación NATIVA, hasta 2 intentos; el porcentaje es ÚNICO y
+        // monótono (la grabación ocupa el tramo 60→97 de la barra global)
+        const mapP = (p: number) => 60 + Math.max(0, Math.min(100, p)) * 0.37;
+        let lastErr: unknown = null;
+        let okAttempt: Awaited<ReturnType<typeof renderProjectMobile>> | null = null;
+        for (let attempt = 0; attempt < 2 && !okAttempt; attempt++) {
+          try {
+            if (attempt > 0) {
+              addLog("Repetimos la grabación nativa…");
+              setJobStage({ stage: "Repetimos la grabación…", progress: 58 });
+            }
+            okAttempt = await renderProjectMobile(next, {
+              width: 540,
+              height: 960,
+              fps: 30,
+              musicVolume: plan.audio.musicVolume ?? 0.25,
+              voiceVolume: plan.audio.voiceVolume ?? 1,
+              onStage: (s, p) => onStage(s, mapP(p)),
+            });
+          } catch (e) {
+            lastErr = e;
+          }
         }
+        if (!okAttempt) throw lastErr instanceof Error ? lastErr : new Error("grabación fallida");
+        result = okAttempt;
       } else {
         // Escritorio: motor completo (máxima calidad)
         setJobStage({ stage: "Cargando motor de vídeo (solo la primera vez)", progress: 70 });

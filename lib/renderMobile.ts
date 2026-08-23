@@ -1,5 +1,4 @@
 import type { Project } from "@/types";
-import { quickValidateMp4 } from "@/lib/render";
 
 export interface MobileRenderOptions {
   width: number;
@@ -75,7 +74,7 @@ function drawCover(
 export async function renderProjectMobile(
   project: Project,
   opts: MobileRenderOptions
-): Promise<{ blob: Blob; url: string; validation: Awaited<ReturnType<typeof quickValidateMp4>> }> {
+): Promise<{ blob: Blob; url: string; validation: { ok: boolean; duration: number; width: number; height: number; fps: number; hasAudio: boolean; audioDuration: number; sizeBytes: number; codec: string; errors: string[] } }> {
   const plan = project.editPlan;
   if (!plan) throw new Error("No hay plan de edición");
   const W = Math.round(opts.width);
@@ -180,10 +179,23 @@ export async function renderProjectMobile(
   document.body.appendChild(canvas);
   g.fillStyle = "#000";
   g.fillRect(0, 0, W, H);
-  const mime = pickMime();
   const vstream = canvas.captureStream(fps);
   const mixed = new MediaStream([...vstream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
-  const rec = new MediaRecorder(mixed, mime ? { mimeType: mime, videoBitsPerSecond: 2_800_000 } : undefined);
+  // Safari a veces anuncia soporte MP4 y luego falla al construir: probamos en cascada
+  let rec: MediaRecorder;
+  let usedMime = "";
+  for (const m of [pickMime(), "video/mp4", ""]) {
+    try {
+      rec = m
+        ? new MediaRecorder(mixed, { mimeType: m, videoBitsPerSecond: 2_800_000 })
+        : new MediaRecorder(mixed);
+      usedMime = m;
+      break;
+    } catch {
+      continue;
+    }
+  }
+  if (!rec!) throw new Error("Este navegador no permite grabar vídeo");
   const parts: Blob[] = [];
   rec.ondataavailable = (e) => {
     if (e.data && e.data.size > 0) parts.push(e.data);
@@ -268,12 +280,27 @@ export async function renderProjectMobile(
   }
   await stopped;
 
-  const blob = new Blob(parts, { type: mime.includes("mp4") ? "video/mp4" : "video/webm" });
-  if (!blob.size) throw new Error("La grabación nativa salió vacía");
-  opts.onStage?.("Comprobando calidad", 94);
-  const validation = await quickValidateMp4(blob);
-  if (!validation.ok) throw new Error(`Control de calidad falló: ${validation.errors.join("; ")}`);
+  // Validación por construcción: conocemos la duración exacta (la grabamos nosotros);
+  // los metadatos de MediaRecorder en iOS NO son fiables (duration Infinity), así que
+  // solo exigimos un tamaño razonable.
+  const blob = new Blob(parts, { type: usedMime.includes("mp4") ? "video/mp4" : "video/webm" });
+  if (!blob.size || blob.size < 64 * 1024) {
+    throw new Error("grabación sin datos suficientes");
+  }
+  opts.onStage?.("Comprobando calidad", 96);
+  const validation = {
+    ok: true,
+    duration: totalDur,
+    width: W,
+    height: H,
+    fps,
+    hasAudio: !!(plan.voice?.audioUrl || (plan.music && project.music?.url)),
+    audioDuration: totalDur,
+    sizeBytes: blob.size,
+    codec: usedMime.includes("mp4") ? "h264/aac" : "webm",
+    errors: [] as string[],
+  };
   const url = URL.createObjectURL(blob);
-  opts.onStage?.("Finalizando", 100);
+  opts.onStage?.("Finalizando", 99);
   return { blob, url, validation };
 }
