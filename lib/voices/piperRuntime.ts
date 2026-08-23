@@ -80,7 +80,7 @@ function nextPho<T>(msg: unknown): Promise<T> {
 async function getPhonemizer(): Promise<Worker> {
   if (phoReady) return phoReady;
   phoReady = (async () => {
-    const w = new Worker(assetRoot() + "PhonemizeWebWorker.js");
+    const w = new Worker(assetRoot() + "PhonemizeWebWorker.js", { type: "module" });
     try {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => reject(new TimeoutError(60000)), 60000);
