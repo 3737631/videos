@@ -147,6 +147,9 @@ export async function renderProjectMobile(
     return v;
   };
 
+  // Precargar el primer vídeo ANTES de empezar a grabar
+  await getVid(project.sources.find((s) => s.id === clips[0].sourceId)!.url);
+
   const cues = plan.subtitles?.cues || [];
   const st = plan.subtitles?.style;
   const fontPx = Math.round(H * (((st?.size as number) || 7) / 100));
@@ -171,6 +174,12 @@ export async function renderProjectMobile(
   };
 
   // ===== GRABADORA =====
+  // Safari exige que el canvas esté EN el documento para captureStream
+  canvas.style.cssText =
+    "position:fixed;left:-10000px;top:0;width:2px;height:2px;opacity:0.01;pointer-events:none;";
+  document.body.appendChild(canvas);
+  g.fillStyle = "#000";
+  g.fillRect(0, 0, W, H);
   const mime = pickMime();
   const vstream = canvas.captureStream(fps);
   const mixed = new MediaStream([...vstream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
@@ -240,7 +249,7 @@ export async function renderProjectMobile(
     await new Promise((r) => setTimeout(r, 350));
   } finally {
     try {
-      rec.stop();
+      if (rec.state !== "inactive") rec.stop();
     } catch {}
     if (musicSource) try { musicSource.stop(); } catch {}
     if (voiceEl) try { voiceEl.pause(); } catch {}
@@ -253,6 +262,9 @@ export async function renderProjectMobile(
         v.removeAttribute("src");
       } catch {}
     }
+    try {
+      document.body.removeChild(canvas);
+    } catch {}
   }
   await stopped;
 

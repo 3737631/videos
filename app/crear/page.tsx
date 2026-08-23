@@ -590,15 +590,29 @@ export default function CrearPage() {
         setJobStage({ stage: st, progress: Math.min(99, Math.max(10, p)) });
       let result;
       if (IS_IOS) {
-        // iPhone/iPad: grabación NATIVA con el codificador del sistema (rápido, sin cuelgues)
-        result = await renderProjectMobile(next, {
-          width: 540,
-          height: 960,
-          fps: 30,
-          musicVolume: plan.audio.musicVolume ?? 0.25,
-          voiceVolume: plan.audio.voiceVolume ?? 1,
-          onStage,
-        });
+        // iPhone/iPad: grabación NATIVA; si falla, motor de respaldo automático
+        try {
+          result = await renderProjectMobile(next, {
+            width: 540,
+            height: 960,
+            fps: 30,
+            musicVolume: plan.audio.musicVolume ?? 0.25,
+            voiceVolume: plan.audio.voiceVolume ?? 1,
+            onStage,
+          });
+        } catch (me) {
+          addLog(`Grabación nativa falló: ${errText(me)} → usando motor de respaldo`);
+          setJobStage({ stage: "Usando motor de respaldo…", progress: 70 });
+          await resetFfmpeg();
+          await loadFfmpeg();
+          result = await renderProject(getFfmpeg(), next, {
+            targetWidth: 540,
+            targetHeight: 960,
+            fps: 24,
+            crf: 26,
+            onStage,
+          });
+        }
       } else {
         // Escritorio: motor completo (máxima calidad)
         setJobStage({ stage: "Cargando motor de vídeo (solo la primera vez)", progress: 70 });
