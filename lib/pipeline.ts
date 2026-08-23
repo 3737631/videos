@@ -61,7 +61,7 @@ export interface CreationResult {
 }
 
 export interface PipelineHandlers {
-  onStage: (stage: StageName, label: string, pct: number) => void;
+  onStage: (stage: StageName, label: string, pct: number, etaSec?: number | null) => void;
   signal?: AbortSignal;
 }
 

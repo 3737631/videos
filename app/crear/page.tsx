@@ -1,59 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { ScriptPanel } from "@/components/crear/ScriptPanel";
 import { VoicePanel } from "@/components/crear/VoicePanel";
-import {
-  runCreationPipeline,
-  type CreationResult,
-} from "@/lib/pipeline";
-import {
-  STAGE_LABELS,
-  type StageName,
-} from "@/lib/progress";
-import {
-  fetchProduct,
-  parseAliUrl,
-  type ProductInfo,
-} from "@/lib/product/aliextract";
-import {
-  analyzeVideoFile,
-  type VideoProbe,
-} from "@/lib/media/probe";
-import {
-  VOICE_CATALOG,
-  getVoiceById,
-} from "@/lib/voices/catalog";
-import {
-  ensureVoiceInstalled,
-  listInstalled,
-} from "@/lib/voices/engine";
-import {
-  generateScript,
-  normalizeGenLang,
-} from "@/lib/script/generator";
-import {
-  recommendStyle,
-  type VoiceStyleId,
-} from "@/lib/script/styles";
-import { useSettings, formatDuration } from "@/lib/useStore";
+import { runCreationPipeline, type CreationResult } from "@/lib/pipeline";
+import { STAGE_LABELS, type StageName } from "@/lib/progress";
+import { analyzeVideoFile, type VideoProbe } from "@/lib/media/probe";
+import { fetchProduct, parseAliUrl, type ProductInfo } from "@/lib/product/aliextract";
+import { VOICE_CATALOG, getVoiceById, defaultVoiceForLocale } from "@/lib/voices/catalog";
+import { ensureVoiceInstalled, listInstalled } from "@/lib/voices/engine";
+import { generateScript, normalizeGenLang } from "@/lib/script/generator";
+import { recommendStyle, type VoiceStyleId } from "@/lib/script/styles";
+import { useSettings, useProjectActions, formatDuration } from "@/lib/useStore";
+import { defaultSubtitleStyle } from "@/lib/editplan";
 
-type Phase = "source" | "review" | "compose" | "running" | "result";
-
-interface RemoteVideo {
-  url: string;
-  duration: number | null;
-}
-
-interface PickedSource {
-  kind: "remote" | "file";
-  url?: string;
-  file?: File;
-  duration: number;
-  label: string;
-}
+type Step = 1 | 2 | 3;
+type Mode = "voice" | "music";
 
 const STEPS: Exclude<StageName, "ERROR" | "DONE">[] = [
   "PREPARING", "ANALYZING_SCRIPT", "GENERATING_VOICE", "GENERATING_MUSIC",
@@ -63,24 +26,19 @@ const ORDER_INDEX = new Map(STEPS.map((s, i) => [s, i]));
 
 export default function CrearPage() {
   const [settings] = useSettings();
-  const [phase, setPhase] = useState<Phase>("source");
-  const [error, setError] = useState("");
+  const [projects, saveProject] = useProjectActionsSafe();
 
-  // Fuente A: enlace AliExpress
-  const [linkInput, setLinkInput] = useState("");
-  const [analyzing, setAnalyzing] = useState(false);
+  // Paso 1
+  const [step, setStep] = useState<Step>(1);
+  const [file, setFile] = useState<File | null>(null);
+  const [probe, setProbe] = useState<VideoProbe | null>(null);
+  const [probing, setProbing] = useState(false);
+  const [mode, setMode] = useState<Mode>("voice");
+
+  // Paso 2
+  const [link, setLink] = useState("");
   const [product, setProduct] = useState<ProductInfo | null>(null);
-
-  // Fuente B: vídeos subidos
-  const [probes, setProbes] = useState<VideoProbe[]>([]);
-  const [files, setFiles] = useState<File[]>([]);
-  const [probingLabel, setProbingLabel] = useState("");
-
-  // Selección de vídeo base
-  const [remoteVids, setRemoteVids] = useState<RemoteVideo[]>([]);
-  const [picked, setPicked] = useState<PickedSource | null>(null);
-
-  // Guion / voz / tono
+  const [analizing, setAnalizing] = useState(false);
   const [script, setScript] = useState("");
   const [scriptEdited, setScriptEdited] = useState(false);
   const [voiceId, setVoiceId] = useState(settings.ttsVoiceId);
@@ -90,143 +48,90 @@ export default function CrearPage() {
   const [preparePct, setPreparePct] = useState<number | null>(null);
   const prepareSeq = useRef(0);
 
-  // Pipeline
+  // Generación
   const [stage, setStage] = useState<StageName>("PREPARING");
   const [pct, setPct] = useState(0);
+  const [eta, setEta] = useState<number | null>(null);
+  const [phase, setPhase] = useState<"setup" | "running" | "result">("setup");
+  const [error, setError] = useState("");
   const [result, setResult] = useState<CreationResult | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     listInstalled().then(setInstalledIds).catch(() => {});
-    const p = new URLSearchParams(window.location.search);
-    const u = p.get("url");
-    if (u) {
-      setLinkInput(u);
-      void doAnalyze(u);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Análisis de fuente ───────────────────────────────────────────────
-  const doAnalyze = async (rawUrl: string) => {
+  // ── Subir vídeo ────────────────────────────────────────────────────────
+  const onFile = async (list: FileList | null) => {
+    const f = list?.[0];
+    if (!f) return;
     setError("");
-    if (!parseAliUrl(rawUrl)) {
-      setError("Ese enlace no parece de AliExpress. Copia la URL del producto.");
+    setFile(f);
+    setProbing(true);
+    try {
+      const p = await analyzeVideoFile(f, { timeoutMs: 15000 });
+      setProbe(p);
+      setStep(2);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo leer el vídeo");
+    } finally {
+      setProbing(false);
+    }
+  };
+
+  // ── Enlace AliExpress (solo modo voz) ──────────────────────────────────
+  const loadProduct = async () => {
+    if (!parseAliUrl(link)) {
+      setError("Pega un enlace válido de AliExpress (o deja el campo vacío para voz genérica).");
       return;
     }
-    setAnalyzing(true);
+    setAnalizing(true);
+    setError("");
     try {
-      const res = await fetchProduct(rawUrl);
+      const res = await fetchProduct(link);
       setProduct(res.info);
-      const vids = res.info.videoUrls.slice(0, 6).map((url) => ({ url, duration: null }));
-      setRemoteVids(vids);
-      setPhase("review");
       if (res.source === "none") {
-        setError(
-          "No se pudo leer el producto automáticamente. Puedes continuar con tus propios vídeos."
-        );
-      } else if (res.missing.length) {
-        setError(`Falta información del producto: ${res.missing.join(", ")}. Seguimos con lo disponible.`);
+        setError("No se pudo leer el producto; se usará voz y guion genéricos.");
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo analizar el enlace");
+      setError("No se pudo leer el producto; seguimos con voz genérica.");
     } finally {
-      setAnalyzing(false);
+      setAnalizing(false);
     }
   };
 
-  const onFiles = async (list: FileList | null) => {
-    if (!list?.length) return;
-    setError("");
-    const arr = Array.from(list).slice(0, 10);
-    setFiles(arr);
-    const out: VideoProbe[] = [];
-    for (let i = 0; i < arr.length; i++) {
-      setProbingLabel(`Analizando ${arr[i].name} (${i + 1}/${arr.length})…`);
-      try {
-        out.push(await analyzeVideoFile(arr[i]));
-      } catch (e) {
-        setError(e instanceof Error ? e.message : `No se pudo analizar ${arr[i].name}`);
-      }
-    }
-    setProbingLabel("");
-    setProbes(out);
-    if (out.length) setPhase("review");
-  };
-
-  // Duración de un vídeo remoto vía metadatos
-  const probeRemote = (url: string): Promise<number> =>
-    new Promise((resolve) => {
-      const v = document.createElement("video");
-      v.preload = "metadata";
-      const done = (d: number) => {
-        v.removeAttribute("src");
-        resolve(d);
-      };
-      const t = setTimeout(() => done(NaN), 9000);
-      v.onloadedmetadata = () => {
-        clearTimeout(t);
-        done(Number.isFinite(v.duration) ? v.duration : NaN);
-      };
-      v.onerror = () => {
-        clearTimeout(t);
-        done(NaN);
-      };
-      v.src = url;
-    });
-
-  const pickRemote = async (rv: RemoteVideo) => {
-    let d = rv.duration;
-    if (!d) d = await probeRemote(rv.url);
-    if (!Number.isFinite(d) || d <= 0) {
-      setError("No se pudo leer la duración de ese vídeo; prueba otro o sube el tuyo.");
-      return;
-    }
-    setPicked({ kind: "remote", url: rv.url, duration: d, label: "Vídeo del producto" });
-    setError("");
-  };
-
-  const pickFile = (p: VideoProbe, i: number) => {
-    const f = files[i];
-    if (!f) return;
-    setPicked({
-      kind: "file", file: f, duration: p.duration,
-      label: `${p.name} · ${p.width}×${p.height}${p.fps ? ` · ${p.fps} fps` : ""}`,
-    });
-    setError("");
-  };
-
-  // ── Guion generado al llegar a componer ──────────────────────────────
-  const ensureScript = useCallback(() => {
+  // Guion auto al entrar al detalle
+  const ensureScript = () => {
     if (scriptEdited && script.trim()) return;
-    const voice = getVoiceById(voiceId);
-    const lang = normalizeGenLang(voice?.locale ?? "es-ES");
     const gen = generateScript({
-      durationSec: picked?.duration ?? 15,
-      lang,
+      durationSec: probe?.duration ?? 15,
+      lang: "es",
       product: product
-        ? {
-            title: product.title,
-            price: product.price,
-            currency: product.currency,
-            seller: product.seller,
-            features: product.features,
-          }
+        ? { title: product.title, price: product.price, currency: product.currency, seller: product.seller, features: product.features }
         : undefined,
-      seed: picked?.url ?? picked?.label ?? "manual",
+      seed: product?.itemId ?? file?.name ?? "manual",
     });
     setScript(gen.text);
     setScriptEdited(false);
-  }, [scriptEdited, script, voiceId, picked, product]);
+  };
 
   useEffect(() => {
-    if (phase === "compose") ensureScript();
+    if (step === 2 && mode === "voice") ensureScript();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase]);
+  }, [step, mode, product]);
 
-  // ── Puerta de voces ANTES de generar ────────────────────────────────
+  // Voz recomendada automática por idioma
+  const autoVoice = defaultVoiceForLocale("es-ES");
   useEffect(() => {
-    if (phase !== "compose" && phase !== "review") return;
+    if (mode === "voice" && !installedIds.includes(voiceId)) {
+      setVoiceId(autoVoice);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
+  // Puerta de voces antes de generar
+  useEffect(() => {
+    if (mode !== "voice") return;
     if (installedIds.includes(voiceId)) {
       setPreparingVoice(null);
       return;
@@ -238,488 +143,357 @@ export default function CrearPage() {
       onProgress: (p) => seq === prepareSeq.current && setPreparePct(p),
     })
       .then(() => listInstalled().then(setInstalledIds))
-      .catch((e) => seq === prepareSeq.current && setError(e instanceof Error ? e.message : "No se pudo preparar la voz"))
-      .finally(() => {
-        if (seq === prepareSeq.current) setPreparingVoice(null);
-      });
-  }, [voiceId, installedIds, phase]);
+      .catch((e) =>
+        seq === prepareSeq.current && setError(e instanceof Error ? e.message : "No se pudo preparar la voz")
+      )
+      .finally(() => seq === prepareSeq.current && setPreparingVoice(null));
+  }, [voiceId, installedIds, mode]);
 
-  const voice = getVoiceById(voiceId);
-  const genLang = normalizeGenLang(voice?.locale ?? "es-ES");
-  const recommended = recommendStyle({
-    scriptText: script,
-    isDropshipping: true,
-    durationSec: picked?.duration ?? null,
-  });
+  const recommended = recommendStyle({ scriptText: script, isDropshipping: true, durationSec: probe?.duration ?? null });
 
-  // ── Generar ──────────────────────────────────────────────────────────
+  // ── Generar ────────────────────────────────────────────────────────────
   const start = async () => {
-    if (!script.trim() || !picked) return;
+    if (!file || !probe) return;
     setError("");
     if (result?.url) URL.revokeObjectURL(result.url);
     setResult(null);
     setPhase("running");
     setStage("PREPARING");
     setPct(0);
+    setEta(null);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     try {
       const res = await runCreationPipeline(
         {
-          script,
-          voiceId,
-          styleId,
-          targetDurationSec: picked.duration,
+          script: mode === "voice" ? script : "",
+          voiceId: mode === "voice" ? voiceId : null,
+          onlyMusic: mode === "music",
+          styleId: mode === "voice" ? styleId : undefined,
+          targetDurationSec: probe.duration,
         },
         {
           signal: ctrl.signal,
-          onStage: (s, _l, p) => {
+          onStage: (s, _l, p, etaSec) => {
             setStage(s);
             setPct(p);
+            setEta(etaSec ?? null);
           },
         }
       );
       setResult(res);
       setPhase("result");
+      try {
+        saveProject({
+          id: crypto.randomUUID(),
+          name: product?.title || `Anuncio ${mode === "music" ? "con música" : "con voz"}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          status: "ready",
+          sources: [],
+          metadata: {
+            scenes: [], duration: probe.duration, resolution: { width: probe.width, height: probe.height },
+            fps: probe.fps ?? 30, people: 0, objects: [], speech: 0, silenceSegments: [],
+            sceneChanges: 0, interestingSegments: [], audioLevel: 0, qualityScore: 0, analysisText: "",
+          },
+          style: "anuncio", goal: "ventas", targetDuration: "auto",
+          hooks: [], selectedHook: "", script: [], voice: null, subtitles: { cues: [], style: defaultSubtitleStyle() },
+          music: null, editPlan: null, renders: [],
+          thumbnail: res.thumbnail, renderUrl: res.url, renderValidation: undefined,
+          removeWatermark: true,
+        });
+      } catch {}
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      setPhase("compose");
+      setPhase("setup");
     } finally {
       abortRef.current = null;
     }
   };
 
-  const cancel = () => abortRef.current?.abort();
-  const activeIdx = ORDER_INDEX.get(stage as never) ?? -1;
   const canGenerate =
-    !!script.trim() && !!picked && installedIds.includes(voiceId) && !preparingVoice;
+    !!file && !!probe && (mode === "music" || (script.trim() && installedIds.includes(voiceId) && !preparingVoice));
 
   return (
     <AppShell>
-      <div className="mx-auto max-w-2xl px-5 py-8 pb-24">
-        {phase === "source" && (
+      <div className="mx-auto max-w-xl px-5 py-8 pb-24">
+        {phase === "setup" && (
           <div className="cc-fade-up space-y-5">
-            <header>
-              <h1 className="text-2xl font-bold tracking-tight">Crear anuncio</h1>
-              <p className="mt-1 text-sm text-gray-400">
-                Empieza desde un producto de AliExpress o sube tus propios vídeos.
-              </p>
-            </header>
-
-            {/* A · Enlace */}
-            <section className="cc-card p-5">
-              <label className="text-sm font-semibold text-gray-200">🔗 Enlace de AliExpress</label>
-              <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                <input
-                  value={linkInput}
-                  onChange={(e) => setLinkInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && !analyzing && doAnalyze(linkInput)}
-                  placeholder="Pega aquí el enlace…"
-                  inputMode="url"
-                  className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm outline-none focus:border-violet-400/60 focus:ring-4 focus:ring-violet-500/10"
-                />
-                <button
-                  onClick={() => doAnalyze(linkInput)}
-                  disabled={analyzing}
-                  className="cc-btn-primary rounded-xl px-6 py-3 text-sm font-bold text-white disabled:opacity-50"
+            {/* Stepper minimal */}
+            <div className="flex items-center gap-2 text-xs text-gray-500">
+              {[1, 2, 3].map((s) => (
+                <span
+                  key={s}
+                  className={`flex h-6 w-6 items-center justify-center rounded-full ${
+                    step >= s ? "bg-violet-500 text-white" : "bg-white/10 text-gray-400"
+                  }`}
                 >
-                  {analyzing ? "Analizando…" : "Analizar"}
-                </button>
-              </div>
-            </section>
-
-            <div className="flex items-center gap-3 text-xs text-gray-600">
-              <span className="h-px flex-1 bg-white/10" /> O <span className="h-px flex-1 bg-white/10" />
+                  {s}
+                </span>
+              ))}
+              <span className="ml-1">Vídeo · Detalles · Crear</span>
             </div>
 
-            {/* B · Subir vídeos */}
-            <section className="cc-card p-5">
-              <label className="text-sm font-semibold text-gray-200">🎥 Subir vídeos</label>
-              <p className="mt-1 text-xs text-gray-500">
-                Se analizan en tu dispositivo: duración, resolución y orientación. Nada se envía a ningún servidor.
-              </p>
-              <label className="mt-3 block cursor-pointer rounded-xl border border-dashed border-white/20 bg-black/20 px-4 py-8 text-center transition-colors hover:border-violet-400/50">
-                <input
-                  type="file"
-                  accept="video/*"
-                  multiple
-                  className="hidden"
-                  onChange={(e) => void onFiles(e.target.files)}
-                />
-                {probingLabel ? (
-                  <span className="text-sm text-violet-300">{probingLabel}</span>
-                ) : (
+            {step === 1 && (
+              <section className="cc-card p-6 text-center">
+                <h1 className="text-xl font-bold">Crea tu anuncio</h1>
+                <p className="mt-1 text-sm text-gray-400">Sube tu vídeo. Todo se hace en tu dispositivo.</p>
+
+                <label className="mt-5 block cursor-pointer rounded-2xl border border-dashed border-white/25 bg-black/20 px-4 py-10 transition-colors hover:border-violet-400/50">
+                  <input type="file" accept="video/*" className="hidden" onChange={(e) => void onFile(e.target.files)} />
+                  {probing ? (
+                    <span className="text-sm text-violet-300">Analizando vídeo…</span>
+                  ) : (
+                    <>
+                      <span className="block text-4xl">🎥</span>
+                      <span className="mt-2 block text-sm font-semibold text-gray-200">Toca para subir vídeo</span>
+                      <span className="mt-1 block text-xs text-gray-500">MP4 · MOV · WebM</span>
+                    </>
+                  )}
+                </label>
+
+                {probe && (
+                  <div className="mt-4 rounded-xl bg-white/5 px-4 py-3 text-left text-sm text-gray-200">
+                    ✓ {file?.name} · {probe.duration.toFixed(1)} s · {probe.orientation}
+                  </div>
+                )}
+
+                <div className="mt-5">
+                  <p className="mb-2 text-sm font-semibold text-gray-200">¿Qué quieres en el anuncio?</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => setMode("voice")}
+                      className={`rounded-xl border px-3 py-4 text-left ${
+                        mode === "voice" ? "border-violet-400/70 bg-violet-500/10" : "border-white/10 bg-white/[0.02]"
+                      }`}
+                    >
+                      <div className="text-lg">🎙️</div>
+                      <div className="mt-1 text-sm font-semibold text-white">Voz + subtítulos</div>
+                      <div className="text-[11px] text-gray-500">Lee el guion del producto</div>
+                    </button>
+                    <button
+                      onClick={() => setMode("music")}
+                      className={`rounded-xl border px-3 py-4 text-left ${
+                        mode === "music" ? "border-violet-400/70 bg-violet-500/10" : "border-white/10 bg-white/[0.02]"
+                      }`}
+                    >
+                      <div className="text-lg">🎵</div>
+                      <div className="mt-1 text-sm font-semibold text-white">Solo música</div>
+                      <div className="text-[11px] text-gray-500">Rápido, sin voz</div>
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setStep(2)}
+                  disabled={!probe}
+                  className="cc-btn-primary mt-5 w-full rounded-2xl px-6 py-4 text-base font-bold text-white disabled:opacity-40"
+                >
+                  Continuar
+                </button>
+              </section>
+            )}
+
+            {step === 2 && (
+              <div className="space-y-4">
+                {mode === "voice" && (
                   <>
-                    <span className="block text-sm font-semibold text-gray-200">
-                      Seleccionar vídeos
-                    </span>
-                    <span className="mt-1 block text-xs text-gray-500">MP4 · MOV · WebM</span>
+                    <section className="cc-card p-5">
+                      <label className="text-sm font-semibold text-gray-200">
+                        Enlace de AliExpress <span className="text-gray-500">(opcional)</span>
+                      </label>
+                      <p className="mt-1 text-[11px] text-gray-500">
+                        Lo analizamos para el guion. Si lo dejas vacío usamos una voz genérica.
+                      </p>
+                      <div className="mt-2 flex gap-2">
+                        <input
+                          value={link}
+                          onChange={(e) => setLink(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && loadProduct()}
+                          placeholder="https://es.aliexpress.com/item/…"
+                          inputMode="url"
+                          className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm outline-none focus:border-violet-400/60"
+                        />
+                        <button onClick={loadProduct} disabled={analizing} className="rounded-xl border border-white/15 px-4 py-3 text-sm hover:bg-white/5">
+                          {analizing ? "…" : "Usar"}
+                        </button>
+                      </div>
+                      {product?.title && (
+                        <div className="mt-3 rounded-xl bg-white/5 px-4 py-3 text-sm">
+                          <div className="font-semibold text-gray-100">🛒 {product.title}</div>
+                          <div className="mt-1 text-xs text-gray-400">
+                            {product.price && (
+                              <span className="text-emerald-300">
+                                {product.currency === "EUR" ? `${product.price} €` : `$${product.price}`} ·{" "}
+                              </span>
+                            )}
+                            Voz: <b className="text-gray-200">{getVoiceById(autoVoice)?.name}</b> (se elige sola)
+                          </div>
+                        </div>
+                      )}
+                    </section>
+
+                    <ScriptPanel
+                      script={script}
+                      onChange={(t) => {
+                        setScript(t);
+                        setScriptEdited(true);
+                      }}
+                      targetSec={probe?.duration ?? null}
+                      lang={normalizeGenLang(getVoiceById(voiceId)?.locale ?? "es-ES")}
+                      styleId={styleId}
+                    />
+
+                    <VoicePanel
+                      voiceId={voiceId}
+                      onVoice={setVoiceId}
+                      styleId={styleId}
+                      onStyle={setStyleId}
+                      recommended={recommended}
+                      lang={normalizeGenLang(getVoiceById(voiceId)?.locale ?? "es-ES")}
+                      installedIds={installedIds}
+                      preparingVoice={preparingVoice}
+                      preparePct={preparePct}
+                      scriptText={script}
+                    />
                   </>
                 )}
-              </label>
-              {files.length > 0 && (
-                <ul className="mt-3 space-y-1 text-xs text-gray-400">
-                  {files.map((f, i) => (
-                    <li key={i} className="truncate">
-                      • {f.name} ({probes[i] ? `${probes[i].duration.toFixed(1)} s` : "…"})
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
 
-            {error && (
-              <div className="rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                {error}
+                {mode === "music" && (
+                  <section className="cc-card p-5 text-sm text-gray-300">
+                    🎵 Música automática seleccionada según la duración del vídeo. Sin voz ni subtítulos.
+                  </section>
+                )}
+
+                <div className="flex gap-3">
+                  <button onClick={() => setStep(1)} className="rounded-2xl border border-white/15 px-5 py-4 text-sm hover:bg-white/5">
+                    ← Atrás
+                  </button>
+                  <button
+                    onClick={() => setStep(3)}
+                    disabled={mode === "voice" && !script.trim()}
+                    className="cc-btn-primary flex-1 rounded-2xl px-6 py-4 text-base font-bold text-white disabled:opacity-40"
+                  >
+                    Revisar
+                  </button>
+                </div>
               </div>
             )}
-          </div>
-        )}
 
-        {phase === "review" && (
-          <div className="cc-fade-up space-y-5">
-            <header className="flex items-center justify-between">
-              <h1 className="text-xl font-bold tracking-tight">Elige el vídeo base</h1>
-              <button onClick={() => setPhase("source")} className="text-xs text-gray-400 hover:text-white">
-                ← Volver
-              </button>
-            </header>
-
-            {product && (
-              <section className="cc-card p-5">
-                <div className="flex items-center gap-2 text-xs text-violet-300">
-                  🛒 Producto analizado
-                </div>
-                {product.title && (
-                  <h2 className="mt-2 line-clamp-2 text-sm font-semibold text-gray-100">
-                    {product.title}
-                  </h2>
-                )}
-                <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400">
-                  {product.price && (
-                    <span>
-                      Precio:{" "}
-                      <b className="text-emerald-300">
-                        {product.currency === "EUR" ? `${product.price} €` : `$${product.price}`}
-                      </b>
-                    </span>
+            {step === 3 && (
+              <section className="cc-card space-y-3 p-5">
+                <h1 className="text-xl font-bold">Listo para crear</h1>
+                <ul className="space-y-1.5 text-sm text-gray-300">
+                  <li>🎥 Vídeo: {probe?.duration.toFixed(1)} s ({mode === "voice" ? "voz + subtítulos" : "solo música"})</li>
+                  {mode === "voice" && (
+                    <>
+                      <li>🎙️ Voz: {getVoiceById(voiceId)?.name} · tono {recommended}</li>
+                      <li>✍️ Guion: {script.split(/\s+/).filter(Boolean).length} palabras</li>
+                    </>
                   )}
-                  {product.seller && <span>Vendedor: {product.seller}</span>}
-                  {!product.title && <span>Nombre no disponible</span>}
+                </ul>
+
+                {error && (
+                  <div className="rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                    {error}
+                  </div>
+                )}
+
+                <div className="flex gap-3">
+                  <button onClick={() => setStep(2)} className="rounded-2xl border border-white/15 px-5 py-4 text-sm hover:bg-white/5">
+                    ← Atrás
+                  </button>
+                  <button
+                    onClick={start}
+                    disabled={!canGenerate}
+                    className="cc-btn-primary flex-1 rounded-2xl px-6 py-4 text-base font-bold text-white disabled:opacity-40"
+                  >
+                    🎬 Crear anuncio
+                  </button>
                 </div>
-                {product.features.length > 0 && (
-                  <ul className="mt-2 space-y-0.5 text-[11px] text-gray-500">
-                    {product.features.slice(0, 4).map((f, i) => (
-                      <li key={i}>• {f}</li>
-                    ))}
-                  </ul>
+                {!canGenerate && mode === "voice" && (
+                  <p className="-mt-1 text-center text-xs text-gray-500">
+                    {preparingVoice ? "Preparando voces…" : "Falta preparar la voz"}
+                  </p>
                 )}
               </section>
             )}
 
-            {remoteVids.length > 0 && (
-              <section className="space-y-2">
-                <h2 className="text-sm font-semibold text-gray-300">Vídeos encontrados</h2>
-                {remoteVids.map((rv, i) => {
-                  const active = picked?.kind === "remote" && picked.url === rv.url;
-                  return (
-                    <button
-                      key={i}
-                      onClick={() => void pickRemote(rv)}
-                      className={`flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-left ${
-                        active ? "border-violet-400/70 bg-violet-500/10" : "border-white/10 bg-white/[0.02]"
-                      }`}
-                    >
-                      <video
-                        src={rv.url}
-                        muted
-                        preload="metadata"
-                        className="h-14 w-10 rounded-lg bg-black object-cover"
-                        onLoadedMetadata={(e) => {
-                          const d = e.currentTarget.duration;
-                          if (Number.isFinite(d)) {
-                            setRemoteVids((old) =>
-                              old.map((x, j) => (j === i ? { ...x, duration: d } : x))
-                            );
-                          }
-                        }}
-                      />
-                      <span className="text-sm text-gray-200">Vídeo {i + 1}</span>
-                      {rv.duration && (
-                        <span className="ml-auto text-xs text-gray-500">{rv.duration.toFixed(1)} s</span>
-                      )}
-                      {active && <span className="ml-auto text-xs text-violet-300">Elegido ✓</span>}
-                    </button>
-                  );
-                })}
-              </section>
-            )}
-
-            {probes.length > 0 && (
-              <section className="space-y-2">
-                <h2 className="text-sm font-semibold text-gray-300">Tus vídeos</h2>
-                {probes.map((p, i) => {
-                  const active = picked?.kind === "file" && files[i] === picked.file;
-                  return (
-                    <button
-                      key={i}
-                      onClick={() => pickFile(p, i)}
-                      className={`flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-left ${
-                        active ? "border-violet-400/70 bg-violet-500/10" : "border-white/10 bg-white/[0.02]"
-                      }`}
-                    >
-                      <span className="text-lg">🎥</span>
-                      <span className="min-w-0 flex-1 truncate text-sm text-gray-200">{p.name}</span>
-                      <span className="text-xs text-gray-500">
-                        {p.duration.toFixed(1)} s · {p.orientation}
-                      </span>
-                    </button>
-                  );
-                })}
-              </section>
-            )}
-
-            {error && (
-              <div className="rounded-xl border border-sky-400/25 bg-sky-500/10 px-4 py-3 text-xs text-sky-200">
-                {error}
-              </div>
-            )}
-
-            <button
-              onClick={() => setPhase("compose")}
-              disabled={!picked}
-              className="cc-btn-primary w-full rounded-2xl px-6 py-4 text-base font-bold text-white disabled:opacity-40"
-            >
-              Continuar →
-            </button>
-          </div>
-        )}
-
-        {phase === "compose" && (
-          <div className="cc-fade-up space-y-5">
-            <header className="flex items-center justify-between">
-              <h1 className="text-xl font-bold tracking-tight">Prepara tu anuncio</h1>
-              <button onClick={() => setPhase("review")} className="text-xs text-gray-400 hover:text-white">
-                ← Cambiar vídeo
-              </button>
-            </header>
-
-            <div className="cc-card flex items-center justify-between p-4 text-xs text-gray-300">
-              <span className="min-w-0 truncate">{picked?.label}</span>
-              <span className="ml-3 shrink-0 font-semibold text-violet-300">
-                ⏱ {picked ? formatDuration(picked.duration) : "—"}
-              </span>
-            </div>
-
-            <ScriptPanel
-              script={script}
-              onChange={(t) => {
-                setScript(t);
-                setScriptEdited(true);
-              }}
-              targetSec={picked?.duration ?? null}
-              lang={genLang}
-              styleId={styleId}
-            />
-
-            <VoicePanel
-              voiceId={voiceId}
-              onVoice={setVoiceId}
-              styleId={styleId}
-              onStyle={setStyleId}
-              recommended={recommended}
-              lang={genLang}
-              installedIds={installedIds}
-              preparingVoice={preparingVoice}
-              preparePct={preparePct}
-              scriptText={script}
-            />
-
-            <section className="cc-card flex items-center gap-3 p-4">
-              <span>🎵</span>
-              <div className="flex-1">
-                <p className="text-sm font-semibold text-gray-200">Música automática</p>
-                <p className="text-[11px] text-gray-500">
-                  Elegida según el guion, el tono y la duración. Cambia en cada versión.
-                </p>
-              </div>
-              <Link href="/musica" className="text-xs text-violet-300 hover:text-violet-200">
-                Escuchar
-              </Link>
-            </section>
-
-            {error && (
+            {error && step !== 2 && step !== 3 && (
               <div className="rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
                 {error}
               </div>
-            )}
-
-            <button
-              onClick={start}
-              disabled={!canGenerate}
-              className="cc-btn-primary w-full rounded-2xl px-6 py-4 text-base font-bold text-white disabled:opacity-40"
-            >
-              🎬 Generar anuncio
-            </button>
-            {!canGenerate && !preparingVoice && (
-              <p className="-mt-2 text-center text-xs text-gray-500">
-                {script.trim() ? "Esperando voces…" : "Escribe o genera el guion primero."}
-              </p>
             )}
           </div>
         )}
 
         {phase === "running" && (
-          <RunningView stage={stage} pct={pct} activeIdx={activeIdx} onCancel={cancel} />
+          <div className="cc-fade-up space-y-6 py-10">
+            <div className="text-center">
+              <h1 className="text-2xl font-bold">{STAGE_LABELS[stage]}</h1>
+              {eta != null && <p className="mt-1 text-sm text-gray-400">Quedan ~{eta} s · {pct}%</p>}
+              <p className="mt-1 text-sm text-gray-400">Puedes cancelar en cualquier momento.</p>
+            </div>
+            <div className="h-3 overflow-hidden rounded-full bg-white/8">
+              <div className="h-full rounded-full transition-all duration-500" style={{ width: `${Math.max(4, pct)}%`, background: "linear-gradient(90deg,#8B7CFF,#22D3EE)" }} />
+            </div>
+            <div className="text-center text-3xl font-extrabold tabular-nums">{pct}%</div>
+            <ol className="space-y-2">
+              {STEPS.map((s, i) => {
+                const done = i < (ORDER_INDEX.get(stage as never) ?? -1) || stage === "DONE";
+                const active = s === stage;
+                return (
+                  <li key={s} className={`flex items-center gap-3 rounded-xl border px-4 py-3 text-sm ${active ? "border-violet-400/50 bg-violet-500/10 text-white" : done ? "border-emerald-400/25 bg-emerald-500/5 text-gray-300" : "border-white/8 bg-white/[0.02] text-gray-500"}`}>
+                    <span className="w-5 text-center">{done ? "✓" : active ? <Spinner /> : "○"}</span>
+                    {STAGE_LABELS[s].replace("…", "")}
+                  </li>
+                );
+              })}
+            </ol>
+            <button onClick={() => abortRef.current?.abort()} className="w-full rounded-xl border border-white/15 px-4 py-3 text-sm hover:bg-white/5">
+              Cancelar
+            </button>
+          </div>
         )}
 
         {phase === "result" && result && (
-          <ResultView
-            result={result}
-            onAnotherVersion={start}
-            onEditScript={() => setPhase("compose")}
-            onNewSource={() => {
-              URL.revokeObjectURL(result.url);
-              setResult(null);
-              setPicked(null);
-              setPhase("source");
-            }}
-          />
+          <div className="cc-fade-up space-y-5">
+            <div className="text-center">
+              <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/20 text-2xl">✓</div>
+              <h1 className="text-2xl font-bold">Tu anuncio está listo</h1>
+            </div>
+            <video src={result.url} controls autoPlay playsInline poster={result.thumbnail || undefined} className="mx-auto max-h-[58vh] rounded-2xl border border-white/10 bg-black shadow-2xl" />
+            <dl className="cc-card divide-y divide-white/6 text-sm">
+              <Row k="Duración" v={`${formatDuration(result.duration)}${result.targetSeconds ? ` (obj ${result.targetSeconds.toFixed(1)} s)` : ""}`} />
+              {result.voiceName && <Row k="Voz" v={result.voiceName} />}
+              <Row k="Música" v={result.musicTrackName ?? "Sin música"} />
+              <Row k="Subtítulos" v={result.cuesCount > 0 ? `${result.cuesCount} tarjetas` : "Ninguno"} />
+            </dl>
+            {result.errors.length > 0 && (
+              <div className="rounded-xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
+                {result.errors.join(" · ")}
+              </div>
+            )}
+            <a href={result.url} download={`clipcraft-${result.projectId.slice(0, 8)}.${result.ext}`} className="cc-btn-primary block w-full rounded-2xl px-6 py-4 text-center text-base font-bold text-white">
+              ⬇ Descargar
+            </a>
+            <button onClick={() => { if (result.url) URL.revokeObjectURL(result.url); setResult(null); setPhase("setup"); setStep(1); setFile(null); setProbe(null); setScript(""); }} className="w-full rounded-xl border border-white/15 px-4 py-3 text-sm font-medium hover:bg-white/5">
+              🔄 Crear otro
+            </button>
+          </div>
         )}
       </div>
     </AppShell>
   );
 }
 
-function RunningView({
-  stage,
-  pct,
-  activeIdx,
-  onCancel,
-}: {
-  stage: StageName;
-  pct: number;
-  activeIdx: number;
-  onCancel: () => void;
-}) {
-  return (
-    <div className="cc-fade-up space-y-6">
-      <div className="text-center">
-        <h1 className="text-2xl font-bold">{STAGE_LABELS[stage]}</h1>
-        <p className="mt-1 text-sm text-gray-400">Puedes cancelar en cualquier momento.</p>
-      </div>
-
-      <div className="h-3 overflow-hidden rounded-full bg-white/8">
-        <div
-          className="h-full rounded-full transition-all duration-500"
-          style={{ width: `${Math.max(4, pct)}%`, background: "linear-gradient(90deg,#8B7CFF,#22D3EE)" }}
-        />
-      </div>
-      <div className="text-center text-3xl font-extrabold tabular-nums">{pct}%</div>
-
-      <ol className="space-y-2">
-        {STEPS.map((s, i) => {
-          const done = i < activeIdx || stage === "DONE";
-          const active = s === stage;
-          return (
-            <li
-              key={s}
-              className={`flex items-center gap-3 rounded-xl border px-4 py-3 text-sm ${
-                active
-                  ? "border-violet-400/50 bg-violet-500/10 text-white"
-                  : done
-                    ? "border-emerald-400/25 bg-emerald-500/5 text-gray-300"
-                    : "border-white/8 bg-white/[0.02] text-gray-500"
-              }`}
-            >
-              <span className="w-5 text-center">{done ? "✓" : active ? <Spinner /> : "○"}</span>
-              {STAGE_LABELS[s].replace("…", "")}
-            </li>
-          );
-        })}
-      </ol>
-
-      <button onClick={onCancel} className="w-full rounded-xl border border-white/15 px-4 py-3 text-sm hover:bg-white/5">
-        Cancelar
-      </button>
-    </div>
-  );
+function useProjectActionsSafe() {
+  const { projects, saveProject } = useProjectActions();
+  return [projects, saveProject] as const;
 }
 
 function Spinner() {
-  return (
-    <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-violet-300 border-t-transparent align-middle" />
-  );
-}
-
-function ResultView({
-  result,
-  onAnotherVersion,
-  onEditScript,
-  onNewSource,
-}: {
-  result: CreationResult;
-  onAnotherVersion: () => void;
-  onEditScript: () => void;
-  onNewSource: () => void;
-}) {
-  return (
-    <div className="cc-fade-up space-y-5">
-      <div className="text-center">
-        <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/20 text-2xl">✓</div>
-        <h1 className="text-2xl font-bold">Tu anuncio está listo</h1>
-      </div>
-
-      <video
-        src={result.url}
-        controls
-        autoPlay
-        playsInline
-        poster={result.thumbnail || undefined}
-        className="mx-auto max-h-[58vh] rounded-2xl border border-white/10 bg-black shadow-2xl"
-      />
-
-      <dl className="cc-card divide-y divide-white/6 text-sm">
-        <Row k="Duración" v={`${formatDuration(result.duration)}${result.targetSeconds ? ` (objetivo ${result.targetSeconds.toFixed(1)} s)` : ""}`} />
-        <Row k="Voz" v={result.voiceName ?? "—"} />
-        <Row k="Tono" v={result.styleId ?? "—"} />
-        <Row k="Música" v={result.musicTrackName ?? "Sin música"} />
-        <Row k="Subtítulos" v={result.cuesCount > 0 ? `${result.cuesCount} tarjetas` : "Ninguno"} />
-      </dl>
-
-      {result.errors.length > 0 && (
-        <div className="rounded-xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
-          {result.errors.join(" · ")}
-        </div>
-      )}
-
-      <a
-        href={result.url}
-        download={`clipcraft-${result.projectId.slice(0, 8)}.${result.ext}`}
-        className="cc-btn-primary block w-full rounded-2xl px-6 py-4 text-center text-base font-bold text-white"
-      >
-        ⬇ Descargar
-      </a>
-
-      <div className="grid grid-cols-2 gap-3">
-        <ActionBtn onClick={onAnotherVersion}>🔄 Otra versión</ActionBtn>
-        <ActionBtn onClick={onEditScript}>✏️ Editar guion</ActionBtn>
-        <ActionBtn onClick={onEditScript}>🎙 Cambiar voz</ActionBtn>
-        <ActionBtn onClick={onNewSource}>🎥 Otro vídeo</ActionBtn>
-      </div>
-    </div>
-  );
-}
-
-function ActionBtn({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="rounded-xl border border-white/15 px-4 py-3 text-sm font-medium text-gray-200 hover:bg-white/5"
-    >
-      {children}
-    </button>
-  );
+  return <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-violet-300 border-t-transparent align-middle" />;
 }
 
 function Row({ k, v }: { k: string; v: string }) {
@@ -730,4 +504,3 @@ function Row({ k, v }: { k: string; v: string }) {
     </div>
   );
 }
-

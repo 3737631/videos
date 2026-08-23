@@ -54,15 +54,32 @@ export interface ProgressTracker {
   current(): number;
 }
 
+/** ETA en segundos restantes, derivado del último avance real */
+function estimateRemaining(pct: number): number | null {
+  if (pct <= 0.5 || pct >= 99.5) return null;
+  const now = performance.now();
+  // velocidad observada: pct por ms
+  const d = now - estimateRemaining._t0;
+  const dp = pct - estimateRemaining._lastPct;
+  estimateRemaining._lastPct = pct;
+  estimateRemaining._t0 = now;
+  if (d < 30 || dp <= 0) return null;
+  const pctPerMs = dp / d;
+  const remainingPct = 100 - pct;
+  return Math.max(1, Math.round(remainingPct / pctPerMs / 1000));
+}
+estimateRemaining._t0 = 0;
+estimateRemaining._lastPct = 0;
+
 export function createProgressTracker(
-  report: (stage: StageName, humanLabel: string, pct: number) => void
+  report: (stage: StageName, humanLabel: string, pct: number, etaSec?: number | null) => void
 ): ProgressTracker {
   let max = -1;
   const apply = (stage: StageName, pct: number) => {
     // MONOTONÍA: nunca menor que lo ya mostrado
     const clamped = Math.max(max, Math.max(0, Math.min(100, Math.round(pct))));
     max = clamped;
-    report(stage, STAGE_LABELS[stage], clamped);
+    report(stage, STAGE_LABELS[stage], clamped, estimateRemaining(clamped));
   };
   return {
     set(stage, pctInBand = 0) {
@@ -74,7 +91,7 @@ export function createProgressTracker(
       apply("DONE", 100);
     },
     fail() {
-      report("ERROR", STAGE_LABELS.ERROR, max >= 0 ? max : 0);
+      report("ERROR", STAGE_LABELS.ERROR, max >= 0 ? max : 0, null);
     },
     current() {
       return max;

@@ -6,16 +6,17 @@ import { Sidebar, NAV } from "@/components/Sidebar";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const onCrear = pathname === "/crear" || pathname === "/";
 
   return (
     <div className="flex h-[100dvh] overflow-hidden">
       <Sidebar />
       <main className="flex-1 overflow-y-auto pb-16 md:pb-0">{children}</main>
 
-      {/* Navegación inferior móvil — usable con una mano */}
       <nav className="fixed inset-x-0 bottom-0 z-40 flex h-16 items-stretch border-t border-white/8 bg-[#0B0D14]/95 backdrop-blur-md md:hidden">
         {NAV.map((item) => {
-          const active = pathname === item.href;
+          const active =
+            item.href === "/crear" ? onCrear : pathname === item.href;
           return (
             <Link
               key={item.href}
