@@ -15,7 +15,7 @@ function stage(options: RenderOptions, s: string, pct: number) {
 }
 
 // Validación ligera sin ffmpeg: metadatos vía <video> del navegador
-async function quickValidateMp4(blob: Blob): Promise<RenderValidation> {
+export async function quickValidateMp4(blob: Blob): Promise<RenderValidation> {
   const base: RenderValidation = {
     ok: false,
     duration: 0,

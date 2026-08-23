@@ -61,7 +61,73 @@ export function stopPreview() {
 /**
  * Genera la locución con la voz neuronal LOCAL (Kokoro, corre en el navegador):
  * ilimitada y sin claves. Respaldo universal: Google Translate TTS.
+ * Las locuciones se CACHEAN: si el mismo texto+voz ya se generó antes, se
+ * reutiliza al instante sin volver a calcular nada.
  */
+const VOICE_CACHE_DB = "clipcraft-voice-cache";
+let voiceCacheDb: IDBDatabase | null = null;
+
+async function openVoiceCache(): Promise<IDBDatabase | null> {
+  if (typeof indexedDB === "undefined") return null;
+  if (voiceCacheDb) return voiceCacheDb;
+  try {
+    voiceCacheDb = await new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open(VOICE_CACHE_DB, 1);
+      req.onupgradeneeded = () => {
+        if (!req.result.objectStoreNames.contains("voices")) {
+          req.result.createObjectStore("voices");
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    return voiceCacheDb;
+  } catch {
+    return null;
+  }
+}
+
+async function hashText(s: string): Promise<string> {
+  try {
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+    return Array.from(new Uint8Array(buf))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  } catch {
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return `h${h}`;
+  }
+}
+
+async function getCachedVoice(key: string): Promise<Blob | null> {
+  try {
+    const db = await openVoiceCache();
+    if (!db) return null;
+    return await new Promise<Blob | null>((resolve) => {
+      const tx = db.transaction("voices", "readonly");
+      const rq = tx.objectStore("voices").get(key);
+      rq.onsuccess = () => resolve((rq.result as Blob) || null);
+      rq.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function putCachedVoice(key: string, blob: Blob): Promise<void> {
+  try {
+    const db = await openVoiceCache();
+    if (!db) return;
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction("voices", "readwrite");
+      tx.objectStore("voices").put(blob, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {}
+}
+
 export async function generateSpeech(
   settings: AppSettings,
   text: string,
@@ -70,18 +136,35 @@ export async function generateSpeech(
 ): Promise<TtsResult> {
   void settings;
   if (!text.trim()) throw new Error("El texto de la voz está vacío");
+  // 1. Caché de voces ya generadas (mismo texto + misma voz)
+  const key = `${voiceId}::${await hashText(text)}`;
+  const cached = await getCachedVoice(key);
+  if (cached && cached.size > 1024) {
+    options?.onProgress?.(1, 1);
+    try {
+      const r = await finalizeTts(cached, "cache-reutilizada");
+      return r;
+    } catch {
+      /* caché inválida: regeneramos */
+    }
+  }
   const errs: string[] = [];
+  let result: TtsResult | null = null;
   try {
-    return await generateKokoroTts(text, voiceId, options?.onProgress);
+    result = await generateKokoroTts(text, voiceId, options?.onProgress);
   } catch (e) {
     errs.push(e instanceof Error ? e.message : "local");
   }
-  try {
-    return await generateGoogleTts(text);
-  } catch (e) {
-    errs.push(e instanceof Error ? e.message : "google");
+  if (!result) {
+    try {
+      result = await generateGoogleTts(text);
+    } catch (e) {
+      errs.push(e instanceof Error ? e.message : "google");
+    }
   }
-  throw new Error(`No se pudo generar la voz (${errs.join(" · ")})`);
+  if (!result) throw new Error(`No se pudo generar la voz (${errs.join(" · ")})`);
+  void putCachedVoice(key, result.blob);
+  return result;
 }
 
 // ===== Voz neuronal LOCAL (Kokoro-82M vía WASM): ilimitada, sin claves =====

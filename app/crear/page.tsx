@@ -41,6 +41,7 @@ async function fetchProductInfo(url: string): Promise<string> {
 }
 import { loadFfmpeg, isFfmpegLoaded, getFfmpeg, resetFfmpeg } from "@/lib/ffmpeg";
 import { renderProject } from "@/lib/render";
+import { renderProjectMobile } from "@/lib/renderMobile";
 
 function newProject(): Project {
   const id = crypto.randomUUID();
@@ -583,37 +584,49 @@ export default function CrearPage() {
       setProject(next);
       saveProject(next);
 
-      // 7. Render final MP4 en el navegador (máxima calidad)
-      setJobStage({ stage: "Cargando motor de vídeo (solo la primera vez)", progress: 70 });
-      if (!isFfmpegLoaded()) {
-        if (ffLoading) await ffLoading;
-        else await loadFfmpeg();
-      }
+      // 7. Render final MP4
+      setJobStage({ stage: "Preparando el render", progress: 70 });
       const onStage = (st: string, p: number) =>
-        setJobStage({ stage: st, progress: Math.min(99, Math.max(15, p)) });
+        setJobStage({ stage: st, progress: Math.min(99, Math.max(10, p)) });
       let result;
-      try {
-        result = await renderProject(getFfmpeg(), next, {
-          // iPhone: 720p → render ~2x más rápido; en TikTok la diferencia es imperceptible
-          targetWidth: IS_IOS ? 720 : 1080,
-          targetHeight: IS_IOS ? 1280 : 1920,
-          fps: 24,
-          crf: IS_IOS ? 20 : 18,
+      if (IS_IOS) {
+        // iPhone/iPad: grabación NATIVA con el codificador del sistema (rápido, sin cuelgues)
+        result = await renderProjectMobile(next, {
+          width: 540,
+          height: 960,
+          fps: 30,
+          musicVolume: plan.audio.musicVolume ?? 0.25,
+          voiceVolume: plan.audio.voiceVolume ?? 1,
           onStage,
         });
-      } catch {
-        // Reintento en modo ligero con motor recién creado (memoria fresca)
-        addLog("⚠️ Reintentando en modo ligero…");
-        setJobStage({ stage: "Reintentando en modo ligero", progress: 70 });
-        await resetFfmpeg();
-        await loadFfmpeg();
-        result = await renderProject(getFfmpeg(), next, {
-          targetWidth: 540,
-          targetHeight: 960,
-          fps: 24,
-          crf: 26,
-          onStage,
-        });
+      } else {
+        // Escritorio: motor completo (máxima calidad)
+        setJobStage({ stage: "Cargando motor de vídeo (solo la primera vez)", progress: 70 });
+        if (!isFfmpegLoaded()) {
+          if (ffLoading) await ffLoading;
+          else await loadFfmpeg();
+        }
+        try {
+          result = await renderProject(getFfmpeg(), next, {
+            targetWidth: 1080,
+            targetHeight: 1920,
+            fps: 24,
+            crf: 18,
+            onStage,
+          });
+        } catch {
+          addLog("⚠️ Reintentando en modo ligero…");
+          setJobStage({ stage: "Reintentando en modo ligero", progress: 70 });
+          await resetFfmpeg();
+          await loadFfmpeg();
+          result = await renderProject(getFfmpeg(), next, {
+            targetWidth: 540,
+            targetHeight: 960,
+            fps: 24,
+            crf: 26,
+            onStage,
+          });
+        }
       }
 
       update({ renderUrl: result.url, renderValidation: result.validation, status: "exported" });
