@@ -420,7 +420,13 @@ export default function CrearPage() {
               <div className="rounded-2xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
                 <div className="font-semibold">La voz falló (se usó solo música). Error real:</div>
                 <div className="mt-1 break-words font-mono text-xs">{result.voiceError}</div>
-                <div className="mt-2 text-xs text-rose-200/80">Copia este texto y envíamelo para arreglar la causa exacta.</div>
+                <button
+                  onClick={() => navigator.clipboard?.writeText(result.voiceError ?? "")}
+                  className="mt-2 rounded-lg border border-rose-400/40 px-3 py-1.5 text-xs font-medium text-rose-100 hover:bg-rose-500/20"
+                >
+                  Copiar error
+                </button>
+                <div className="mt-2 text-xs text-rose-200/80">Pégalo aquí para arreglar la causa exacta de una vez.</div>
               </div>
             )}
             <div className="cc-card p-5">

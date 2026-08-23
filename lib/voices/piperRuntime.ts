@@ -11,13 +11,18 @@ import { fetchBinaryWithProgress, TimeoutError } from "@/lib/net";
 // Assets auto-hospedados en /piper/ (mismo origen → sin CORS, funciona en iPhone).
 // Se resuelven contra la RAÍZ del basePath (no contra la ruta actual de la página),
 // porque en /crear document.baseURI es /videos/crear y rompería las rutas.
+//
+// ASSET_V: cache-busting OBLIGATORIO. iOS Safari cachea de forma agresiva los
+// Web Workers y los .wasm; tras cambiar estos binarios, la caché sirve la versión
+// vieja y la voz falla SILENCIOSAMENTE. El query fuerza la re-descarga siempre.
+const ASSET_V = "?v=4";
 function assetRoot(): string {
   if (typeof window === "undefined") return "/piper/";
   const base = window.location.pathname.startsWith("/videos") ? "/videos" : "";
   return base + "/piper/";
 }
 function piperAssetUrl(file: string): string {
-  return assetRoot() + file;
+  return assetRoot() + file + ASSET_V;
 }
 
 export type ProgressFn = (loaded: number, total: number) => void;
@@ -80,7 +85,7 @@ function nextPho<T>(msg: unknown): Promise<T> {
 async function getPhonemizer(): Promise<Worker> {
   if (phoReady) return phoReady;
   phoReady = (async () => {
-    const w = new Worker(assetRoot() + "PhonemizeWebWorker.js");
+    const w = new Worker(assetRoot() + "PhonemizeWebWorker.js" + ASSET_V);
     try {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => reject(new TimeoutError(60000)), 60000);

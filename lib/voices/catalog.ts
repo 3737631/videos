@@ -36,7 +36,11 @@ export function voiceRoot(): string {
 /** Marca "local:..." → se resuelve contra el origen en tiempo de descarga. */
 export function resolveVoiceUrl(u?: string): string | undefined {
   if (!u) return u;
-  if (u.startsWith("local:")) return voiceRoot() + u.slice("local:".length);
+  if (u.startsWith("local:")) {
+    // Cache-busting: iOS cachea de forma agresiva los .onnx/.wasm y reusa la
+    // versión vieja aunque el binario cambie. El query fuerza re-descarga.
+    return voiceRoot() + u.slice("local:".length) + "?v=4";
+  }
   return u;
 }
 
