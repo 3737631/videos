@@ -9,11 +9,15 @@ import { cacheGet, cachePut } from "@/lib/idb";
 import { fetchBinaryWithProgress, TimeoutError } from "@/lib/net";
 
 // Assets auto-hospedados en /piper/ (mismo origen → sin CORS, funciona en iPhone).
-// Se resuelven contra baseURI para que funcione igual en dev (/piper/) y en
-// producción (basePath /videos → /videos/piper/).
+// Se resuelven contra la RAÍZ del basePath (no contra la ruta actual de la página),
+// porque en /crear document.baseURI es /videos/crear y rompería las rutas.
+function assetRoot(): string {
+  if (typeof window === "undefined") return "/piper/";
+  const base = window.location.pathname.startsWith("/videos") ? "/videos" : "";
+  return base + "/piper/";
+}
 function piperAssetUrl(file: string): string {
-  if (typeof document === "undefined") return file;
-  return new URL("piper/" + file, document.baseURI).href;
+  return assetRoot() + file;
 }
 
 export type ProgressFn = (loaded: number, total: number) => void;
@@ -70,7 +74,7 @@ function nextPho<T>(msg: unknown): Promise<T> {
 async function getPhonemizer(): Promise<Worker> {
   if (phoReady) return phoReady;
   phoReady = (async () => {
-    const w = new Worker(new URL("piper/PhonemizeWebWorker.js", document.baseURI));
+    const w = new Worker(assetRoot() + "PhonemizeWebWorker.js");
     try {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => reject(new TimeoutError(60000)), 60000);

@@ -91,9 +91,16 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
     video = document.createElement("video");
     video.src = videoUrl;
     video.muted = true;
+    video.defaultMuted = true;
     video.playsInline = true;
     video.preload = "auto";
     video.crossOrigin = "anonymous";
+    // iOS exige el elemento en el DOM para reproducir de forma programática
+    video.style.cssText =
+      "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none;z-index:-1;";
+    try {
+      document.body.appendChild(video);
+    } catch {}
     try {
       await new Promise<void>((res) => {
         const t = setTimeout(res, 8000);
@@ -223,6 +230,9 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
       tracks.forEach((tr) => tr.stop());
       try {
         video?.pause();
+      } catch {}
+      try {
+        if (video && video.parentElement) video.parentElement.removeChild(video);
       } catch {}
       if (videoUrl) URL.revokeObjectURL(videoUrl);
       try {
