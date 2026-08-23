@@ -19,7 +19,11 @@ import { analyzeVideo } from "@/lib/analyze";
 import { detectViralHighlights, type ViralSegment } from "@/lib/viral";
 import { detectWatermark } from "@/lib/watermark";
 import { isKokoroReady, onKokoroDownload, preloadKokoro } from "@/lib/tts";
-import { generateMusicTrack, getUserTracks, pickMusicCategory } from "@/lib/music";
+import { classifyMusic } from "@/lib/audio/musicClassifier";
+import { selectTrack } from "@/lib/audio/musicSelector";
+import { renderTrack, type RenderedTrack } from "@/lib/audio/musicLibrary";
+import { mixVoiceAndMusic } from "@/lib/audio/audioMixer";
+import { assertVoiceAudio, assertMusicAudio, assertFinalAudio } from "@/lib/audio/validation";
 
 // Detección de iPhone/iPad para optimizar velocidad de render
 const IS_IOS =
@@ -46,7 +50,8 @@ async function fetchProductInfo(url: string): Promise<string> {
 }
 import { loadFfmpeg, isFfmpegLoaded, getFfmpeg, resetFfmpeg } from "@/lib/ffmpeg";
 import { renderProject } from "@/lib/render";
-import { renderProjectMobile, buildSoundtrack, verifyFinalAudio } from "@/lib/renderMobile";
+import { renderProjectMobile } from "@/lib/renderMobile";
+import { buildLibrary } from "@/lib/audio/musicLibrary";
 
 function newProject(): Project {
   const id = crypto.randomUUID();
@@ -176,43 +181,35 @@ export default function CrearPage() {
 
   useEffect(() => {
     // TEST AUTOMÁTICO (consola): window.__ccSelfTest()
-    // Valida TTS, síntesis musical y mezcla OfflineAudioContext con energía real.
+    // Valida clasificador → selector → síntesis → mezcla → validación + TTS real.
     type SelfTestWin = Window & { __ccSelfTest?: () => Promise<boolean> };
     (window as SelfTestWin).__ccSelfTest = async () => {
       const tag = "[SELFTEST]";
       /* eslint-disable no-console */
-      console.log(`${tag} 1) Sintetizando pista musical de 8s…`);
+      console.log(`${tag} 1) Clasificador musical…`);
       try {
-        const t = await generateMusicTrack(8);
-        console.log(`${tag}    OK · ${t.duration.toFixed(2)}s · ${t.name}`);
-        const fakeProject = {
-          editPlan: { voice: null, music: { trackId: t.id } },
-          music: { url: t.url },
-        } as unknown as Project;
-        console.log(`${tag} 2) Mezclando banda sonora (OfflineAudioContext)…`);
-        const wav = await buildSoundtrack(fakeProject, { duration: 8 });
-        if (!wav) throw new Error("banda sonora vacía");
-        const AC =
-          window.AudioContext ||
-          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-        const ctx = new AC();
-        const buf = await ctx.decodeAudioData(await wav.arrayBuffer());
-        const d = buf.getChannelData(0);
-        let sum = 0;
-        let n = 0;
-        for (let i = 0; i < d.length; i += 37) {
-          sum += Math.abs(d[i]);
-          n++;
-        }
-        await ctx.close();
-        const rms = sum / Math.max(1, n);
-        console.log(`${tag}    OK · RMS=${rms.toFixed(4)} dur=${buf.duration.toFixed(2)}s`);
-        if (rms < 0.001) throw new Error("la mezcla sale muda");
-        console.log(`${tag} 3) Generando voz de prueba (TTS)…`);
-        const v = await generateSpeech(settings, "This is a quick self test.", settings.ttsVoiceId || "alloy");
+        const c1 = classifyMusic({ scriptText: "3 cosas que debes hacer para ganar dinero" });
+        const c2 = classifyMusic({ scriptText: "mi rutina de mañana skincare y café" });
+        const c3 = classifyMusic({ scriptText: "esto ocurrió y nadie sabe por qué" });
+        console.log(`${tag}    dinero→${c1.primaryCategory} rutina→${c2.primaryCategory} misterio→${c3.primaryCategory}`);
+        const lib = buildLibrary();
+        if (lib.length < 100) throw new Error(`biblioteca incompleta: ${lib.length}`);
+        console.log(`${tag} 2) Biblioteca: ${lib.length} pistas`);
+        const selA = selectTrack("viral", "motivational", "test-A", 1000);
+        const selB = selectTrack("viral", "motivational", "test-B", 2000);
+        console.log(`${tag} 3) Selección A=${selA.track.id} B=${selB.track.id}`);
+        console.log(`${tag} 4) Sintetizando ${selA.track.id} 8s…`);
+        const trk = await renderTrack(selA.track, 8);
+        await assertMusicAudio(trk.blob);
+        console.log(`${tag}    OK · ${trk.bpm}bpm · ${trk.duration.toFixed(1)}s`);
+        console.log(`${tag} 5) Mezcla voz+música…`);
+        const wav = await mixVoiceAndMusic(null, trk.blob, { durationSec: 8, musicVolume: 0.14 });
+        if (!wav) throw new Error("mezcla vacía");
+        const st = await assertFinalAudio(wav);
+        console.log(`${tag}    OK · RMS=${st.rms.toFixed(4)} dur=${st.duration.toFixed(1)}s`);
+        console.log(`${tag} 6) Voz TTS real (en-US)…`);
+        const v = await generateSpeech(settings, "This is a quick self test of your voice.", "en-US-f");
         console.log(`${tag}    OK · proveedor=${v.provider} · ${v.duration.toFixed(1)}s`);
-        const cat = pickMusicCategory("my morning routine lifestyle vlog");
-        console.log(`${tag} 4) Categoría automática de ejemplo: ${cat}`);
         console.log(`${tag} ✅ TODO CORRECTO`);
         return true;
       } catch (e) {
@@ -433,7 +430,7 @@ export default function CrearPage() {
       }
       addLog(`Guion listo (${script.length} bloques)`);
 
-      // 4. Voz neuronal local ilimitada (o modo solo música)
+      // 4. Voz — banda de progreso REAL 10→30 (nunca avanza sin terminar)
       let localVoiceUrl: string | null = null;
       let ttsBlob: Blob | null = null;
       let voiceDuration = 0;
@@ -444,14 +441,14 @@ export default function CrearPage() {
         const primeraVez = !IS_MOBILE && !(await isKokoroReady());
         setJobStage({
           stage: primeraVez ? "Descargando voz neuronal (solo la primera vez)" : "Generando voz",
-          progress: 42,
+          progress: 12,
         });
         {
           const fullText = capForViral(getScriptFullText({ ...project, script }), IS_IOS ? 140 : 400);
           if (fullText.trim()) {
             try {
               const voiceT0 = Date.now();
-              addLog(`[VOZ] ${fullText.length} caracteres · ${IS_MOBILE ? "TTS rápido en la nube" : "Kokoro local"}`);
+              addLog(`[VOZ] ${fullText.length} caracteres · ${IS_MOBILE ? "proveedores en la nube" : "Kokoro local"}`);
               let lastDone = 0;
               let lastTotal = 1;
               // Latido visible cada segundo: nunca se queda congelado sin información
@@ -460,22 +457,21 @@ export default function CrearPage() {
                 const dl = voicePctRef.current;
                 if (!IS_MOBILE && lastDone === 0 && dl !== null && dl < 100) {
                   setJobStage({
-                    stage: `⬇️ Descargando voz… ${dl}% · ${el}s transcurridos (sin límite, solo la primera vez)`,
-                    progress: Math.min(45, 42 + dl! * 0.03),
+                    stage: `⬇️ Descargando voz… ${dl}% · ${el}s transcurridos`,
+                    progress: Math.min(14, 12 + dl! * 0.02),
                   });
                   return;
                 }
                 setJobStage({
                   stage: `🎙️ Generando voz… ${el}s transcurridos${lastDone ? ` (${lastDone}/${lastTotal} frases)` : ""}`,
-                  progress: Math.min(51, 42 + (lastDone / Math.max(1, lastTotal)) * 9),
+                  progress: Math.min(28, 12 + (lastDone / Math.max(1, lastTotal)) * 16),
                 });
               }, 1000);
-              // En móvil el TTS es un servicio rápido: si en 75s no hay voz hay un
-              // problema real y se informa con el motivo; en escritorio Kokoro puede tardar más.
+              // Tope duro por intento: la promesa SIEMPRE se resuelve
               const VOICE_CAP_MS = IS_MOBILE ? 75000 : 250000;
               const attempt = async (t: string): Promise<Awaited<ReturnType<typeof generateSpeech>> | null> =>
                 Promise.race([
-                  generateSpeech(settings, t, settings.ttsVoiceId || "alloy", {
+                  generateSpeech(settings, t, settings.ttsVoiceId || "en-US-f", {
                     speed: 1,
                     onProgress: (done, total) => {
                       lastDone = done;
@@ -484,7 +480,7 @@ export default function CrearPage() {
                       const eta = Math.max(1, Math.round((el / Math.max(1, done)) * (total - done)));
                       setJobStage({
                         stage: `🎙️ Generando voz ${done}/${total} · quedan ~${eta}s`,
-                        progress: 42 + (done / total) * 9,
+                        progress: Math.min(29, 12 + (done / total) * 17),
                       });
                     },
                   }),
@@ -502,12 +498,13 @@ export default function CrearPage() {
               }
               if (!voice) throw new Error(`La voz no respondió en ${Math.round(VOICE_CAP_MS / 1000)}s`);
               addLog(`[VOZ] Lista vía ${voice.provider} en ${((Date.now() - voiceT0) / 1000).toFixed(1)}s`);
-              if (await validateVoiceBlob(voice.url)) {
-                ttsBlob = voice.blob;
-                localVoiceUrl = voice.url;
-                voiceDuration = voice.duration || 0;
-                addLog(`Voz generada (${voiceDuration.toFixed(1)}s)`);
-              }
+              // Validación REAL del audio de voz antes de seguir
+              const vst = await assertVoiceAudio(voice.blob);
+              ttsBlob = voice.blob;
+              localVoiceUrl = voice.url;
+              voiceDuration = voice.duration || vst.duration;
+              addLog(`Voz OK (${voiceDuration.toFixed(1)}s · RMS ${vst.rms.toFixed(3)})`);
+              setJobStage({ stage: "Voz lista", progress: 30 });
             } catch (e) {
               lastVoiceError = errText(e);
               addLog(`Voz: ${lastVoiceError}`);
@@ -519,7 +516,7 @@ export default function CrearPage() {
       // 5. Subtítulos desde la voz
       let cues: Project["subtitles"]["cues"] = [];
       if (ttsBlob && serviceStatus(settings, "stt").configured) {
-        setJobStage({ stage: "Generando subtítulos", progress: 55 });
+        setJobStage({ stage: "Generando subtítulos", progress: 31 });
         try {
           cues = await transcribeWithTimestamps(settings, ttsBlob);
           addLog(`Subtítulos: ${cues.length} bloques`);
@@ -617,52 +614,44 @@ export default function CrearPage() {
         subtitles: { ...project.subtitles, cues },
         voice: localVoiceUrl ? project.voice : project.voice,
       };
-      // 🎵 Música SIEMPRE: 1ª opción la canción subida por el usuario; si no hay,
-      // se compone una original al momento (síntesis local con energía verificada)
-      if (!base.music) {
-        setJobStage({ stage: "Preparando música…", progress: 63 });
+      // 🎵 Música AUTOMÁTICA (el usuario nunca elige): clasificador por scoring →
+      // selector anti-repetición → pista procedural única de la biblioteca de 100
+      let autoMusicBlob: Blob | null = null;
+      {
+        setJobStage({ stage: "Eligiendo música…", progress: 31 });
         try {
-          const userTracks = await getUserTracks();
-          if (userTracks.length) {
-            const t = userTracks[0];
-            base.music = {
-              id: t.id,
-              name: t.name,
-              duration: t.duration,
-              bpm: t.bpm,
-              category: t.category || "personal",
-              url: t.url,
-            };
-            addLog(`[MÚSICA] Usando tu canción "${t.name}" (${t.duration.toFixed(0)}s)`);
-          }
-        } catch (e) {
-          addLog(`[MÚSICA] Error leyendo tus pistas: ${errText(e)}`);
-        }
-        if (!base.music) {
           const estDur = Math.max(8, Math.min(38, picked.reduce((a, g) => a + (g.end - g.start), 0)));
-          // Categoría musical elegida automáticamente por el tono del guion/estilo
-          const musicCat = pickMusicCategory(
-            script.map((s) => s.text).join(" "),
-            project.style,
-            project.goal
+          const cls = classifyMusic({
+            scriptText: script.map((s) => s.text).join(" "),
+            projectStyle: project.style,
+            goal: project.goal,
+            durationSec: estDur,
+          });
+          addLog(
+            `[MÚSICA] Clasificación: ${cls.primaryCategory} (+${cls.secondaryCategory}) · energía ${cls.energy} · confianza ${cls.confidence}`
           );
-          addLog(`[MÚSICA] Categoría automática: ${musicCat}`);
-          try {
-            const track = await generateMusicTrack(estDur, musicCat);
-            base.music = {
-              id: track.id,
-              name: track.name,
-              duration: track.duration,
-              bpm: track.bpm,
-              category: track.category,
-              url: track.url,
-            };
-            addLog(`[MÚSICA] "${track.name}" compuesta · ${track.duration.toFixed(0)}s · energía OK`);
-          } catch (e) {
-            addLog(`[MÚSICA] Falló la generación: ${errText(e)}`);
-          }
+          setJobStage({ stage: "Eligiendo música…", progress: 33 });
+          const sel = selectTrack(cls.primaryCategory, cls.secondaryCategory, project.id || `p${Date.now()}`);
+          addLog(`[MÚSICA] Pista seleccionada: ${sel.track.id}`);
+          setJobStage({ stage: `Componiendo música (${sel.track.id})…`, progress: 36 });
+          const rendered = await renderTrack(sel.track, estDur);
+          // Validación REAL: nada de exportar una pista muda
+          await assertMusicAudio(rendered.blob);
+          autoMusicBlob = rendered.blob;
+          base.music = {
+            id: sel.track.id,
+            name: `${sel.track.id} · ${rendered.bpm}bpm`,
+            duration: rendered.duration,
+            bpm: rendered.bpm,
+            category: sel.track.category,
+            url: rendered.url,
+          };
+          addLog(`[MÚSICA] Lista: ${sel.track.id} · ${rendered.bpm}bpm · ${rendered.duration.toFixed(0)}s`);
+        } catch (e) {
+          addLog(`[MÚSICA] Falló la preparación: ${errText(e)}`);
         }
       }
+      setJobStage({ stage: "Música lista", progress: 40 });
 
       const plan = buildEditPlan(base);
       if (localVoiceUrl) {
@@ -694,16 +683,15 @@ export default function CrearPage() {
         setJobStage({ stage: st, progress: Math.min(99, Math.max(10, p)) });
       let result;
       if (IS_IOS) {
-        // iPhone/iPad: grabación NATIVA, hasta 2 intentos; el porcentaje es ÚNICO y
-        // monótono (la grabación ocupa el tramo 60→97 de la barra global)
-        const mapP = (p: number) => 60 + Math.max(0, Math.min(100, p)) * 0.37;
+        // iPhone/iPad: grabación NATIVA (imagen), banda de progreso 55→90
+        const mapP = (p: number) => 55 + Math.max(0, Math.min(100, p)) * 0.35;
         let lastErr: unknown = null;
         let okAttempt: Awaited<ReturnType<typeof renderProjectMobile>> | null = null;
         for (let attempt = 0; attempt < 2 && !okAttempt; attempt++) {
           try {
             if (attempt > 0) {
               addLog("Repetimos la grabación nativa…");
-              setJobStage({ stage: "Repetimos la grabación…", progress: 58 });
+              setJobStage({ stage: "Repetimos la grabación…", progress: 55 });
             }
             okAttempt = await renderProjectMobile(next, {
               width: 540,
@@ -718,50 +706,48 @@ export default function CrearPage() {
           }
         }
         if (!okAttempt) throw lastErr instanceof Error ? lastErr : new Error("grabación fallida");
-        // Banda sonora DETERMINISTA: se genera la mezcla (voz + música en bucle) con
-        // OfflineAudioContext y se une al vídeo SIN re-codificar la imagen. Esto no es
-        // un plan B: ES el pipeline de sonido, 100% fiable en iOS.
-        if (okAttempt.validation.hasAudio) {
-          setJobStage({ stage: "Creando pista de sonido…", progress: 97 });
-          const wav = await buildSoundtrack(next, {
-            duration: okAttempt.validation.duration,
-            voiceVolume: plan.audio.voiceVolume ?? 1,
-            musicVolume: plan.audio.musicVolume ?? 0.25,
-          });
-          if (wav) {
-            addLog("Uniendo vídeo y sonido…");
-            setJobStage({ stage: "Uniendo vídeo y sonido…", progress: 98 });
-            if (!isFfmpegLoaded()) await loadFfmpeg();
-            const ff = getFfmpeg();
-            const vExt = okAttempt.blob.type.includes("webm") ? "webm" : "mp4";
-            await ff.writeFile("mv." + vExt, new Uint8Array(await okAttempt.blob.arrayBuffer()));
-            await ff.writeFile("st.wav", new Uint8Array(await wav.arrayBuffer()));
-            await ff.exec([
-              "-i", "mv." + vExt, "-i", "st.wav",
-              "-c:v", "copy", "-c:a", "aac", "-b:a", "160k",
-              "-shortest", "-movflags", "+faststart", "-y", "final_av.mp4",
-            ]);
-            const out = await ff.readFile("final_av.mp4");
-            const bytes =
-              typeof out === "string" ? new TextEncoder().encode(out) : new Uint8Array(out);
-            const nb = new Blob([bytes.buffer as ArrayBuffer], { type: "video/mp4" });
-            URL.revokeObjectURL(okAttempt.url);
-            okAttempt = {
-              ...okAttempt,
-              blob: nb,
-              url: URL.createObjectURL(nb),
-              validation: {
-                ...okAttempt.validation,
-                sizeBytes: nb.size,
-                codec: "h264/aac",
-              },
-            };
-          }
+        // MEZCLA REAL voz+música (banda 40→55): OfflineAudioContext determinista y
+        // unión al vídeo sin re-codificar imagen. Pipeline principal, no un plan B.
+        setJobStage({ stage: "Mezclando voz y música…", progress: 46 });
+        const wav = await mixVoiceAndMusic(ttsBlob, autoMusicBlob, {
+          durationSec: okAttempt.validation.duration,
+          voiceVolume: plan.audio.voiceVolume ?? 1,
+          musicVolume: Math.min(plan.audio.musicVolume ?? 0.14, 0.18),
+        });
+        if (wav && okAttempt.validation.hasAudio) {
+          await assertMusicAudio(wav);
+          addLog("Uniendo vídeo y sonido…");
+          setJobStage({ stage: "Uniendo vídeo y sonido…", progress: 52 });
+          if (!isFfmpegLoaded()) await loadFfmpeg();
+          const ff = getFfmpeg();
+          const vExt = okAttempt.blob.type.includes("webm") ? "webm" : "mp4";
+          await ff.writeFile("mv." + vExt, new Uint8Array(await okAttempt.blob.arrayBuffer()));
+          await ff.writeFile("st.wav", new Uint8Array(await wav.arrayBuffer()));
+          await ff.exec([
+            "-i", "mv." + vExt, "-i", "st.wav",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "160k",
+            "-shortest", "-movflags", "+faststart", "-y", "final_av.mp4",
+          ]);
+          const out = await ff.readFile("final_av.mp4");
+          const bytes =
+            typeof out === "string" ? new TextEncoder().encode(out) : new Uint8Array(out);
+          const nb = new Blob([bytes.buffer as ArrayBuffer], { type: "video/mp4" });
+          URL.revokeObjectURL(okAttempt.url);
+          okAttempt = {
+            ...okAttempt,
+            blob: nb,
+            url: URL.createObjectURL(nb),
+            validation: {
+              ...okAttempt.validation,
+              sizeBytes: nb.size,
+              codec: "h264/aac",
+            },
+          };
         }
         result = okAttempt;
       } else {
-        // Escritorio: motor completo (máxima calidad)
-        setJobStage({ stage: "Cargando motor de vídeo (solo la primera vez)", progress: 70 });
+        // Escritorio: motor completo (máxima calidad), banda 55→90
+        setJobStage({ stage: "Cargando motor de vídeo (solo la primera vez)", progress: 56 });
         if (!isFfmpegLoaded()) {
           if (ffLoading) await ffLoading;
           else await loadFfmpeg();
@@ -789,21 +775,18 @@ export default function CrearPage() {
         }
       }
 
-      // 🔎 Verificación automática: el vídeo NUNCA se entrega sin audio audible
-      setJobStage({ stage: "Verificando sonido del vídeo…", progress: 99 });
+      // 🔎 Verificación FINAL del audio (banda 90→100): nada sale sin sonido
+      setJobStage({ stage: "Verificando sonido final…", progress: 92 });
       try {
-        const aud = await verifyFinalAudio(result.blob);
-        addLog(`[VERIFICACIÓN] Audio RMS=${aud.rms.toFixed(4)} pico=${aud.peak.toFixed(2)} dur=${aud.duration.toFixed(1)}s`);
-        if (!aud.ok) {
-          throw new Error(
-            "El vídeo salió sin sonido (verificación automática). Reintenta: si persiste, cambia de red."
-          );
-        }
+        const st = await assertFinalAudio(result.blob);
+        addLog(
+          `[VERIFICACIÓN] Audio OK · RMS=${st.rms.toFixed(4)} pico=${st.peak.toFixed(2)} dur=${st.duration.toFixed(1)}s`
+        );
       } catch (e) {
-        if (e instanceof Error && e.message.includes("sin sonido")) throw e;
-        addLog(`[VERIFICACIÓN] No se pudo analizar el audio (${errText(e)}); se acepta el vídeo.`);
+        throw new Error(`Audio final inválido: ${errText(e)}`);
       }
 
+      setJobStage({ stage: "Finalizando…", progress: 97 });
       update({ renderUrl: result.url, renderValidation: result.validation, status: "exported" });
       setFinalUrl(result.url);
       setJobStage({ stage: "¡Tu vídeo está listo!", progress: 100 });

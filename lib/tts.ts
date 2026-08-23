@@ -1,4 +1,11 @@
 ﻿import type { AppSettings, VoiceOption } from "@/types";
+import { VOICES } from "@/lib/audio/voices";
+import {
+  providerChain,
+  googleGtxProvider,
+  tiktokProvider,
+  type TtsProvider,
+} from "@/lib/audio/ttsProviders";
 
 export interface TtsResult {
   blob: Blob;
@@ -7,18 +14,36 @@ export interface TtsResult {
   provider: string;
 }
 
-export const VOICE_CATALOG: VoiceOption[] = [
-  // Voces en INGLÉS (ideales para contenido viral en EE.UU./global)
-  { id: "alloy", name: "Alloy", gender: "neutra", style: "Natural US", language: "English", accent: "US", speed: 1 },
-  { id: "echo", name: "Echo", gender: "masculina", style: "Deep narrator", language: "English", accent: "US", speed: 1 },
-  { id: "fable", name: "Fable", gender: "neutra", style: "Storyteller UK", language: "English", accent: "UK", speed: 1 },
-  { id: "onyx", name: "Onyx", gender: "masculina", style: "Movie trailer", language: "English", accent: "US", speed: 1 },
-  { id: "nova", name: "Nova", gender: "femenina", style: "Energetic creator", language: "English", accent: "US", speed: 1 },
-  { id: "shimmer", name: "Shimmer", gender: "femenina", style: "Soft UGC", language: "English", accent: "US", speed: 1 },
-];
+/**
+ * Catálogo de voces multiidioma disponible AL INSTANTE (solo metadatos).
+ * El audio de una voz se genera únicamente cuando se usa.
+ */
+export const VOICE_CATALOG: VoiceOption[] = VOICES.map((v) => ({
+  id: v.id,
+  name: `${v.name} · ${v.langLabel.replace(/^\S+\s/, "")}`,
+  gender: v.gender,
+  style: v.gender === "femenina" ? "Femenina" : v.gender === "masculina" ? "Masculina" : "Neutra",
+  language: v.language,
+  accent: v.accent,
+  speed: 1,
+}));
 
 export function getVoiceById(id: string): VoiceOption {
   return VOICE_CATALOG.find((v) => v.id === id) || VOICE_CATALOG[0];
+}
+
+/** Compatibilidad con voces antiguas del catálogo OpenAI */
+const LEGACY_VOICE_MAP: Record<string, string> = {
+  alloy: "en-US-f",
+  nova: "en-US-f",
+  shimmer: "en-GB-f",
+  echo: "en-US-m",
+  onyx: "en-GB-m",
+  fable: "en-US-m",
+};
+
+function resolveVoiceId(id: string): string {
+  return LEGACY_VOICE_MAP[id] || id;
 }
 
 const PREVIEW_LINES: Record<string, string> = {
@@ -135,100 +160,47 @@ export async function generateSpeech(
   options?: { speed?: number; onProgress?: (done: number, total: number) => void }
 ): Promise<TtsResult> {
   void settings;
+  void options;
   if (!text.trim()) throw new Error("El texto de la voz está vacío");
+  const vid = resolveVoiceId(voiceId);
   // 1. Caché de voces ya generadas (mismo texto + misma voz)
-  const key = `${voiceId}::${await hashText(text)}`;
+  const key = `${vid}::${await hashText(text)}`;
   const cached = await getCachedVoice(key);
   if (cached && cached.size > 1024) {
-    options?.onProgress?.(1, 1);
     try {
-      const r = await finalizeTts(cached, "cache-reutilizada");
-      return r;
+      return await finalizeTts(cached, "cache-reutilizada");
     } catch {
       /* caché inválida: regeneramos */
     }
   }
-  const errs: string[] = [];
-  let result: TtsResult | null = null;
-  // En MÓVIL la cadena NO incluye Kokoro: descargar ~86MB en un iPhone es lo que
-  // provocaba el bloqueo del 42%. TikTok-TTS es inmediato y tiene CORS abierto.
+  // 2. Cadena de proveedores con timeout/abort garantizados en cada uno
   const isMobile =
     typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-  const chain: Array<() => Promise<TtsResult>> = isMobile
-    ? [
-        () => generateTiktokTts(text, voiceId),
-        () => generateGoogleTts(text),
-      ]
-    : [
-        () => generateKokoroTts(text, voiceId, options?.onProgress),
-        () => generateTiktokTts(text, voiceId),
-        () => generateGoogleTts(text),
-      ];
-  for (const step of chain) {
+  const chain: TtsProvider[] = providerChain(isMobile);
+  if (!isMobile) {
+    // Escritorio: Kokoro local primero (sin coste y de calidad); móvil nunca lo carga
+    chain.unshift({
+      name: "kokoro-local",
+      synthesize: async (t, v) => {
+        const r = await generateKokoroTts(t, v);
+        return { blob: r.blob, provider: r.provider };
+      },
+    });
+  }
+  const errs: string[] = [];
+  let result: TtsResult | null = null;
+  for (const p of chain) {
     if (result) break;
     try {
-      result = await step();
+      const { blob, provider } = await p.synthesize(text, vid);
+      result = await finalizeTts(blob, provider);
     } catch (e) {
-      errs.push(e instanceof Error ? e.message : "proveedor");
+      errs.push(`${p.name}: ${e instanceof Error ? e.message : "error"}`);
     }
   }
-  if (!result) throw new Error(`No se pudo generar la voz (${errs.join(" · ")})`);
+  if (!result) throw new Error(`No se pudo generar la voz → ${errs.join(" · ")}`);
   void putCachedVoice(key, result.blob);
   return result;
-}
-
-// ===== Voz estilo TikTok vía worker público (CORS abierto, sin claves, ~1s) =====
-const TIKTOK_VOICE_MAP: Record<string, string> = {
-  alloy: "en_us_001",
-  nova: "en_us_002",
-  shimmer: "en_female_samc",
-  echo: "en_male_narration",
-  onyx: "en_us_010",
-  fable: "en_male_cody",
-};
-
-const TIKTOK_TTS_URL = "https://tiktok-tts.weilnet.workers.dev/api/generation";
-
-function base64ToBlob(b64: string, type = "audio/mpeg"): Blob {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new Blob([bytes], { type });
-}
-
-async function generateTiktokTts(text: string, voiceId: string): Promise<TtsResult> {
-  const chunks = splitForTts(text, 110);
-  const parts: Blob[] = [];
-  for (const chunk of chunks) {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 15000);
-    let json: { success?: boolean; data?: string; message?: string };
-    try {
-      const res = await fetch(TIKTOK_TTS_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: chunk, voice: TIKTOK_VOICE_MAP[voiceId] || "en_us_001" }),
-        signal: ctrl.signal,
-      });
-      if (!res.ok) throw new Error(`TikTok-TTS HTTP ${res.status}`);
-      json = await res.json();
-    } catch (e) {
-      clearTimeout(t);
-      throw new Error(
-        e instanceof Error && e.name === "AbortError"
-          ? "TikTok-TTS sin respuesta (15s)"
-          : `TikTok-TTS: ${e instanceof Error ? e.message : "error"}`
-      );
-    }
-    clearTimeout(t);
-    if (!json.success || !json.data) throw new Error(`TikTok-TTS: ${json.message || "sin datos"}`);
-    const blob = base64ToBlob(json.data);
-    if (blob.size < 1024) throw new Error("TikTok-TTS devolvió audio vacío");
-    parts.push(blob);
-    if (chunks.length > 1) await new Promise((r) => setTimeout(r, 150));
-  }
-  const blob = parts.length === 1 ? parts[0] : new Blob(parts, { type: "audio/mpeg" });
-  return finalizeTts(blob, "tiktok-tts");
 }
 
 // ===== Voz neuronal LOCAL (Kokoro-82M vía WASM): ilimitada, sin claves =====
@@ -415,50 +387,6 @@ function splitForTts(text: string, maxLen: number): string[] {
   }
   if (cur) chunks.push(cur);
   return chunks.length ? chunks : [text.slice(0, maxLen)];
-}
-
-const GTX_PROXIES: Array<(u: string) => string> = [
-  (u) => `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(u)}`,
-  (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
-  (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-];
-
-async function fetchWithTimeout(url: string, ms = 12000): Promise<Response> {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), ms);
-  try {
-    return await fetch(url, { signal: ctrl.signal });
-  } finally {
-    clearTimeout(t);
-  }
-}
-
-async function generateGoogleTts(text: string): Promise<TtsResult> {
-  const chunks = splitForTts(text, 190);
-  const parts: Blob[] = [];
-  for (const chunk of chunks) {
-    const target =
-      `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl=en&q=${encodeURIComponent(chunk)}`;
-    let got: Blob | null = null;
-    for (const wrap of GTX_PROXIES) {
-      try {
-        const res = await fetchWithTimeout(wrap(target), 12000);
-        if (!res.ok) continue;
-        const b = await res.blob();
-        if (b.size > 1024 && (b.type.includes("audio") || b.type === "" || b.type.includes("mpeg"))) {
-          got = b;
-          break;
-        }
-      } catch {
-        /* siguiente proxy */
-      }
-    }
-    if (!got) throw new Error("Respaldo TTS no disponible");
-    parts.push(got);
-    if (chunks.length > 1) await new Promise((r) => setTimeout(r, 300));
-  }
-  const blob = new Blob(parts, { type: "audio/mpeg" });
-  return finalizeTts(blob, "respaldo-gratis");
 }
 
 // ===== Utilidades =====

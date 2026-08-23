@@ -8,7 +8,8 @@ import { useSettings } from "@/lib/useStore";
 
 export default function VocesPage() {
   const [settings, update] = useSettings();
-  const [filter, setFilter] = useState<"English" | "Español">("English");
+  const [filter, setFilter] = useState<string>("English");
+  const LANGS = ["English", "Español", "Français", "Deutsch", "Italiano", "Português"] as const;
   const [playingId, setPlayingId] = useState<string | null>(null);
 
   const voices = VOICE_CATALOG.filter((v) => v.language === filter);
@@ -40,7 +41,7 @@ export default function VocesPage() {
         </p>
 
         <div className="mt-5 flex items-center gap-2 flex-wrap">
-          {(["English", "Español"] as const).map((lang) => (
+          {LANGS.map((lang) => (
             <button
               key={lang}
               onClick={() => {
@@ -54,7 +55,7 @@ export default function VocesPage() {
                   : "bg-white/5 text-gray-300 hover:bg-white/10"
               }`}
             >
-              {lang === "English" ? "🇺🇸 English" : "🇪🇸 Español"}
+              {lang}
             </button>
           ))}
         </div>

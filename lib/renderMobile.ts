@@ -1,4 +1,4 @@
-import type { Project } from "@/types";
+﻿import type { Project } from "@/types";
 
 export interface MobileRenderOptions {
   width: number;
@@ -81,126 +81,10 @@ function drawCover(
   c.drawImage(v, (W - dw) / 2, (H - dh) / 2, dw, dh);
 }
 
-/** Banda sonora DETERMINISTA: voz + música en bucle mezclados sin captura en vivo */
-export async function buildSoundtrack(
-  project: Project,
-  opts: { duration: number; voiceVolume?: number; musicVolume?: number }
-): Promise<Blob | null> {
-  const plan = project.editPlan;
-  if (!plan) return null;
-  const hasVoice = !!plan.voice?.audioUrl;
-  const hasMusic = !!(plan.music && project.music?.url);
-  if (!hasVoice && !hasMusic) return null;
-
-  const OC: typeof OfflineAudioContext =
-    window.OfflineAudioContext ||
-    (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext })
-      .webkitOfflineAudioContext;
-  const sr = 44100;
-  const len = Math.ceil((opts.duration + 0.4) * sr);
-  const octx = new OC(2, len, sr);
-
-  if (hasVoice) {
-    const ab = await (await fetch(plan.voice!.audioUrl!)).arrayBuffer();
-    const buf = await octx.decodeAudioData(ab);
-    const s = octx.createBufferSource();
-    s.buffer = buf;
-    const g = octx.createGain();
-    g.gain.value = opts.voiceVolume ?? 1;
-    s.connect(g);
-    g.connect(octx.destination);
-    s.start(0);
-  }
-  if (hasMusic) {
-    const ab = await (await fetch((project.music as { url: string }).url)).arrayBuffer();
-    const buf = await octx.decodeAudioData(ab);
-    const s = octx.createBufferSource();
-    s.buffer = buf;
-    s.loop = true;
-    const g = octx.createGain();
-    g.gain.value = opts.musicVolume ?? 0.25;
-    s.connect(g);
-    g.connect(octx.destination);
-    s.start(0);
-  }
-
-  const rendered = await octx.startRendering();
-
-  // WAV PCM 16-bit estéreo
-  const chs = rendered.numberOfChannels;
-  const frames = rendered.length;
-  const data = new Int16Array(frames * chs);
-  const chans: Float32Array[] = [];
-  for (let c = 0; c < chs; c++) chans.push(rendered.getChannelData(c));
-  let o = 0;
-  for (let i = 0; i < frames; i++) {
-    for (let c = 0; c < chs; c++) {
-      let s = chans[c][i];
-      s = s < -1 ? -1 : s > 1 ? 1 : s;
-      data[o++] = s < 0 ? s * 0x8000 : s * 0x7fff;
-    }
-  }
-  const bytesPerSample = 2;
-  const blockAlign = chs * bytesPerSample;
-  const dataSize = frames * blockAlign;
-  const buffer = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(buffer);
-  const ws = (off: number, str: string) => {
-    for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i));
-  };
-  ws(0, "RIFF");
-  view.setUint32(4, 36 + dataSize, true);
-  ws(8, "WAVE");
-  ws(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, chs, true);
-  view.setUint32(24, sr, true);
-  view.setUint32(28, sr * blockAlign, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, 16, true);
-  ws(36, "data");
-  view.setUint32(40, dataSize, true);
-  new Uint8Array(buffer, 44).set(new Uint8Array(data.buffer));
-  return new Blob([buffer], { type: "audio/wav" });
-}
-
-/** ¿El archivo de vídeo contiene audio audible? (decodificación nativa, sin ffmpeg) */
-export async function verifyFinalAudio(
-  blob: Blob
-): Promise<{ ok: boolean; rms: number; peak: number; duration: number }> {
-  const AC: typeof AudioContext =
-    window.AudioContext ||
-    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-  const ctx = new AC();
-  try {
-    const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
-    const ch = buf.getChannelData(0);
-    let sum = 0;
-    let peak = 0;
-    let n = 0;
-    for (let i = 0; i < ch.length; i += 41) {
-      const v = Math.abs(ch[i]);
-      sum += v;
-      if (v > peak) peak = v;
-      n++;
-    }
-    const rms = n ? sum / n : 0;
-    return {
-      ok: rms > 0.0012 && peak > 0.02 && buf.duration > 0.5,
-      rms,
-      peak,
-      duration: buf.duration,
-    };
-  } finally {
-    ctx.close().catch(() => {});
-  }
-}
-
 /**
- * Render NATIVO para iPhone/iPad: graba SOLO IMAGEN con MediaRecorder (codificador
- * del sistema, tiempo real). El sonido se añade después de forma determinista con
- * buildSoundtrack + unión rápida. Sin captura de audio en vivo = sin silencios raros.
+ * Render NATIVO para iPhone/iPad: graba SOLO IMAGEN con MediaRecorder
+ * (codificador del sistema, tiempo real). El sonido se mezcla después de forma
+ * determinista (audioMixer) y se une al vídeo sin capturar audio en vivo.
  */
 export async function renderProjectMobile(
   project: Project,
@@ -245,7 +129,6 @@ export async function renderProjectMobile(
     }
     return v;
   };
-  // Precargar TODOS los vídeos usados antes de empezar
   for (const c of clips) {
     const s = project.sources.find((x) => x.id === c.sourceId)!;
     await getVid(s.url);
@@ -267,12 +150,10 @@ export async function renderProjectMobile(
     };
     setFont();
     let raw = cue.text.toUpperCase().trim();
-    // Reducir hasta que quepa en una línea razonable
     while (fs > H * 0.03 && g.measureText(raw).width > maxW) {
       fs -= 2;
       setFont();
     }
-    // Si aun así no cabe, dividir en 2 líneas equilibradas
     let lines: string[] = [raw];
     if (g.measureText(raw).width > maxW) {
       const parts = raw.split(/\s+/);
