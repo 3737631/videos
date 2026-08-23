@@ -69,9 +69,10 @@ export function buildEditPlan(project: Project): EditPlan {
   const cues = project.subtitles.cues;
   const targetDuration = resolveTargetDuration(project.targetDuration, meta?.duration || 0);
 
-  const voiceDuration = project.editPlan?.voice?.duration || cues.length
-    ? (cues[cues.length - 1]?.end || targetDuration)
-    : 0;
+  // La voz manda si existe; si no, el último subtítulo; nunca 0 por accidente.
+  const lastCueEnd = cues.length ? cues[cues.length - 1].end || 0 : 0;
+  const planVoiceDuration = project.editPlan?.voice?.duration || 0;
+  const voiceDuration = Math.max(planVoiceDuration, lastCueEnd);
 
   const duration = Math.max(targetDuration, voiceDuration, meta?.duration || 0);
 

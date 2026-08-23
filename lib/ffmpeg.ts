@@ -19,6 +19,8 @@ export function getFfmpeg(): FFmpeg {
   return ffmpeg;
 }
 
+const LOAD_TIMEOUT_MS = 120000;
+
 export async function loadFfmpeg(onLog?: (line: string) => void): Promise<FFmpeg> {
   if (ffmpeg) return ffmpeg;
   const instance = new FFmpeg();
@@ -27,11 +29,29 @@ export async function loadFfmpeg(onLog?: (line: string) => void): Promise<FFmpeg
   }
   const base = `${CDN}/@ffmpeg/core@0.12.10/dist/umd`;
   const utilBase = `${CDN}/@ffmpeg/util@0.12.2/dist/umd`;
-  await instance.load({
-    coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, "text/javascript"),
-    wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, "application/wasm"),
-    workerURL: await toBlobURL(`${utilBase}/index.umd.js`, "text/javascript"),
-  });
+
+  // Carga con tope de tiempo: la promesa SIEMPRE termina y el timer se limpia.
+  let timerId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      (async () => {
+        await instance.load({
+          coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, "text/javascript"),
+          wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, "application/wasm"),
+          workerURL: await toBlobURL(`${utilBase}/index.umd.js`, "text/javascript"),
+        });
+      })(),
+      new Promise<never>((_, reject) => {
+        timerId = setTimeout(
+          () => reject(new Error("El motor de vídeo tardó demasiado en cargar. Comprueba tu conexión e inténtalo de nuevo.")),
+          LOAD_TIMEOUT_MS
+        );
+      }),
+    ]);
+  } finally {
+    if (timerId) clearTimeout(timerId);
+  }
+
   ffmpeg = instance;
   ffprobeUrl = `${base}/ffmpeg-core.js`;
   return instance;

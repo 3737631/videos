@@ -1,11 +1,17 @@
-﻿import type { AppSettings, VoiceOption } from "@/types";
-import { VOICES } from "@/lib/audio/voices";
-import {
-  providerChain,
-  googleGtxProvider,
-  tiktokProvider,
-  type TtsProvider,
-} from "@/lib/audio/ttsProviders";
+﻿/**
+ * TTS — arquitectura limpia:
+ *   1. Servidor de voz propio (worker; claves solo en el servidor)  ← principal
+ *   2. Clave ElevenLabs PROPIA del usuario (localStorage, opcional)
+ *   3. Kokoro local (SOLO escritorio, SOLO voces inglesas)
+ *
+ * NUNCA: proxies CORS públicos, endpoints no oficiales, ni Kokoro en móvil.
+ * Cada intento usa timeouts con limpieza garantizada y acepta AbortSignal.
+ * onProgress reporta frases REALES completadas (done/total), nunca inventos.
+ */
+import type { AppSettings, VoiceOption } from "@/types";
+import { VOICES, getVoiceDef, sttLanguageFromLocale, type VoiceDef } from "@/lib/audio/voices";
+import { hasBackend, ttsViaBackend, fetchWithTimeout } from "@/lib/apiClient";
+import { synthesizeChunkLocal, onKokoroDownload, isKokoroReady, preloadKokoro } from "@/lib/audio/kokoro";
 
 export interface TtsResult {
   blob: Blob;
@@ -14,17 +20,25 @@ export interface TtsResult {
   provider: string;
 }
 
-/**
- * Catálogo de voces multiidioma disponible AL INSTANTE (solo metadatos).
- * El audio de una voz se genera únicamente cuando se usa.
- */
+export interface GenerateSpeechOptions {
+  speed?: number;
+  /** Cancelación real */
+  signal?: AbortSignal;
+  /** Frases reales completadas / total */
+  onProgress?: (done: number, total: number) => void;
+}
+
+export { onKokoroDownload, isKokoroReady, preloadKokoro };
+
+// ===== Catálogo público (metadatos, cero descargas) =====
 export const VOICE_CATALOG: VoiceOption[] = VOICES.map((v) => ({
   id: v.id,
-  name: `${v.name} · ${v.langLabel.replace(/^\S+\s/, "")}`,
+  name: v.name,
   gender: v.gender,
-  style: v.gender === "femenina" ? "Femenina" : v.gender === "masculina" ? "Masculina" : "Neutra",
+  style: v.gender === "femenina" ? "Femenina" : "Masculina",
   language: v.language,
   accent: v.accent,
+  locale: v.locale,
   speed: 1,
 }));
 
@@ -32,63 +46,81 @@ export function getVoiceById(id: string): VoiceOption {
   return VOICE_CATALOG.find((v) => v.id === id) || VOICE_CATALOG[0];
 }
 
-/** Compatibilidad con voces antiguas del catálogo OpenAI */
-const LEGACY_VOICE_MAP: Record<string, string> = {
-  alloy: "en-US-f",
-  nova: "en-US-f",
-  shimmer: "en-GB-f",
-  echo: "en-US-m",
-  onyx: "en-GB-m",
-  fable: "en-US-m",
+export const VOICE_LANGUAGES = Array.from(new Set(VOICES.map((v) => v.language)));
+
+/** Muestra nativa por locale para vistas previas */
+const SAMPLE_LINES: Record<string, string> = {
+  "en-US": "This is a quick sample of your selected voice.",
+  "en-GB": "This is a quick sample of your selected voice.",
+  "es-ES": "Esta es una muestra rápida de la voz seleccionada.",
+  "es-MX": "Esta es una muestra rápida de la voz seleccionada.",
+  "fr-FR": "Voici un rapide échantillon de la voix sélectionnée.",
+  "de-DE": "Dies ist eine kurze Probe der ausgewählten Stimme.",
+  "it-IT": "Questo è un breve campion della voce selezionata.",
+  "pt-BR": "Esta é uma amostra rápida da voz selecionada.",
 };
 
-function resolveVoiceId(id: string): string {
-  return LEGACY_VOICE_MAP[id] || id;
-}
-
-const PREVIEW_LINES: Record<string, string> = {
-  English: "Wait for it... this is the part everyone is talking about!",
-};
-
-/**
- * Previsualización GRATUITA de voz usando el sintetizador del navegador.
- * No necesita claves de API ni consume créditos.
- */
-export function previewVoice(voice: VoiceOption): boolean {
-  if (typeof window === "undefined" || !("speechSynthesis" in window)) return false;
-  const synth = window.speechSynthesis;
-  synth.cancel();
-  const utter = new SpeechSynthesisUtterance(PREVIEW_LINES[voice.language] ?? "Hola, esta es una muestra de voz.");
-  utter.lang = voice.language === "English" ? (voice.accent === "UK" ? "en-GB" : "en-US") : "es-ES";
-  utter.rate = voice.speed > 0 ? Math.min(2, voice.speed) : 1;
-  utter.pitch = voice.gender === "femenina" ? 1.15 : voice.gender === "masculina" ? 0.85 : 1;
-  // Intentar elegir una voz del sistema que encaje con el idioma/acento
-  const voices = synth.getVoices();
-  const targetLang = utter.lang.toLowerCase();
-  if (voice.language === "English") {
-    const en = voices.find((v) => v.lang.toLowerCase() === targetLang) ||
-      voices.find((v) => v.lang.toLowerCase().startsWith(targetLang.slice(0, 2)));
-    if (en) utter.voice = en;
-  } else {
-    const es = voices.find((v) => v.lang.toLowerCase().startsWith("es"));
-    if (es) utter.voice = es;
+function splitForTts(text: string, maxLen: number): string[] {
+  const sentences = text.replace(/\s+/g, " ").split(/(?<=[.!?])\s+/);
+  const chunks: string[] = [];
+  let cur = "";
+  for (const s of sentences) {
+    if ((cur + " " + s).trim().length <= maxLen) {
+      cur = (cur + " " + s).trim();
+    } else {
+      if (cur) chunks.push(cur);
+      cur = s.length > maxLen ? s.slice(0, maxLen) : s;
+    }
   }
-  synth.speak(utter);
-  return true;
+  if (cur) chunks.push(cur);
+  return chunks.length ? chunks : [text.slice(0, maxLen)];
 }
 
-export function stopPreview() {
-  if (typeof window !== "undefined" && "speechSynthesis" in window) {
-    window.speechSynthesis.cancel();
+// ===== Proveedores por frase =====
+async function synthViaBackend(
+  voice: VoiceDef,
+  chunk: string,
+  signal?: AbortSignal
+): Promise<{ blob: Blob; provider: string }> {
+  const blob = await ttsViaBackend(chunk, voice.providerVoiceId, voice.locale, signal);
+  return { blob, provider: "servidor-de-voz" };
+}
+
+async function synthViaOwnKey(
+  apiKey: string,
+  voice: VoiceDef,
+  chunk: string,
+  signal?: AbortSignal
+): Promise<{ blob: Blob; provider: string }> {
+  const res = await fetchWithTimeout(
+    `https://api.elevenlabs.io/v1/text-to-speech/${voice.providerVoiceId}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "xi-api-key": apiKey, Accept: "audio/mpeg" },
+      body: JSON.stringify({
+        text: chunk,
+        model_id: "eleven_multilingual_v2",
+        voice_settings: { stability: 0.45, similarity_boost: 0.75 },
+      }),
+      signal,
+    },
+    45000
+  );
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const j = (await res.json()) as { detail?: { message?: string } | string };
+      if (typeof j?.detail === "string") msg = j.detail;
+      else if (j?.detail?.message) msg = j.detail.message;
+    } catch {}
+    throw new Error(`clave propia (${msg})`);
   }
+  const blob = await res.blob();
+  if (blob.size < 800) throw new Error("clave propia (audio vacío)");
+  return { blob, provider: "elevenlabs-clave-propia" };
 }
 
-/**
- * Genera la locución con la voz neuronal LOCAL (Kokoro, corre en el navegador):
- * ilimitada y sin claves. Respaldo universal: Google Translate TTS.
- * Las locuciones se CACHEAN: si el mismo texto+voz ya se generó antes, se
- * reutiliza al instante sin volver a calcular nada.
- */
+// ===== Caché local =====
 const VOICE_CACHE_DB = "clipcraft-voice-cache";
 let voiceCacheDb: IDBDatabase | null = null;
 
@@ -115,9 +147,7 @@ async function openVoiceCache(): Promise<IDBDatabase | null> {
 async function hashText(s: string): Promise<string> {
   try {
     const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
-    return Array.from(new Uint8Array(buf))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
+    return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
   } catch {
     let h = 0;
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
@@ -153,246 +183,28 @@ async function putCachedVoice(key: string, blob: Blob): Promise<void> {
   } catch {}
 }
 
-export async function generateSpeech(
-  settings: AppSettings,
-  text: string,
-  voiceId: string,
-  options?: { speed?: number; onProgress?: (done: number, total: number) => void }
-): Promise<TtsResult> {
-  void settings;
-  void options;
-  if (!text.trim()) throw new Error("El texto de la voz está vacío");
-  const vid = resolveVoiceId(voiceId);
-  // 1. Caché de voces ya generadas (mismo texto + misma voz)
-  const key = `${vid}::${await hashText(text)}`;
-  const cached = await getCachedVoice(key);
-  if (cached && cached.size > 1024) {
-    try {
-      return await finalizeTts(cached, "cache-reutilizada");
-    } catch {
-      /* caché inválida: regeneramos */
-    }
-  }
-  // 2. Cadena de proveedores con timeout/abort garantizados en cada uno
-  const isMobile =
-    typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-  const chain: TtsProvider[] = providerChain(isMobile);
-  if (!isMobile) {
-    // Escritorio: Kokoro local primero (sin coste y de calidad); móvil nunca lo carga
-    chain.unshift({
-      name: "kokoro-local",
-      synthesize: async (t, v) => {
-        const r = await generateKokoroTts(t, v);
-        return { blob: r.blob, provider: r.provider };
-      },
-    });
-  }
-  const errs: string[] = [];
-  let result: TtsResult | null = null;
-  for (const p of chain) {
-    if (result) break;
-    try {
-      const { blob, provider } = await p.synthesize(text, vid);
-      result = await finalizeTts(blob, provider);
-    } catch (e) {
-      errs.push(`${p.name}: ${e instanceof Error ? e.message : "error"}`);
-    }
-  }
-  if (!result) throw new Error(`No se pudo generar la voz → ${errs.join(" · ")}`);
-  void putCachedVoice(key, result.blob);
-  return result;
-}
-
-// ===== Voz neuronal LOCAL (Kokoro-82M vía WASM): ilimitada, sin claves =====
-const KOKORO_VOICE_MAP: Record<string, string> = {
-  alloy: "af_heart", // femenina cálida US
-  nova: "af_bella", // femenina enérgica US
-  shimmer: "af_nicole", // femenina suave US
-  echo: "am_adam", // masculina profunda US
-  onyx: "am_michael", // masculina narrador US
-  fable: "bm_george", // masculina storyteller UK
-};
-
-interface KokoroAudio {
-  toWav: () => ArrayBuffer;
-  audio: Float32Array;
-  sampling_rate?: number;
-}
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let kokoroInst: any = null;
-
-// Progreso de descarga del modelo (para mostrarlo en la UI desde el primer momento)
-type DownloadInfo = { status: string; loaded?: number; total?: number; name?: string };
-const kokoroListeners = new Set<(pct: number | null) => void>();
-const fileProgress = new Map<string, { loaded: number; total: number }>();
-
-export function onKokoroDownload(cb: (pct: number | null) => void): () => void {
-  kokoroListeners.add(cb);
-  return () => kokoroListeners.delete(cb);
-}
-
-function emitKokoroProgress() {
-  let loaded = 0;
-  let total = 0;
-  for (const f of fileProgress.values()) {
-    loaded += f.loaded;
-    total += f.total;
-  }
-  const pct = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : null;
-  kokoroListeners.forEach((cb) => cb(pct));
-}
-
-const KOKORO_MODEL = "onnx-community/Kokoro-82M-v1.0-ONNX";
-
-async function makeKokoro(dtype: string, device: string): Promise<any> {
-  const mod = await import("kokoro-js");
-  const progress_callback = (info: DownloadInfo) => {
-    if (info.status === "progress" && info.total) {
-      fileProgress.set(info.name || "model", { loaded: info.loaded || 0, total: info.total });
-      emitKokoroProgress();
-    }
-  };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return await (mod as any).KokoroTTS.from_pretrained(KOKORO_MODEL, { dtype, device, progress_callback });
-}
-
-/** Comprueba que la voz realmente suena (evita rutas que devuelven audio mudo) */
-async function sampleOk(tts: any): Promise<boolean> {
-  try {
-    const out = await tts.generate("This is a quick voice test.", { voice: "af_heart", speed: 1 });
-    const n = out.audio?.length || 0;
-    if (n < 1000) return false;
-    let sum = 0;
-    let count = 0;
-    for (let i = 0; i < n; i += 16) {
-      sum += Math.abs(out.audio[i]);
-      count++;
-    }
-    return sum / count > 0.001;
-  } catch {
-    return false;
-  }
-}
-
-async function getKokoro() {
-  if (!kokoroInst) {
-    // En escritorio con WebGPU probamos rutas rápidas validando que suenen;
-    // en móvil vamos directos a la ruta WASM probada.
-    const hasWebGPU = typeof navigator !== "undefined" && "gpu" in navigator;
-    const isMobileLike =
-      typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-    if (hasWebGPU && !isMobileLike) {
-      for (const dtype of ["fp16", "fp32"]) {
-        try {
-          fileProgress.clear();
-          const cand = await makeKokoro(dtype, "webgpu");
-          if (await sampleOk(cand)) {
-            kokoroInst = cand;
-            break;
-          }
-        } catch {
-          /* siguiente opción */
-        }
-      }
-    }
-    if (!kokoroInst) {
-      fileProgress.clear();
-      kokoroInst = await makeKokoro("q8", "wasm");
-    }
-  }
-  return kokoroInst;
-}
-
-export async function isKokoroReady(): Promise<boolean> {
-  return kokoroInst !== null;
-}
-
-/** Descarga el modelo en segundo plano (se llama al subir vídeos para que no espere después) */
-export async function preloadKokoro(): Promise<void> {
-  try {
-    await getKokoro();
-  } catch {
-    /* se reintentará al generar */
-  }
-}
-
-function floatToWavBlob(samples: Float32Array, sampleRate = 24000): Blob {
-  const buffer = new ArrayBuffer(44 + samples.length * 2);
-  const view = new DataView(buffer);
-  const ws = (o: number, s: string) => {
-    for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
-  };
-  ws(0, "RIFF");
-  view.setUint32(4, 36 + samples.length * 2, true);
-  ws(8, "WAVE");
-  ws(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  ws(36, "data");
-  view.setUint32(40, samples.length * 2, true);
-  let off = 44;
-  for (let i = 0; i < samples.length; i++, off += 2) {
-    const s = Math.max(-1, Math.min(1, samples[i]));
-    view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-  }
-  return new Blob([buffer], { type: "audio/wav" });
-}
-
-async function generateKokoroTts(
-  text: string,
-  voiceId: string,
-  onProgress?: (done: number, total: number) => void
-): Promise<TtsResult> {
-  const tts = await getKokoro();
-  const voice = KOKORO_VOICE_MAP[voiceId] || KOKORO_VOICE_MAP.alloy;
-  // Trozos pequeños → progreso visible con frecuencia en todos los dispositivos
-  const chunks = splitForTts(text, 130);
-  const pieces: Float32Array[] = [];
-  let totalLen = 0;
-  let sampleRate = 24000;
-  for (let i = 0; i < chunks.length; i++) {
-    const out = await tts.generate(chunks[i].trim(), { voice, speed: 1.05 });
-    sampleRate = out.sampling_rate || 24000;
-    pieces.push(out.audio);
-    totalLen += out.audio.length;
-    onProgress?.(i + 1, chunks.length);
-  }
-  const merged = new Float32Array(totalLen);
-  let off = 0;
-  for (const p of pieces) {
-    merged.set(p, off);
-    off += p.length;
-  }
-  const blob = floatToWavBlob(merged, sampleRate);
-  return finalizeTts(blob, "kokoro-local");
-}
-
-// ===== Último recurso: voz de Google Translate vía proxies con CORS abierto =====
-function splitForTts(text: string, maxLen: number): string[] {
-  const sentences = text.replace(/\s+/g, " ").split(/(?<=[.!?])\s+/);
-  const chunks: string[] = [];
-  let cur = "";
-  for (const s of sentences) {
-    if ((cur + " " + s).trim().length <= maxLen) {
-      cur = (cur + " " + s).trim();
-    } else {
-      if (cur) chunks.push(cur);
-      cur = s.length > maxLen ? s.slice(0, maxLen) : s;
-    }
-  }
-  if (cur) chunks.push(cur);
-  return chunks.length ? chunks : [text.slice(0, maxLen)];
-}
-
 // ===== Utilidades =====
+async function probeAudioDuration(url: string, timeoutMs = 5000): Promise<number> {
+  return new Promise<number>((resolve) => {
+    const audio = document.createElement("audio");
+    audio.preload = "metadata";
+    const timer = setTimeout(() => finish(0), timeoutMs); // SIEMPRE limpiado
+    function finish(v: number) {
+      clearTimeout(timer);
+      audio.onloadedmetadata = null;
+      audio.onerror = null;
+      resolve(v);
+    }
+    audio.onloadedmetadata = () =>
+      finish(Number.isFinite(audio.duration) ? audio.duration || 0 : 0);
+    audio.onerror = () => finish(0);
+    audio.src = url;
+  });
+}
+
 async function finalizeTts(blob: Blob, provider: string): Promise<TtsResult> {
   if (!blob.size || blob.size < 1024) {
-    throw new Error("El proveedor TTS devolvió un archivo vacío o inválido. Reintenta.");
+    throw new Error("El proveedor TTS devolvió un archivo vacío o inválido.");
   }
   const url = URL.createObjectURL(blob);
   const duration = await probeAudioDuration(url);
@@ -403,30 +215,159 @@ async function finalizeTts(blob: Blob, provider: string): Promise<TtsResult> {
   return { blob, url, duration, provider };
 }
 
-async function probeAudioDuration(url: string): Promise<number> {
-  return new Promise<number>((resolve) => {
-    const audio = document.createElement("audio");
-    audio.preload = "metadata";
-    audio.onloadedmetadata = () => resolve(audio.duration || 0);
-    audio.onerror = () => resolve(0);
-    audio.src = url;
-  });
+function isMobileDevice(): boolean {
+  return typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
 
-export async function validateVoiceAudio(url: string): Promise<{ ok: boolean; rms: number; duration: number }> {
-  try {
-    const res = await fetch(url);
-    const blob = await res.blob();
-    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    const ctx = new AudioCtx();
-    const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
-    const data = buf.getChannelData(0);
-    let sum = 0;
-    for (let i = 0; i < data.length; i += 200) sum += data[i] * data[i];
-    const rms = Math.sqrt(sum / Math.ceil(data.length / 200));
-    ctx.close().catch(() => {});
-    return { ok: rms > 0.002, rms, duration: buf.duration };
-  } catch {
-    return { ok: false, rms: 0, duration: 0 };
+// ===== Generación principal =====
+export async function generateSpeech(
+  settings: AppSettings,
+  text: string,
+  voiceId: string,
+  options?: GenerateSpeechOptions
+): Promise<TtsResult> {
+  if (!text.trim()) throw new Error("El texto de la voz está vacío");
+  const voice = getVoiceDef(voiceId);
+  const signal = options?.signal;
+
+  // 1. Caché exacta → resultado instantáneo
+  const cacheKey = `${voice.id}::${await hashText(text)}`;
+  const cached = await getCachedVoice(cacheKey);
+  if (cached && cached.size > 1024) {
+    try {
+      options?.onProgress?.(1, 1);
+      return await finalizeTts(cached, "caché");
+    } catch {
+      /* caché inválida: regeneramos */
+    }
   }
+
+  // 2. Proveedores disponibles para ESTA voz y dispositivo
+  const attempts: { name: string; run: (chunk: string) => Promise<{ blob: Blob; provider: string }> }[] = [];
+  if (hasBackend()) {
+    attempts.push({ name: "servidor-de-voz", run: (chunk) => synthViaBackend(voice, chunk, signal) });
+  }
+  if (settings.ttsApiKey) {
+    attempts.push({ name: "elevenlabs-clave-propia", run: (chunk) => synthViaOwnKey(settings.ttsApiKey, voice, chunk, signal) });
+  }
+  if (!isMobileDevice() && voice.kokoroVoice) {
+    attempts.push({
+      name: "kokoro-local",
+      run: async (chunk) => ({ blob: await synthesizeChunkLocal(chunk, voice.kokoroVoice!, signal), provider: "kokoro-local" }),
+    });
+  }
+
+  if (!attempts.length) {
+    throw new Error(
+      "La voz necesita el servidor de voz o una clave propia. Configúralo en Ajustes → Voz."
+    );
+  }
+
+  // 3. Frase a frase: progreso REAL + fallback entre proveedores
+  const chunks = splitForTts(text, 220);
+  const total = chunks.length;
+  options?.onProgress?.(0, total);
+  const parts: Blob[] = [];
+  let stickyProvider: string | null = null;
+
+  for (let i = 0; i < total; i++) {
+    if (signal?.aborted) throw new DOMException("cancelado", "AbortError");
+    const sticky: string | null = stickyProvider;
+    const order: { name: string; run: (chunk: string) => Promise<{ blob: Blob; provider: string }> }[] = sticky
+      ? [...attempts].sort((a, b) => (a.name === sticky ? -1 : b.name === sticky ? 1 : 0))
+      : attempts;
+    let got: { blob: Blob; provider: string } | null = null;
+    const chunkErrs: string[] = [];
+    for (const attempt of order) {
+      try {
+        got = await attempt.run(chunks[i]);
+        stickyProvider = attempt.name;
+        break;
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") throw e;
+        chunkErrs.push(`${attempt.name}: ${e instanceof Error ? e.message : "error"}`);
+      }
+    }
+    if (!got) throw new Error(`No se pudo generar la voz → ${chunkErrs.join(" · ")}`);
+    parts.push(got.blob);
+    options?.onProgress?.(i + 1, total); // frase REAL completada
+  }
+
+  const merged = parts.length === 1 ? parts[0] : new Blob(parts, { type: parts[0].type || "audio/mpeg" });
+  const result = await finalizeTts(merged, stickyProvider || "desconocido");
+  void putCachedVoice(cacheKey, result.blob);
+  return result;
+}
+
+// ===== Vista previa REAL (mismo pipeline que el vídeo final) =====
+let previewAudio: HTMLAudioElement | null = null;
+let previewAbort: AbortController | null = null;
+
+export async function previewVoice(voiceOrId: VoiceOption | string): Promise<boolean> {
+  stopPreview();
+  if (typeof window === "undefined") return false;
+  const id = typeof voiceOrId === "string" ? voiceOrId : voiceOrId.id;
+  previewAbort = new AbortController();
+  try {
+    const { loadSettings } = await import("@/lib/storage");
+    const settings = loadSettings();
+    const voice = getVoiceDef(id);
+    const line = SAMPLE_LINES[voice.locale] ?? SAMPLE_LINES["es-ES"];
+    const result = await generateSpeech(settings, line, id, { signal: previewAbort.signal });
+    previewAudio = new Audio(result.url);
+    previewAudio.onended = () => stopPreview();
+    await previewAudio.play();
+    return true;
+  } catch (e) {
+    if (!(e instanceof DOMException && e.name === "AbortError")) {
+      console.warn("[preview]", e); // detalle técnico solo en consola
+    }
+    previewAudio = null;
+    previewAbort = null;
+    return false;
+  }
+}
+
+export function stopPreview() {
+  try {
+    previewAbort?.abort();
+  } catch {}
+  previewAbort = null;
+  if (previewAudio) {
+    try {
+      previewAudio.pause();
+      if (previewAudio.src.startsWith("blob:")) URL.revokeObjectURL(previewAudio.src);
+    } catch {}
+    previewAudio = null;
+  }
+}
+
+/** ¿Hay vía REAL de generar esta voz? (para UI honesta) */
+export function voiceAvailability(
+  settings: AppSettings,
+  voiceId: string
+): { available: boolean; reason: string; providerLabel: string } {
+  const v = getVoiceDef(voiceId);
+  if (hasBackend()) {
+    return { available: true, reason: "", providerLabel: "Servidor de voz" };
+  }
+  if (settings.ttsApiKey) {
+    return { available: true, reason: "", providerLabel: "ElevenLabs · tu clave" };
+  }
+  if (!isMobileDevice() && v.kokoroVoice) {
+    return { available: true, reason: "", providerLabel: "Voz local (escritorio)" };
+  }
+  return {
+    available: false,
+    reason: "Necesita el servidor de voz o una clave propia (Ajustes → Voz).",
+    providerLabel: "Sin servidor de voz",
+  };
+}
+
+export function localeOfVoice(voiceId: string): string {
+  return getVoiceDef(voiceId).locale;
+}
+
+export function languageNameOfVoice(voiceId: string): string {
+  return getVoiceDef(voiceId).language;
 }

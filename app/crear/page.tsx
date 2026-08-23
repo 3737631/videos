@@ -13,12 +13,15 @@ import type {
 } from "@/types";
 import { buildEditPlan, getScriptFullText } from "@/lib/editplan";
 import { generateHooks, generateScript, generateProductScript, transcribeWithTimestamps } from "@/lib/ai";
-import { generateSpeech } from "@/lib/tts";
+import { generateSpeech, localeOfVoice, languageNameOfVoice } from "@/lib/tts";
+import { sttLanguageFromLocale } from "@/lib/audio/voices";
+import { createProgressTracker } from "@/lib/progress";
+import { toFriendlyError } from "@/lib/apiClient";
 import { serviceStatus } from "@/lib/storage";
 import { analyzeVideo } from "@/lib/analyze";
 import { detectViralHighlights, type ViralSegment } from "@/lib/viral";
 import { detectWatermark } from "@/lib/watermark";
-import { isKokoroReady, onKokoroDownload, preloadKokoro } from "@/lib/tts";
+import { preloadKokoro } from "@/lib/tts";
 import { classifyMusic } from "@/lib/audio/musicClassifier";
 import { selectTrack } from "@/lib/audio/musicSelector";
 import { renderTrack, type RenderedTrack } from "@/lib/audio/musicLibrary";
@@ -30,7 +33,7 @@ const IS_IOS =
   typeof navigator !== "undefined" &&
   (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
-// Cualquier móvil: el modelo neuronal local NO se precarga (se usan proveedores rápidos)
+// Cualquier móvil (iPhone Y Android): render NATIVO (MediaRecorder) + voz en la nube
 const IS_MOBILE =
   IS_IOS ||
   (typeof navigator !== "undefined" && /Android|Mobile/i.test(navigator.userAgent));
@@ -164,19 +167,11 @@ export default function CrearPage() {
   }
 
   const [productUrl, setProductUrl] = useState("");
-  const voicePctRef = useRef<number | null>(null);
 
   useEffect(() => {
-    // La voz neuronal solo se precarga en escritorio; en móvil el TTS rápido
-    // (StreamElements) no necesita descargas.
-    const off = onKokoroDownload((pct) => {
-      voicePctRef.current = pct;
-    });
+    // La voz neuronal local solo se precarga en escritorio; en móvil la voz
+    // viene del servidor de voz (o clave propia), sin descargas.
     if (!IS_MOBILE) void preloadKokoro();
-    return () => {
-      off();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -325,8 +320,17 @@ export default function CrearPage() {
     await startKeepAlive();
     addLog("Creando tu vídeo viral...");
 
+    // Progreso REAL por fases: cada salto es una operación completada y
+    // el % global NUNCA retrocede ni se inventa (lib/progress.ts).
+    const tracker = createProgressTracker((_, label, pct) => setJobStage({ stage: label, progress: pct }));
+    tracker.set("PREPARING", 5);
+
     try {
       const modoProducto = productUrl.trim().length > 10;
+      // Idioma real = idioma de la voz seleccionada (guion, subtítulos y STT)
+      const voiceId = settings.ttsVoiceId || "es-ES-f";
+      const sttLang = sttLanguageFromLocale(localeOfVoice(voiceId));
+      const langName = languageNameOfVoice(voiceId);
       // Motor de render en paralelo: se carga MIENTRAS se analiza/genera voz
       const ffLoading = isFfmpegLoaded() ? null : loadFfmpeg().catch(() => null);
       // 1. Análisis del contenido
@@ -336,11 +340,9 @@ export default function CrearPage() {
           meta = minimalMetadata(src);
           addLog("Modo producto: análisis de vídeo reducido (más rápido)");
         } else {
-          setJobStage({ stage: "Analizando vídeo", progress: 6 });
+          tracker.set("PREPARING", 30);
           try {
-            meta = await analyzeVideo(src, (st, p) =>
-              setJobStage({ stage: `Analizando: ${st}`, progress: 6 + p * 12 })
-            );
+            meta = await analyzeVideo(src, (_st, p) => tracker.set("PREPARING", 20 + p * 60));
             addLog("Análisis completado");
           } catch {
             meta = minimalMetadata(src);
@@ -350,7 +352,7 @@ export default function CrearPage() {
       }
 
       // 2. Detección de marca de agua (primer vídeo)
-      setJobStage({ stage: "Buscando momentos virales", progress: 11 });
+      tracker.set("PREPARING", 85);
       try {
         const wm = await detectWatermark(project.sources[0].url);
         setWatermarkDetected(wm);
@@ -364,7 +366,7 @@ export default function CrearPage() {
 
       // 3. Momentos virales en TODOS los vídeos subidos
       const nVids = project.sources.length;
-      setJobStage({ stage: `Buscando momentos virales (${nVids} vídeo${nVids > 1 ? "s" : ""})`, progress: 12 });
+      tracker.set("PREPARING", 92);
       type Seg = ViralSegment & { si: number };
       const allSegs: Seg[] = [];
       for (let si = 0; si < nVids; si++) {
@@ -398,31 +400,30 @@ export default function CrearPage() {
           : "Usando el momento más fuerte"
       );
 
-      // 3. Hooks y guion en inglés (o guion de producto desde enlace)
-      setJobStage({ stage: modoProducto ? "Leyendo producto…" : "Generando hooks y guion", progress: 24 });
+      // 3. Hooks y guion en el IDIOMA DE LA VOZ elegida (o guion de producto)
+      tracker.set("PREPARING", 100);
       let hooks: HookOption[] = [];
       let selectedHook = "";
       let script: ScriptSegment[] = [];
       if (modoProducto) {
         try {
           const info = await fetchProductInfo(productUrl.trim());
-          setJobStage({ stage: "Creando guion del producto…", progress: 30 });
-          script = await generateProductScript(settings, info);
-          addLog("🛒 Guion del producto listo");
+          script = await generateProductScript(settings, info, langName);
+          addLog(`🛒 Guion del producto listo (${langName})`);
         } catch (e) {
           addLog(`Producto: ${errText(e)}`);
         }
       }
       if (!script.length) {
         try {
-          hooks = await generateHooks(settings, meta.analysisText || "Short vertical video.");
+          hooks = await generateHooks(settings, meta.analysisText || "Short vertical video.", langName);
         } catch {
           hooks = [];
         }
         if (!hooks.length) hooks = FALLBACK_HOOKS;
         selectedHook = hooks[0].text;
         try {
-          script = await generateScript(settings, meta.analysisText || "Short vertical video.", hooks, selectedHook, project.style, project.goal);
+          script = await generateScript(settings, meta.analysisText || "Short vertical video.", hooks, selectedHook, project.style, project.goal, langName);
         } catch {
           script = [];
         }
@@ -430,7 +431,7 @@ export default function CrearPage() {
       }
       addLog(`Guion listo (${script.length} bloques)`);
 
-      // 4. Voz — banda de progreso REAL 10→30 (nunca avanza sin terminar)
+      // 4. Voz — banda de progreso REAL 10→30 (frases completadas, nunca inventado)
       let localVoiceUrl: string | null = null;
       let ttsBlob: Blob | null = null;
       let voiceDuration = 0;
@@ -438,88 +439,50 @@ export default function CrearPage() {
       if (voiceMode === "musica") {
         addLog("Modo solo música: sin voz");
       } else {
-        const primeraVez = !IS_MOBILE && !(await isKokoroReady());
-        setJobStage({
-          stage: primeraVez ? "Descargando voz neuronal (solo la primera vez)" : "Generando voz",
-          progress: 12,
-        });
-        {
-          const fullText = capForViral(getScriptFullText({ ...project, script }), IS_IOS ? 140 : 400);
-          if (fullText.trim()) {
-            try {
-              const voiceT0 = Date.now();
-              addLog(`[VOZ] ${fullText.length} caracteres · ${IS_MOBILE ? "proveedores en la nube" : "Kokoro local"}`);
-              let lastDone = 0;
-              let lastTotal = 1;
-              // Latido visible cada segundo: nunca se queda congelado sin información
-              const beat = setInterval(() => {
-                const el = Math.round((Date.now() - voiceT0) / 1000);
-                const dl = voicePctRef.current;
-                if (!IS_MOBILE && lastDone === 0 && dl !== null && dl < 100) {
-                  setJobStage({
-                    stage: `⬇️ Descargando voz… ${dl}% · ${el}s transcurridos`,
-                    progress: Math.min(14, 12 + dl! * 0.02),
-                  });
-                  return;
-                }
+        tracker.set("GENERATING_VOICE", 0);
+        const fullText = capForViral(getScriptFullText({ ...project, script }), IS_IOS ? 140 : 400);
+        if (fullText.trim()) {
+          const voiceT0 = Date.now();
+          addLog(`[VOZ] ${fullText.length} caracteres · idioma ${langName}`);
+          // Tope duro con limpieza GARANTIZADA del timer
+          const VOICE_CAP_MS = IS_MOBILE ? 75000 : 250000;
+          const abort = new AbortController();
+          const capTimer = setTimeout(() => abort.abort(), VOICE_CAP_MS);
+          try {
+            const voice = await generateSpeech(settings, fullText, voiceId, {
+              signal: abort.signal,
+              onProgress: (done, total) => {
+                tracker.set("GENERATING_VOICE", (done / Math.max(1, total)) * 100);
                 setJobStage({
-                  stage: `🎙️ Generando voz… ${el}s transcurridos${lastDone ? ` (${lastDone}/${lastTotal} frases)` : ""}`,
-                  progress: Math.min(28, 12 + (lastDone / Math.max(1, lastTotal)) * 16),
+                  stage: `Creando voz… frase ${done} de ${total}`,
+                  progress: tracker.current(),
                 });
-              }, 1000);
-              // Tope duro por intento: la promesa SIEMPRE se resuelve
-              const VOICE_CAP_MS = IS_MOBILE ? 75000 : 250000;
-              const attempt = async (t: string): Promise<Awaited<ReturnType<typeof generateSpeech>> | null> =>
-                Promise.race([
-                  generateSpeech(settings, t, settings.ttsVoiceId || "en-US-f", {
-                    speed: 1,
-                    onProgress: (done, total) => {
-                      lastDone = done;
-                      lastTotal = total;
-                      const el = (Date.now() - voiceT0) / 1000;
-                      const eta = Math.max(1, Math.round((el / Math.max(1, done)) * (total - done)));
-                      setJobStage({
-                        stage: `🎙️ Generando voz ${done}/${total} · quedan ~${eta}s`,
-                        progress: Math.min(29, 12 + (done / total) * 17),
-                      });
-                    },
-                  }),
-                  new Promise<null>((resolve) => setTimeout(() => resolve(null), VOICE_CAP_MS)),
-                ]);
-              let voice: Awaited<ReturnType<typeof generateSpeech>> | null = null;
-              try {
-                voice = await attempt(fullText);
-                if (!voice && fullText.length > 90) {
-                  addLog("Voz lenta: reintentando con texto más corto");
-                  voice = await attempt(`${fullText.slice(0, 88)}.`);
-                }
-              } finally {
-                clearInterval(beat);
-              }
-              if (!voice) throw new Error(`La voz no respondió en ${Math.round(VOICE_CAP_MS / 1000)}s`);
-              addLog(`[VOZ] Lista vía ${voice.provider} en ${((Date.now() - voiceT0) / 1000).toFixed(1)}s`);
-              // Validación REAL del audio de voz antes de seguir
-              const vst = await assertVoiceAudio(voice.blob);
-              ttsBlob = voice.blob;
-              localVoiceUrl = voice.url;
-              voiceDuration = voice.duration || vst.duration;
-              addLog(`Voz OK (${voiceDuration.toFixed(1)}s · RMS ${vst.rms.toFixed(3)})`);
-              setJobStage({ stage: "Voz lista", progress: 30 });
-            } catch (e) {
-              lastVoiceError = errText(e);
-              addLog(`Voz: ${lastVoiceError}`);
-            }
+              },
+            });
+            addLog(`[VOZ] Lista vía ${voice.provider} en ${((Date.now() - voiceT0) / 1000).toFixed(1)}s`);
+            // Validación REAL del audio de voz antes de seguir
+            const vst = await assertVoiceAudio(voice.blob);
+            ttsBlob = voice.blob;
+            localVoiceUrl = voice.url;
+            voiceDuration = voice.duration || vst.duration;
+            addLog(`Voz OK (${voiceDuration.toFixed(1)}s · RMS ${vst.rms.toFixed(3)})`);
+          } catch (e) {
+            lastVoiceError = errText(e);
+            addLog(`Voz: ${lastVoiceError}`);
+          } finally {
+            clearTimeout(capTimer); // SIEMPRE limpiar el tope
           }
         }
+        tracker.set("GENERATING_VOICE", 100);
       }
 
-      // 5. Subtítulos desde la voz
+      // 5. Subtítulos desde la voz, en el idioma de la voz seleccionada
       let cues: Project["subtitles"]["cues"] = [];
       if (ttsBlob && serviceStatus(settings, "stt").configured) {
-        setJobStage({ stage: "Generando subtítulos", progress: 31 });
+        tracker.set("GENERATING_MUSIC", 5);
         try {
-          cues = await transcribeWithTimestamps(settings, ttsBlob);
-          addLog(`Subtítulos: ${cues.length} bloques`);
+          cues = await transcribeWithTimestamps(settings, ttsBlob, undefined, sttLang);
+          addLog(`Subtítulos (${sttLang}): ${cues.length} bloques`);
         } catch {
           addLog("Subtítulos omitidos");
         }
@@ -612,13 +575,11 @@ export default function CrearPage() {
         selectedHook,
         script,
         subtitles: { ...project.subtitles, cues },
-        voice: localVoiceUrl ? project.voice : project.voice,
       };
       // 🎵 Música AUTOMÁTICA (el usuario nunca elige): clasificador por scoring →
       // selector anti-repetición → pista procedural única de la biblioteca de 100
       let autoMusicBlob: Blob | null = null;
       {
-        setJobStage({ stage: "Eligiendo música…", progress: 31 });
         try {
           const estDur = Math.max(8, Math.min(38, picked.reduce((a, g) => a + (g.end - g.start), 0)));
           const cls = classifyMusic({
@@ -630,10 +591,9 @@ export default function CrearPage() {
           addLog(
             `[MÚSICA] Clasificación: ${cls.primaryCategory} (+${cls.secondaryCategory}) · energía ${cls.energy} · confianza ${cls.confidence}`
           );
-          setJobStage({ stage: "Eligiendo música…", progress: 33 });
           const sel = selectTrack(cls.primaryCategory, cls.secondaryCategory, project.id || `p${Date.now()}`);
           addLog(`[MÚSICA] Pista seleccionada: ${sel.track.id}`);
-          setJobStage({ stage: `Componiendo música (${sel.track.id})…`, progress: 36 });
+          tracker.set("GENERATING_MUSIC", 30);
           const rendered = await renderTrack(sel.track, estDur);
           // Validación REAL: nada de exportar una pista muda
           await assertMusicAudio(rendered.blob);
@@ -651,7 +611,7 @@ export default function CrearPage() {
           addLog(`[MÚSICA] Falló la preparación: ${errText(e)}`);
         }
       }
-      setJobStage({ stage: "Música lista", progress: 40 });
+      tracker.set("GENERATING_MUSIC", 100);
 
       const plan = buildEditPlan(base);
       if (localVoiceUrl) {
@@ -678,20 +638,21 @@ export default function CrearPage() {
       saveProject(next);
 
       // 7. Render final MP4
-      setJobStage({ stage: "Preparando el render", progress: 70 });
-      const onStage = (st: string, p: number) =>
-        setJobStage({ stage: st, progress: Math.min(99, Math.max(10, p)) });
+      tracker.set("RENDERING", 3);
+      const onStage = (_st: string, p: number) => {
+        tracker.set("RENDERING", Math.min(97, Math.max(0, p)));
+        setJobStage({ stage: "Montando vídeo…", progress: tracker.current() });
+      };
       let result;
-      if (IS_IOS) {
-        // iPhone/iPad: grabación NATIVA (imagen), banda de progreso 55→90
-        const mapP = (p: number) => 55 + Math.max(0, Math.min(100, p)) * 0.35;
+      if (IS_MOBILE) {
+        // iPhone Y Android: grabación NATIVA (imagen vía MediaRecorder), banda 55→90
         let lastErr: unknown = null;
         let okAttempt: Awaited<ReturnType<typeof renderProjectMobile>> | null = null;
         for (let attempt = 0; attempt < 2 && !okAttempt; attempt++) {
           try {
             if (attempt > 0) {
               addLog("Repetimos la grabación nativa…");
-              setJobStage({ stage: "Repetimos la grabación…", progress: 55 });
+              tracker.set("RENDERING", 0);
             }
             okAttempt = await renderProjectMobile(next, {
               width: 540,
@@ -699,7 +660,7 @@ export default function CrearPage() {
               fps: 30,
               musicVolume: plan.audio.musicVolume ?? 0.25,
               voiceVolume: plan.audio.voiceVolume ?? 1,
-              onStage: (s, p) => onStage(s, mapP(p)),
+              onStage,
             });
           } catch (e) {
             lastErr = e;
@@ -708,7 +669,8 @@ export default function CrearPage() {
         if (!okAttempt) throw lastErr instanceof Error ? lastErr : new Error("grabación fallida");
         // MEZCLA REAL voz+música (banda 40→55): OfflineAudioContext determinista y
         // unión al vídeo sin re-codificar imagen. Pipeline principal, no un plan B.
-        setJobStage({ stage: "Mezclando voz y música…", progress: 46 });
+        tracker.set("MIXING_AUDIO", 30);
+        setJobStage({ stage: "Mezclando voz y música…", progress: tracker.current() });
         const wav = await mixVoiceAndMusic(ttsBlob, autoMusicBlob, {
           durationSec: okAttempt.validation.duration,
           voiceVolume: plan.audio.voiceVolume ?? 1,
@@ -717,7 +679,8 @@ export default function CrearPage() {
         if (wav && okAttempt.validation.hasAudio) {
           await assertMusicAudio(wav);
           addLog("Uniendo vídeo y sonido…");
-          setJobStage({ stage: "Uniendo vídeo y sonido…", progress: 52 });
+          tracker.set("MIXING_AUDIO", 85);
+          setJobStage({ stage: "Uniendo vídeo y sonido…", progress: tracker.current() });
           if (!isFfmpegLoaded()) await loadFfmpeg();
           const ff = getFfmpeg();
           const vExt = okAttempt.blob.type.includes("webm") ? "webm" : "mp4";
@@ -747,7 +710,8 @@ export default function CrearPage() {
         result = okAttempt;
       } else {
         // Escritorio: motor completo (máxima calidad), banda 55→90
-        setJobStage({ stage: "Cargando motor de vídeo (solo la primera vez)", progress: 56 });
+        tracker.set("RENDERING", 5);
+        setJobStage({ stage: "Cargando el motor de vídeo (solo la primera vez)…", progress: tracker.current() });
         if (!isFfmpegLoaded()) {
           if (ffLoading) await ffLoading;
           else await loadFfmpeg();
@@ -762,7 +726,7 @@ export default function CrearPage() {
           });
         } catch {
           addLog("⚠️ Reintentando en modo ligero…");
-          setJobStage({ stage: "Reintentando en modo ligero", progress: 70 });
+          tracker.set("RENDERING", 40);
           await resetFfmpeg();
           await loadFfmpeg();
           result = await renderProject(getFfmpeg(), next, {
@@ -776,7 +740,8 @@ export default function CrearPage() {
       }
 
       // 🔎 Verificación FINAL del audio (banda 90→100): nada sale sin sonido
-      setJobStage({ stage: "Verificando sonido final…", progress: 92 });
+      tracker.set("VERIFYING", 20);
+      setJobStage({ stage: "Comprobando el sonido final…", progress: tracker.current() });
       try {
         const st = await assertFinalAudio(result.blob);
         addLog(
@@ -786,15 +751,18 @@ export default function CrearPage() {
         throw new Error(`Audio final inválido: ${errText(e)}`);
       }
 
-      setJobStage({ stage: "Finalizando…", progress: 97 });
+      tracker.set("VERIFYING", 90);
       update({ renderUrl: result.url, renderValidation: result.validation, status: "exported" });
       setFinalUrl(result.url);
-      setJobStage({ stage: "¡Tu vídeo está listo!", progress: 100 });
+      tracker.done();
       addLog(
         `✅ Vídeo final: ${(result.validation.sizeBytes / 1024 / 1024).toFixed(1)} MB · ${Math.round(result.validation.duration)}s`
       );
     } catch (e) {
-      setError(errText(e));
+      tracker.fail();
+      setJobStage({ stage: "No se pudo terminar el vídeo", progress: tracker.current() });
+      // Mensaje humano arriba; el detalle técnico queda en el registro
+      setError(toFriendlyError(e));
       addLog(`Error: ${errText(e)}`);
     } finally {
       stopKeepAlive();
@@ -847,18 +815,24 @@ export default function CrearPage() {
         {jobStage && (
           <div className="mt-4 rounded-lg border border-blue-500/30 bg-blue-500/10 p-4">
             <div className="flex justify-between text-sm text-blue-200">
-              <span>{busy === "creating" ? "🚀" : "📱"} {jobStage.stage}</span>
+              <span>{jobStage.stage}</span>
               <span>{Math.round(jobStage.progress)}%</span>
             </div>
             <div className="mt-2 h-2 rounded-full bg-blue-900/50 overflow-hidden">
-              <div className="h-full bg-blue-500 transition-all" style={{ width: `${jobStage.progress}%` }} />
+              <div
+                className="h-full bg-blue-500 transition-all"
+                style={{
+                  width: `${jobStage.progress}%`,
+                  backgroundColor: jobStage.stage === "No se pudo terminar el vídeo" ? "#ef4444" : undefined,
+                }}
+              />
             </div>
           </div>
         )}
 
         {busy === "creating" && (
           <div className="mt-4 rounded-lg border border-cyan-500/30 bg-cyan-500/10 p-3 text-xs text-cyan-200">
-            📱 Mantén esta pestaña abierta y la pantalla encendida mientras se crea el vídeo (en iPhone, iOS pausa el trabajo si cambias de app).
+            📱 Mantén esta pestaña abierta y la pantalla encendida mientras se crea el vídeo (en móvil, el sistema pausa el trabajo si cambias de app).
           </div>
         )}
 
@@ -1102,14 +1076,4 @@ function formatTime(t: number): string {
   const m = Math.floor(t / 60);
   const s = Math.floor(t % 60);
   return `${m}:${String(s).padStart(2, "0")}`;
-}
-
-async function validateVoiceBlob(url: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const audio = document.createElement("audio");
-    audio.preload = "metadata";
-    audio.onloadedmetadata = () => resolve(isFinite(audio.duration) && audio.duration > 0.5);
-    audio.onerror = () => resolve(false);
-    audio.src = url;
-  });
 }

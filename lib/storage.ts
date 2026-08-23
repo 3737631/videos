@@ -1,4 +1,5 @@
 ﻿import type { AppSettings, Project } from "@/types";
+import { hasBackend } from "@/lib/apiClient";
 
 const PROJECTS_KEY = "clipcraft.projects.v1";
 const SETTINGS_KEY = "clipcraft.settings.v1";
@@ -9,28 +10,25 @@ const SETTINGS_KEY = "clipcraft.settings.v1";
 let projectsCache: Project[] | null = null;
 let settingsCache: AppSettings | null = null;
 
-const BUILTIN_GROQ_KEY = "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";
-const BUILTIN_ELEVENLABS_KEY = "sk_c1a85027b5556512faa5e13bab6670694dbf99e716d79b34";
+// SEGURIDAD: NINGUNA clave de API vive en el frontend. Las credenciales del
+// servidor de voz (ElevenLabs/Groq) viven como secretos del worker backend.
+// El usuario puede añadir su PROPIA clave aquí (localStorage), nunca una
+// clave preinstalada por la app.
 
 const DEFAULT_SETTINGS: AppSettings = {
   llmProvider: "groq",
-  llmApiKey: BUILTIN_GROQ_KEY,
+  llmApiKey: "",
   llmModel: "llama-3.3-70b-versatile",
   ttsProvider: "elevenlabs",
-  ttsApiKey: BUILTIN_ELEVENLABS_KEY,
-  ttsVoiceId: "alloy",
+  ttsApiKey: "",
+  ttsVoiceId: "en-US-f",
   sttProvider: "groq",
-  sttApiKey: BUILTIN_GROQ_KEY,
+  sttApiKey: "",
 };
 
-function pickKey(value: unknown, fallback: string): string {
-  return typeof value === "string" && value.trim() ? value : fallback;
+function pickKey(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
-
-// Claves antiguas conocidas como rotas: se sustituyen solas por la integrada
-const STALE_TTS_KEYS = new Set([
-  "sk_da788064febe680d49463bca63e744aa19cd81b3353ba6e1",
-]);
 
 export function loadProjects(): Project[] {
   if (projectsCache !== null) return projectsCache;
@@ -100,11 +98,10 @@ export function loadSettings(): AppSettings {
     loaded = {
       ...DEFAULT_SETTINGS,
       ...(parsed && typeof parsed === "object" ? parsed : {}),
-      llmApiKey: pickKey(parsed.llmApiKey, DEFAULT_SETTINGS.llmApiKey),
-      sttApiKey: pickKey(parsed.sttApiKey, DEFAULT_SETTINGS.sttApiKey),
-      ttsApiKey: pickKey(parsed.ttsApiKey, DEFAULT_SETTINGS.ttsApiKey),
+      llmApiKey: pickKey(parsed.llmApiKey),
+      ttsApiKey: pickKey(parsed.ttsApiKey),
+      sttApiKey: pickKey(parsed.sttApiKey),
     };
-    if (STALE_TTS_KEYS.has(loaded.ttsApiKey)) loaded.ttsApiKey = BUILTIN_ELEVENLABS_KEY;
   } catch {
     loaded = { ...DEFAULT_SETTINGS };
   }
@@ -126,20 +123,21 @@ export function defaultSettings(): AppSettings {
   return DEFAULT_SETTINGS;
 }
 
+/**
+ * Un servicio está configurado si el usuario aportó su propia clave O si
+ * existe el servidor de voz/backend (que guarda las claves reales).
+ */
 export function serviceStatus(settings: AppSettings, service: "llm" | "tts" | "stt") {
-  const defs = {
-    llm: {
-      configured: Boolean(settings.llmApiKey),
-      missing: settings.llmApiKey ? [] : ["llmApiKey"],
-    },
-    tts: {
-      configured: Boolean(settings.ttsApiKey),
-      missing: settings.ttsApiKey ? [] : ["ttsApiKey"],
-    },
-    stt: {
-      configured: Boolean(settings.sttApiKey),
-      missing: settings.sttApiKey ? [] : ["sttApiKey"],
-    },
+  const keyByService = {
+    llm: settings.llmApiKey,
+    tts: settings.ttsApiKey,
+    stt: settings.sttApiKey,
+  } as const;
+  const hasKey = Boolean(keyByService[service]);
+  const backend = hasBackend();
+  return {
+    configured: hasKey || backend,
+    viaBackend: !hasKey && backend,
+    missing: hasKey || backend ? [] : [`${service}ApiKey`],
   };
-  return defs[service];
 }

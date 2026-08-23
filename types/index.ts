@@ -95,6 +95,8 @@ export interface VoiceOption {
   style: string;
   language: string;
   accent: string;
+  /** BCP-47: idioma real de la voz y de los subtítulos */
+  locale: string;
   speed: number;
 }
 

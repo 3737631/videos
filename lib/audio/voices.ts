@@ -1,49 +1,79 @@
 /**
- * Catálogo de VOCES multiidioma disponible AL INSTANTE (solo metadatos, cero
- * descargas). El audio se genera únicamente para la voz elegida en el momento
- * de crear el vídeo.
+ * FUENTE ÚNICA DE VERDAD del catálogo de voces.
+ *
+ * Cada voz declara su `providerVoiceId` REAL del proveedor TTS
+ * (ElevenLabs, voces premade oficiales de elevenlabs.io — no se inventa
+ * ninguna). El pipeline resuelve: VOICE_CATALOG → id elegido →
+ * providerVoiceId → TTS. NUNCA se mapea un idioma a una voz de otro idioma.
+ *
+ * `kokoroVoice` existe SOLO para inglés como respaldo local de escritorio
+ * (el modelo Kokoro es angloparlante); el resto de idiomas requiere el
+ * servidor de voz o una clave propia. Kokoro jamás se usa en móvil.
  */
 export interface VoiceDef {
+  /** ID estable del catálogo (p.ej. "es-ES-f"). Se guarda en ajustes. */
   id: string;
+  /** Nombre real de la voz del proveedor */
   name: string;
-  /** Grupo de idioma para la UI */
+  /** Grupo UI: "English" | "Español" | "Français" | "Deutsch" | "Italiano" | "Português" */
   language: string;
   langLabel: string;
-  gender: "femenina" | "masculina" | "neutra";
+  /** BCP-47: define idioma de la voz Y de los subtítulos */
+  locale: string;
+  gender: "femenina" | "masculina";
   accent: string;
-  /** Código de idioma para el proveedor gratuito Google-gtx */
-  gtxLang: string;
-  /** Voz equivalente del worker TikTok-TTS (solo existe para inglés) */
-  tiktokVoice?: string;
-  /** Nombre de voz para una API propia/proxy configurado (p.ej. Google Cloud TTS) */
-  apiVoice?: string;
+  /** voice_id REAL de ElevenLabs (premade voices) */
+  providerVoiceId: string;
+  /** Respaldo local de escritorio, SOLO para voces inglesas */
+  kokoroVoice?: string;
 }
 
 export const VOICES: VoiceDef[] = [
-  // English
-  { id: "en-US-f", name: "Ava", language: "English", langLabel: "🇺🇸 English US", gender: "femenina", accent: "US", gtxLang: "en", tiktokVoice: "en_us_001", apiVoice: "en-US-Standard-C" },
-  { id: "en-US-m", name: "Caleb", language: "English", langLabel: "🇺🇸 English US", gender: "masculina", accent: "US", gtxLang: "en", tiktokVoice: "en_us_010", apiVoice: "en-US-Standard-D" },
-  { id: "en-GB-f", name: "Libby", language: "English", langLabel: "🇬🇧 English UK", gender: "femenina", accent: "UK", gtxLang: "en", tiktokVoice: "en_us_002", apiVoice: "en-GB-Standard-A" },
-  { id: "en-GB-m", name: "Oliver", language: "English", langLabel: "🇬🇧 English UK", gender: "masculina", accent: "UK", gtxLang: "en", tiktokVoice: "en_male_cody", apiVoice: "en-GB-Standard-B" },
-  // Español
-  { id: "es-ES-f", name: "Lucía", language: "Español", langLabel: "🇪🇸 Español España", gender: "femenina", accent: "ES", gtxLang: "es", apiVoice: "es-ES-Standard-A" },
-  { id: "es-ES-m", name: "Mateo", language: "Español", langLabel: "🇪🇸 Español España", gender: "masculina", accent: "ES", gtxLang: "es", apiVoice: "es-ES-Standard-B" },
-  { id: "es-MX-f", name: "Valentina", language: "Español", langLabel: "🇲🇽 Español Latino", gender: "femenina", accent: "MX", gtxLang: "es", apiVoice: "es-MX-Standard-A" },
-  { id: "es-MX-m", name: "Diego", language: "Español", langLabel: "🇲🇽 Español Latino", gender: "masculina", accent: "MX", gtxLang: "es", apiVoice: "es-MX-Standard-B" },
-  // Français
-  { id: "fr-FR-f", name: "Camille", language: "Français", langLabel: "🇫🇷 Français", gender: "femenina", accent: "FR", gtxLang: "fr", apiVoice: "fr-FR-Standard-A" },
-  { id: "fr-FR-m", name: "Louis", language: "Français", langLabel: "🇫🇷 Français", gender: "masculina", accent: "FR", gtxLang: "fr", apiVoice: "fr-FR-Standard-B" },
-  // Deutsch
-  { id: "de-DE-f", name: "Lena", language: "Deutsch", langLabel: "🇩🇪 Deutsch", gender: "femenina", accent: "DE", gtxLang: "de", apiVoice: "de-DE-Standard-A" },
-  { id: "de-DE-m", name: "Jonas", language: "Deutsch", langLabel: "🇩🇪 Deutsch", gender: "masculina", accent: "DE", gtxLang: "de", apiVoice: "de-DE-Standard-B" },
-  // Italiano
-  { id: "it-IT-f", name: "Giulia", language: "Italiano", langLabel: "🇮🇹 Italiano", gender: "femenina", accent: "IT", gtxLang: "it", apiVoice: "it-IT-Standard-A" },
-  { id: "it-IT-m", name: "Marco", language: "Italiano", langLabel: "🇮🇹 Italiano", gender: "masculina", accent: "IT", gtxLang: "it", apiVoice: "it-IT-Standard-B" },
-  // Português
-  { id: "pt-BR-f", name: "Beatriz", language: "Português", langLabel: "🇧🇷 Português", gender: "femenina", accent: "BR", gtxLang: "pt", apiVoice: "pt-BR-Standard-A" },
-  { id: "pt-BR-m", name: "Thiago", language: "Português", langLabel: "🇧🇷 Português", gender: "masculina", accent: "BR", gtxLang: "pt", apiVoice: "pt-BR-Standard-B" },
+  // ── English US ──
+  { id: "en-US-f", name: "Laura", language: "English", langLabel: "🇺🇸 English US", locale: "en-US", gender: "femenina", accent: "US", providerVoiceId: "FGY2WhTYpPnrIDTdsKH5", kokoroVoice: "af_heart" },
+  { id: "en-US-m", name: "Brian", language: "English", langLabel: "🇺🇸 English US", locale: "en-US", gender: "masculina", accent: "US", providerVoiceId: "nPczCjzI2devNBz1zQrb", kokoroVoice: "am_michael" },
+  // ── English UK ──
+  { id: "en-GB-f", name: "Lily", language: "English", langLabel: "🇬🇧 English UK", locale: "en-GB", gender: "femenina", accent: "UK", providerVoiceId: "pFZP5JQG7iQjIQuC4Bku", kokoroVoice: "bf_emma" },
+  { id: "en-GB-m", name: "Daniel", language: "English", langLabel: "🇬🇧 English UK", locale: "en-GB", gender: "masculina", accent: "UK", providerVoiceId: "onwK4e9ZLuTAKqWW03F9", kokoroVoice: "bm_george" },
+  // ── Español España ──
+  { id: "es-ES-f", name: "Matilda", language: "Español", langLabel: "🇪🇸 Español España", locale: "es-ES", gender: "femenina", accent: "ES", providerVoiceId: "XrExE9yKIg1WjnnlVkGX" },
+  { id: "es-ES-m", name: "Antoni", language: "Español", langLabel: "🇪🇸 Español España", locale: "es-ES", gender: "masculina", accent: "ES", providerVoiceId: "ErXwobaYiN019PkySvjV" },
+  // ── Español Latino ──
+  { id: "es-MX-f", name: "Charlotte", language: "Español", langLabel: "🇲🇽 Español Latino", locale: "es-MX", gender: "femenina", accent: "MX", providerVoiceId: "XB0fDUnXU5powFXDhCwa" },
+  { id: "es-MX-m", name: "Josh", language: "Español", langLabel: "🇲🇽 Español Latino", locale: "es-MX", gender: "masculina", accent: "MX", providerVoiceId: "TxGEqnHWrfWFTfGW9XjX" },
+  // ── Français ──
+  { id: "fr-FR-f", name: "Elli", language: "Français", langLabel: "🇫🇷 Français", locale: "fr-FR", gender: "femenina", accent: "FR", providerVoiceId: "MF3mGyEYCl7XYWbV9V6O" },
+  { id: "fr-FR-m", name: "Thomas", language: "Français", langLabel: "🇫🇷 Français", locale: "fr-FR", gender: "masculina", accent: "FR", providerVoiceId: "GBv7mTt0atIp3Br8iCZE" },
+  // ── Deutsch ──
+  { id: "de-DE-f", name: "Sarah", language: "Deutsch", langLabel: "🇩🇪 Deutsch", locale: "de-DE", gender: "femenina", accent: "DE", providerVoiceId: "EXAVITQu4vr4xnSDxMaL" },
+  { id: "de-DE-m", name: "Adam", language: "Deutsch", langLabel: "🇩🇪 Deutsch", locale: "de-DE", gender: "masculina", accent: "DE", providerVoiceId: "pNInz6obpgDQGcFmaJgB" },
+  // ── Italiano ──
+  { id: "it-IT-f", name: "Grace", language: "Italiano", langLabel: "🇮🇹 Italiano", locale: "it-IT", gender: "femenina", accent: "IT", providerVoiceId: "oWAxZDx7w5VEj9dCyTzz" },
+  { id: "it-IT-m", name: "Liam", language: "Italiano", langLabel: "🇮🇹 Italiano", locale: "it-IT", gender: "masculina", accent: "IT", providerVoiceId: "TX3LPaxmHKxFdv7VOQHJ" },
+  // ── Português ──
+  { id: "pt-BR-f", name: "Serena", language: "Português", langLabel: "🇧🇷 Português", locale: "pt-BR", gender: "femenina", accent: "BR", providerVoiceId: "pMsXgVXv3BLzUgSXRplE" },
+  { id: "pt-BR-m", name: "Charlie", language: "Português", langLabel: "🇧🇷 Português", locale: "pt-BR", gender: "masculina", accent: "BR", providerVoiceId: "IKne3meq5aSn9XLyUdCD" },
 ];
 
+/** Compatibilidad: IDs legacy de OpenAI → voz equivalente del catálogo */
+export const LEGACY_IDS: Record<string, string> = {
+  alloy: "en-US-m",
+  nova: "en-US-f",
+  shimmer: "en-GB-f",
+  echo: "en-US-m",
+  onyx: "en-GB-m",
+  fable: "en-US-m",
+};
+
 export function getVoiceDef(id: string): VoiceDef {
-  return VOICES.find((v) => v.id === id) || VOICES[0];
+  const direct = VOICES.find((v) => v.id === id);
+  if (direct) return direct;
+  const legacy = LEGACY_IDS[id];
+  if (legacy) return getVoiceDef(legacy);
+  return VOICES[0];
+}
+
+/** Código de idioma ISO para STT/subtítulos a partir del locale de la voz */
+export function sttLanguageFromLocale(locale: string): string {
+  return (locale || "en").split("-")[0].toLowerCase();
 }

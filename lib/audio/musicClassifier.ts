@@ -97,9 +97,9 @@ export function classifyMusic(input: {
   // Features cuantitativas
   const exclam = (raw.match(/!/g) || []).length;
   const question = (raw.match(/[?¿]/g) || []).length;
-  const listMarkers = countMatches(text, /\b\d+\s+(cosas|tips|formas|razones|things|ways|reasons|tips)/.source.replace(/\\/g, ""))
-    + (/\b(top|mejores|best)\s+\d+/.test(text) ? 1 : 0)
-    + (/\b\d+\s+(pasos|steps|hacks)\b/.test(text) ? 1 : 0);
+  const listMarkers =
+    (text.match(/\b\d+\s+(cosas|tips|formas|razones|pasos|steps|hacks|things|ways|reasons)\b/g) || []).length +
+    (text.match(/\b(top|mejores|best)\s+\d+\b/g) || []).length;
   const letters = raw.replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ]/g, "");
   const uppers = raw.replace(/[^A-ZÁÉÍÓÚÑ]/g, "");
   const caps = letters.length ? uppers.length / letters.length : 0;

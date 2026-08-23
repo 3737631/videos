@@ -14,6 +14,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="es">
+      <head>
+        {/* URL del servidor de voz (no es un secreto); editable sin recompilar */}
+        <script src="/videos/config.js" defer />
+      </head>
       <body
         className="bg-[#0b0d12] text-gray-100 antialiased"
         suppressHydrationWarning
