@@ -41,7 +41,7 @@ async function fetchProductInfo(url: string): Promise<string> {
 }
 import { loadFfmpeg, isFfmpegLoaded, getFfmpeg, resetFfmpeg } from "@/lib/ffmpeg";
 import { renderProject } from "@/lib/render";
-import { renderProjectMobile, hasAudibleAudio } from "@/lib/renderMobile";
+import { renderProjectMobile, buildSoundtrack } from "@/lib/renderMobile";
 
 function newProject(): Project {
   const id = crypto.randomUUID();
@@ -497,8 +497,9 @@ export default function CrearPage() {
         setVoiceWarning((prev) => (prev ? `${prev} ${msg}` : msg));
       }
 
-      // Modo música: subtítulos generados desde el GUION repartidos en el tiempo
-      if (!cues.length && voiceMode === "musica" && script.length && picked.length) {
+      // Modo voz con voz fallida: subtítulos generados desde el GUION repartidos
+      // en el tiempo (en modo música NO se pintan textos)
+      if (!cues.length && voiceMode === "voz" && script.length && picked.length) {
         const estDur = Math.max(6, Math.min(24, picked.reduce((a, g) => a + (g.end - g.start), 0)));
         const lines: string[] = [];
         for (const seg of script) {
@@ -632,33 +633,44 @@ export default function CrearPage() {
           }
         }
         if (!okAttempt) throw lastErr instanceof Error ? lastErr : new Error("grabación fallida");
-        // Seguro de audio: si el vídeo grabado viniera sin pista audible, unimos el
-        // audio que se grabó por separado (unión rápida sin re-codificar imagen)
-        if (okAttempt.audioBlob) {
-          setJobStage({ stage: "Verificando audio…", progress: 96 });
-          const audible = await hasAudibleAudio(okAttempt.blob);
-          if (!audible) {
-            addLog("Vídeo sin audio mezclado: uniendo audio separado…");
-            setJobStage({ stage: "Uniendo audio y vídeo…", progress: 96 });
+        // Banda sonora DETERMINISTA: se genera la mezcla (voz + música en bucle) con
+        // OfflineAudioContext y se une al vídeo SIN re-codificar la imagen. Esto no es
+        // un plan B: ES el pipeline de sonido, 100% fiable en iOS.
+        if (okAttempt.validation.hasAudio) {
+          setJobStage({ stage: "Creando pista de sonido…", progress: 97 });
+          const wav = await buildSoundtrack(next, {
+            duration: okAttempt.validation.duration,
+            voiceVolume: plan.audio.voiceVolume ?? 1,
+            musicVolume: plan.audio.musicVolume ?? 0.25,
+          });
+          if (wav) {
+            addLog("Uniendo vídeo y sonido…");
+            setJobStage({ stage: "Uniendo vídeo y sonido…", progress: 98 });
             if (!isFfmpegLoaded()) await loadFfmpeg();
             const ff = getFfmpeg();
             const vExt = okAttempt.blob.type.includes("webm") ? "webm" : "mp4";
-            const aExt = okAttempt.audioBlob.type.includes("webm") ? "weba" : "m4a";
             await ff.writeFile("mv." + vExt, new Uint8Array(await okAttempt.blob.arrayBuffer()));
-            await ff.writeFile("ma." + aExt, new Uint8Array(await okAttempt.audioBlob.arrayBuffer()));
-            await ff.exec(["-i", "mv." + vExt, "-i", "ma." + aExt, "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-shortest", "-y", "final_av.mp4"]);
+            await ff.writeFile("st.wav", new Uint8Array(await wav.arrayBuffer()));
+            await ff.exec([
+              "-i", "mv." + vExt, "-i", "st.wav",
+              "-c:v", "copy", "-c:a", "aac", "-b:a", "160k",
+              "-shortest", "-movflags", "+faststart", "-y", "final_av.mp4",
+            ]);
             const out = await ff.readFile("final_av.mp4");
-            const bytes = typeof out === "string" ? new TextEncoder().encode(out) : new Uint8Array(out);
+            const bytes =
+              typeof out === "string" ? new TextEncoder().encode(out) : new Uint8Array(out);
             const nb = new Blob([bytes.buffer as ArrayBuffer], { type: "video/mp4" });
             URL.revokeObjectURL(okAttempt.url);
             okAttempt = {
               ...okAttempt,
               blob: nb,
               url: URL.createObjectURL(nb),
-              validation: { ...okAttempt.validation, sizeBytes: nb.size, codec: "h264/aac" },
-              audioBlob: null,
+              validation: {
+                ...okAttempt.validation,
+                sizeBytes: nb.size,
+                codec: "h264/aac",
+              },
             };
-            addLog("Audio unido correctamente");
           }
         }
         result = okAttempt;

@@ -1,5 +1,14 @@
 import type { Project } from "@/types";
 
+export interface MobileRenderOptions {
+  width: number;
+  height: number;
+  fps?: number;
+  musicVolume?: number;
+  voiceVolume?: number;
+  onStage?: (stage: string, pct: number) => void;
+}
+
 export interface MobileRenderResult {
   blob: Blob;
   url: string;
@@ -15,53 +24,6 @@ export interface MobileRenderResult {
     codec: string;
     errors: string[];
   };
-  /** Audio grabado por separado (seguro por si Safari ignora el audio mezclado) */
-  audioBlob: Blob | null;
-}
-
-function pickAudioMime(): string {
-  const cands = ["audio/mp4", "audio/aac", "audio/webm;codecs=opus", "audio/webm"];
-  if (typeof MediaRecorder !== "undefined") {
-    for (const m of cands) {
-      try {
-        if (MediaRecorder.isTypeSupported(m)) return m;
-      } catch {}
-    }
-  }
-  return "";
-}
-
-/** ¿El archivo de vídeo contiene audio audible? (decodificación nativa, sin ffmpeg) */
-export async function hasAudibleAudio(blob: Blob): Promise<boolean> {
-  try {
-    const AC: typeof AudioContext =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    const ctx = new AC();
-    const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
-    const ch = buf.getChannelData(0);
-    let sum = 0;
-    let n = 0;
-    for (let i = 0; i < ch.length; i += 97) {
-      sum += Math.abs(ch[i]);
-      n++;
-    }
-    await ctx.close();
-    return n > 0 && sum / n > 0.0005;
-  } catch {
-    // Si no podemos analizarlo, asumimos que está bien (evitamos uniones innecesarias)
-    return true;
-  }
-}
-
-export interface MobileRenderOptions {
-  width: number;
-  height: number;
-  fps?: number;
-  musicVolume?: number;
-  voiceVolume?: number;
-  originalVolume?: number;
-  onStage?: (stage: string, pct: number) => void;
 }
 
 function pickMime(): string {
@@ -69,7 +31,6 @@ function pickMime(): string {
     "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
     "video/mp4",
     "video/webm;codecs=vp9,opus",
-    "video/webm;codecs=vp8,opus",
     "video/webm",
   ];
   if (typeof MediaRecorder !== "undefined") {
@@ -120,10 +81,94 @@ function drawCover(
   c.drawImage(v, (W - dw) / 2, (H - dh) / 2, dw, dh);
 }
 
+/** Banda sonora DETERMINISTA: voz + música en bucle mezclados sin captura en vivo */
+export async function buildSoundtrack(
+  project: Project,
+  opts: { duration: number; voiceVolume?: number; musicVolume?: number }
+): Promise<Blob | null> {
+  const plan = project.editPlan;
+  if (!plan) return null;
+  const hasVoice = !!plan.voice?.audioUrl;
+  const hasMusic = !!(plan.music && project.music?.url);
+  if (!hasVoice && !hasMusic) return null;
+
+  const OC: typeof OfflineAudioContext =
+    window.OfflineAudioContext ||
+    (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext })
+      .webkitOfflineAudioContext;
+  const sr = 44100;
+  const len = Math.ceil((opts.duration + 0.4) * sr);
+  const octx = new OC(2, len, sr);
+
+  if (hasVoice) {
+    const ab = await (await fetch(plan.voice!.audioUrl!)).arrayBuffer();
+    const buf = await octx.decodeAudioData(ab);
+    const s = octx.createBufferSource();
+    s.buffer = buf;
+    const g = octx.createGain();
+    g.gain.value = opts.voiceVolume ?? 1;
+    s.connect(g);
+    g.connect(octx.destination);
+    s.start(0);
+  }
+  if (hasMusic) {
+    const ab = await (await fetch((project.music as { url: string }).url)).arrayBuffer();
+    const buf = await octx.decodeAudioData(ab);
+    const s = octx.createBufferSource();
+    s.buffer = buf;
+    s.loop = true;
+    const g = octx.createGain();
+    g.gain.value = opts.musicVolume ?? 0.25;
+    s.connect(g);
+    g.connect(octx.destination);
+    s.start(0);
+  }
+
+  const rendered = await octx.startRendering();
+
+  // WAV PCM 16-bit estéreo
+  const chs = rendered.numberOfChannels;
+  const frames = rendered.length;
+  const data = new Int16Array(frames * chs);
+  const chans: Float32Array[] = [];
+  for (let c = 0; c < chs; c++) chans.push(rendered.getChannelData(c));
+  let o = 0;
+  for (let i = 0; i < frames; i++) {
+    for (let c = 0; c < chs; c++) {
+      let s = chans[c][i];
+      s = s < -1 ? -1 : s > 1 ? 1 : s;
+      data[o++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+  }
+  const bytesPerSample = 2;
+  const blockAlign = chs * bytesPerSample;
+  const dataSize = frames * blockAlign;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+  const ws = (off: number, str: string) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i));
+  };
+  ws(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  ws(8, "WAVE");
+  ws(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, chs, true);
+  view.setUint32(24, sr, true);
+  view.setUint32(28, sr * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+  ws(36, "data");
+  view.setUint32(40, dataSize, true);
+  new Uint8Array(buffer, 44).set(new Uint8Array(data.buffer));
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
 /**
- * Render NATIVO para iPhone/iPad: reproduce los clips en un canvas y graba con
- * MediaRecorder (codificador por hardware del sistema). Duración total ≈ tiempo
- * real del vídeo (~20-30s), sin WASM pesado ni cuelgues de memoria.
+ * Render NATIVO para iPhone/iPad: graba SOLO IMAGEN con MediaRecorder (codificador
+ * del sistema, tiempo real). El sonido se añade después de forma determinista con
+ * buildSoundtrack + unión rápida. Sin captura de audio en vivo = sin silencios raros.
  */
 export async function renderProjectMobile(
   project: Project,
@@ -139,54 +184,18 @@ export async function renderProjectMobile(
   if (!clips.length) throw new Error("No hay clips para grabar");
   const totalDur = clips.reduce((a, c) => a + Math.max(0, c.end - c.start), 0);
 
-  opts.onStage?.("Preparando grabación nativa", 8);
+  opts.onStage?.("Preparando grabación nativa", 4);
 
-  // Lienzo de salida
+  // Lienzo de salida (debe estar EN el documento para captureStream en Safari)
   const canvas = document.createElement("canvas");
   canvas.width = W;
   canvas.height = H;
   const g = canvas.getContext("2d", { alpha: false })!;
-
-  // ===== AUDIO: todo con WebAudio nativo (voz + música en bucle) =====
-  const AC: typeof AudioContext =
-    window.AudioContext ||
-    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-  const actx = new AC();
-  const dest = actx.createMediaStreamDestination();
-  const master = actx.createGain();
-  master.gain.value = 1;
-  master.connect(dest);
-  // Fuerza el grafo WebAudio a procesar en iOS aunque nadie escuche en directo
-  const pull = actx.createGain();
-  pull.gain.value = 0;
-  master.connect(pull);
-  pull.connect(actx.destination);
-
-  let voiceEl: HTMLAudioElement | null = null;
-  if (plan.voice?.audioUrl) {
-    voiceEl = new Audio();
-    voiceEl.crossOrigin = "anonymous";
-    voiceEl.src = plan.voice.audioUrl;
-    await once(voiceEl, "canplaythrough");
-    const src = actx.createMediaElementSource(voiceEl);
-    const gv = actx.createGain();
-    gv.gain.value = opts.voiceVolume ?? 1;
-    src.connect(gv);
-    gv.connect(master);
-  }
-
-  let musicSource: AudioBufferSourceNode | null = null;
-  if (plan.music && project.music?.url) {
-    const ab = await (await fetch(project.music.url)).arrayBuffer();
-    const buf = await actx.decodeAudioData(ab);
-    musicSource = actx.createBufferSource();
-    musicSource.buffer = buf;
-    musicSource.loop = true;
-    const gm = actx.createGain();
-    gm.gain.value = opts.musicVolume ?? 0.25;
-    musicSource.connect(gm);
-    gm.connect(master);
-  }
+  canvas.style.cssText =
+    "position:fixed;left:-10000px;top:0;width:2px;height:2px;opacity:0.01;pointer-events:none;";
+  document.body.appendChild(canvas);
+  g.fillStyle = "#000";
+  g.fillRect(0, 0, W, H);
 
   // ===== VIDEO: elementos <video> precargados por fuente =====
   const vidCache = new Map<string, HTMLVideoElement>();
@@ -204,57 +213,76 @@ export async function renderProjectMobile(
     }
     return v;
   };
-
-  // Precargar el primer vídeo ANTES de empezar a grabar
-  await getVid(project.sources.find((s) => s.id === clips[0].sourceId)!.url);
+  // Precargar TODOS los vídeos usados antes de empezar
+  for (const c of clips) {
+    const s = project.sources.find((x) => x.id === c.sourceId)!;
+    await getVid(s.url);
+  }
 
   const cues = plan.subtitles?.cues || [];
   const st = plan.subtitles?.style;
-  const fontPx = Math.round(H * (((st?.size as number) || 7) / 100));
 
+  /** Texto ajustado: tamaño natural, reduce y parte en 2 líneas si hace falta */
   const drawCue = (t: number) => {
     const cue = cues.find((q) => t >= q.start && t < q.end);
-    if (!cue) return;
+    if (!cue || !cue.text.trim()) return;
     const words = cue.words || [];
-    const active = words.find((w) => t >= w.start && t < w.end);
-    const text = cue.text.toUpperCase();
-    g.font = `900 ${fontPx}px -apple-system, Impact, sans-serif`;
+    const activeWord = words.find((w) => t >= w.start && t < w.end);
+    let fs = Math.round(H * 0.045); // tamaño natural legible (no gigante)
+    const maxW = W * 0.92;
+    const setFont = () => {
+      g.font = `900 ${fs}px -apple-system, Impact, sans-serif`;
+    };
+    setFont();
+    let raw = cue.text.toUpperCase().trim();
+    // Reducir hasta que quepa en una línea razonable
+    while (fs > H * 0.03 && g.measureText(raw).width > maxW) {
+      fs -= 2;
+      setFont();
+    }
+    // Si aun así no cabe, dividir en 2 líneas equilibradas
+    let lines: string[] = [raw];
+    if (g.measureText(raw).width > maxW) {
+      const parts = raw.split(/\s+/);
+      let best = "";
+      let bestDiff = Infinity;
+      for (let i = 1; i < parts.length; i++) {
+        const l1 = parts.slice(0, i).join(" ");
+        const l2 = parts.slice(i).join(" ");
+        const d = Math.abs(g.measureText(l1).width - g.measureText(l2).width);
+        if (d < bestDiff) {
+          bestDiff = d;
+          best = l1 + "\n" + l2;
+        }
+      }
+      lines = best.split("\n");
+    }
     g.textAlign = "center";
     g.textBaseline = "bottom";
-    const y = H * 0.78;
-    const cx = W / 2;
     g.lineJoin = "round";
     g.strokeStyle = "#000";
-    g.lineWidth = Math.max(6, fontPx * 0.18);
-    g.strokeText(text, cx, y);
-    g.fillStyle = active ? st?.activeColor || "#FFD400" : st?.color || "#FFFFFF";
-    g.fillText(text, cx, y);
+    g.lineWidth = Math.max(5, fs * 0.16);
+    const lh = Math.round(fs * 1.18);
+    const baseY = H * 0.82 - (lines.length - 1) * lh;
+    lines.forEach((ln, li) => {
+      const y = baseY + li * lh;
+      g.strokeText(ln, W / 2, y);
+      g.fillStyle =
+        activeWord || lines.length === 1
+          ? st?.activeColor || "#FFD400"
+          : st?.color || "#FFFFFF";
+      g.fillText(ln, W / 2, y);
+    });
   };
 
-  // ===== GRABADORA =====
-  // Safari exige que el canvas esté EN el documento para captureStream
-  canvas.style.cssText =
-    "position:fixed;left:-10000px;top:0;width:2px;height:2px;opacity:0.01;pointer-events:none;";
-  document.body.appendChild(canvas);
-  g.fillStyle = "#000";
-  g.fillRect(0, 0, W, H);
+  // ===== GRABADORA DE IMAGEN =====
+  const mime = pickMime();
   const vstream = canvas.captureStream(fps);
-  const mixed = new MediaStream([...vstream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
-  // Safari a veces anuncia soporte MP4 y luego falla al construir: probamos en cascada
-  let rec: MediaRecorder;
-  let usedMime = "";
-  for (const m of [pickMime(), "video/mp4", ""]) {
-    try {
-      rec = m
-        ? new MediaRecorder(mixed, { mimeType: m, videoBitsPerSecond: 2_800_000 })
-        : new MediaRecorder(mixed);
-      usedMime = m;
-      break;
-    } catch {
-      continue;
-    }
-  }
-  if (!rec!) throw new Error("Este navegador no permite grabar vídeo");
+  const rec = new MediaRecorder(
+    new MediaStream(vstream.getVideoTracks()),
+    mime ? { mimeType: mime, videoBitsPerSecond: 2_800_000 } : undefined
+  );
+  const usedMime = rec.mimeType || mime;
   const parts: Blob[] = [];
   rec.ondataavailable = (e) => {
     if (e.data && e.data.size > 0) parts.push(e.data);
@@ -263,35 +291,8 @@ export async function renderProjectMobile(
     rec.onstop = () => resolve();
   });
 
-  // Seguro de audio: grabamos SOLO el audio en paralelo; si Safari ignorara la pista
-  // de audio del vídeo mezclado, unimos este archivo después (unión rápida, sin re-codificar)
-  let aRec: MediaRecorder | null = null;
-  const aParts: Blob[] = [];
-  let aStopped: Promise<void> = Promise.resolve();
   try {
-    const am = pickAudioMime();
-    if (am && dest.stream.getAudioTracks().length) {
-      aRec = new MediaRecorder(dest.stream, { mimeType: am });
-      aRec.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) aParts.push(e.data);
-      };
-      aStopped = new Promise<void>((resolve) => {
-        aRec!.onstop = () => resolve();
-      });
-    }
-  } catch {
-    aRec = null;
-  }
-
-  try {
-    await actx.resume();
     rec.start(1000);
-    if (aRec && aRec.state === "inactive") aRec.start(1000);
-    // Pequeña espera para que ambas grabadoras estén rodando antes del primer sonido
-    await new Promise((r) => setTimeout(r, 150));
-    if (musicSource) musicSource.start();
-    if (voiceEl) void voiceEl.play().catch(() => {});
-
     let tGlobal = 0;
     for (let i = 0; i < clips.length; i++) {
       const clip = clips[i];
@@ -325,7 +326,7 @@ export async function renderProjectMobile(
           const done = tGlobal + el;
           opts.onStage?.(
             `Grabando vídeo… ${done.toFixed(0)}s de ${totalDur.toFixed(0)}s · quedan ~${Math.max(0, totalDur - done).toFixed(0)}s`,
-            12 + Math.min(1, done / totalDur) * 76
+            5 + Math.min(1, done / totalDur) * 50
           );
           if (el >= dur || v.ended) {
             resolve();
@@ -338,18 +339,12 @@ export async function renderProjectMobile(
       v.pause();
       tGlobal += dur;
     }
-
-    // Cola mínima para que el último fotograma y el audio entren en el archivo
-    await new Promise((r) => setTimeout(r, 350));
+    // Cola para el último fotograma
+    await new Promise((r) => setTimeout(r, 300));
   } finally {
     try {
       if (rec.state !== "inactive") rec.stop();
     } catch {}
-    try {
-      if (aRec && aRec.state !== "inactive") aRec.stop();
-    } catch {}
-    if (musicSource) try { musicSource.stop(); } catch {}
-    if (voiceEl) try { voiceEl.pause(); } catch {}
     for (const v of vidCache.values()) {
       try {
         v.pause();
@@ -361,25 +356,13 @@ export async function renderProjectMobile(
     } catch {}
   }
   await stopped;
-  await aStopped;
-  // Cerrar el AudioContext DESPUÉS de parar las grabadoras
-  try {
-    await actx.close();
-  } catch {}
 
-  // Validación por construcción: conocemos la duración exacta (la grabamos nosotros);
-  // los metadatos de MediaRecorder en iOS NO son fiables (duration Infinity), así que
-  // solo exigimos un tamaño razonable.
-  const blob = new Blob(parts, { type: usedMime.includes("mp4") ? "video/mp4" : "video/webm" });
+  const blob = new Blob(parts, {
+    type: usedMime.includes("mp4") ? "video/mp4" : "video/webm",
+  });
   if (!blob.size || blob.size < 64 * 1024) {
     throw new Error("grabación sin datos suficientes");
   }
-  let audioBlob: Blob | null = null;
-  if (aParts.length) {
-    audioBlob = new Blob(aParts, { type: aParts[0].type || "audio/mp4" });
-    if (audioBlob.size < 1024) audioBlob = null;
-  }
-  opts.onStage?.("Comprobando calidad", 96);
   const validation = {
     ok: true,
     duration: totalDur,
@@ -389,10 +372,10 @@ export async function renderProjectMobile(
     hasAudio: !!(plan.voice?.audioUrl || (plan.music && project.music?.url)),
     audioDuration: totalDur,
     sizeBytes: blob.size,
-    codec: usedMime.includes("mp4") ? "h264/aac" : "webm",
+    codec: usedMime.includes("mp4") ? "h264(video)" : "webm(video)",
     errors: [] as string[],
   };
   const url = URL.createObjectURL(blob);
-  opts.onStage?.("Finalizando", 99);
-  return { blob, url, validation, audioBlob };
+  opts.onStage?.("Vídeo grabado", 56);
+  return { blob, url, validation };
 }
