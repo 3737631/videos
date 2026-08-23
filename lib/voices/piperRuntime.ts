@@ -50,7 +50,8 @@ export async function ensurePiperRuntime(
     Ort.env.wasm.numThreads = 1;
     Ort.env.wasm.simd = true;
     Ort.env.wasm.proxy = false;
-    Ort.env.wasm.wasmPaths = { wasm: ORT_WASM_DIR };
+    // Directorio (con barra final): ORT resuelve él mismo ort-wasm-simd-threaded.wasm
+    Ort.env.wasm.wasmPaths = ORT_WASM_DIR;
     configured = true;
   }
 }

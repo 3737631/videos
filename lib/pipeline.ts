@@ -151,6 +151,35 @@ export function detectScriptLang(text: string): string {
   return best;
 }
 
+// ── Selección de música según la ENERGÍA del vídeo (momentos) ────────────
+const ENERGY_HIGH: MusicCategory[] = ["viral", "motivational", "funny", "dramatic"];
+const ENERGY_MID: MusicCategory[] = ["lifestyle", "storytelling", "mysterious"];
+const ENERGY_LOW: MusicCategory[] = ["relaxing", "romantic", "sad"];
+const NICHE_MUSIC: Partial<Record<string, MusicCategory>> = {
+  viral: "viral",
+  motivational: "motivational",
+  funny: "funny",
+  romantic: "romantic",
+  mysterious: "mysterious",
+  sad: "sad",
+  dramatic: "dramatic",
+  storytelling: "storytelling",
+  lifestyle: "lifestyle",
+  relaxing: "relaxing",
+};
+
+/**
+ * En "Automático", la categoría musical se elige por la energía media del vídeo
+ * (movimiento de los momentos virales) y el nicho, nunca fijada a "viral".
+ * Así cada vídeo suena distinto según su contenido.
+ */
+function pickEnergyCategory(energy: number, niche: string): MusicCategory {
+  const group = energy >= 0.6 ? ENERGY_HIGH : energy <= 0.35 ? ENERGY_LOW : ENERGY_MID;
+  const nic = NICHE_MUSIC[niche];
+  const pool: MusicCategory[] = nic && group.includes(nic) ? group : (nic ? [nic, ...group] : group);
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
 /**
  * Pipeline completo. Lanza errores ya humanizados (toFriendlyError).
  */
@@ -179,8 +208,11 @@ export async function runCreationPipeline(
     // Duración objetivo + MOMENTOS VIRALES del vídeo (los que más enganchan)
     const targetSec = pickTargetDuration(input.videoDuration, !!input.onlyMusic);
     let segments: Segment[] = [];
+    let energy = 0.5;
     try {
-      segments = await detectHighlights(input.videoBlob, { targetSec, signal: h.signal });
+      const hl = await detectHighlights(input.videoBlob, { targetSec, signal: h.signal });
+      segments = hl.segments;
+      energy = hl.energy;
     } catch {
       segments = [{ start: 0, end: input.videoDuration || targetSec }];
     }
@@ -208,65 +240,64 @@ export async function runCreationPipeline(
           });
     const validationWarnings: string[] = [];
 
-    // ── Seleccionar voz ────────────────────────────────────────────────
+    // ── Seleccionar y generar voz (con degradación segura) ──────────────
     let chosenId =
       input.voiceId && getVoiceById(input.voiceId)
         ? input.voiceId
         : defaultVoiceForLocale(lang + "-XX");
-    if (!input.onlyMusic) {
-      await runStage(
-        "GENERATING_VOICE", // la descarga de la voz pertenece a esta fase
-        async () => {
-          await ensureVoiceInstalled(chosenId, { signal: h.signal });
-        },
-        h, tracker, { timeoutMs: 600000, retries: 0 }
-      );
-    }
-
-    // ── Generar voz (entonación por segmentos + ajuste a duración) ─────
     let voiceDuration: number | null = null;
     let usedFallback = false;
     const segTimings: Array<{ text: string; start: number; end: number }> = [];
     if (!input.onlyMusic) {
-      const target = targetSec;
-      const tol = input.toleranceSec ?? 0.25;
-      const baseSpeed = suggestedSpeechRate(nicheInfo);
-      let attemptSpeed = baseSpeed;
-      let best: Awaited<ReturnType<typeof synthesizeProsodyWithFallback>> | null = null;
-
-      for (let round = 0; round < 2; round++) {
-        const res = await runStage(
-          "GENERATING_VOICE",
-          async (signal) => {
-            return await synthesizeProsodyWithFallback(script, chosenId, {
-              signal,
-              speed: attemptSpeed,
-              styleId,
-              onProgress: (p) => tracker.set("GENERATING_VOICE", p ?? undefined),
-            });
-          },
-          h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.GENERATING_VOICE, retries: 0 }
-        );
-        best = res;
-        voiceDuration = await blobDuration(res.blob);
-        chosenId = res.voiceId;
-        usedFallback = res.usedFallback;
-        if (!target || round === 1) break;
-        const mul = correctiveSpeed(voiceDuration, target, tol);
-        if (!mul) break; // ya encaja
-        attemptSpeed = Math.min(1.5, Math.max(0.7, attemptSpeed * mul));
-      }
-      if (best) {
-        segTimings.push(...best.timings);
-        if (
-          target &&
-          voiceDuration &&
-          Math.abs(voiceDuration - target) > Math.max(tol, 0.8)
-        ) {
-          validationWarnings.push(
-            `La voz mide ${voiceDuration.toFixed(1)} s y el vídeo ${target.toFixed(1)} s`
+      try {
+        const target = targetSec;
+        const tol = input.toleranceSec ?? 0.25;
+        const baseSpeed = suggestedSpeechRate(nicheInfo);
+        let attemptSpeed = baseSpeed;
+        let best: Awaited<ReturnType<typeof synthesizeProsodyWithFallback>> | null = null;
+        for (let round = 0; round < 2; round++) {
+          const res = await runStage(
+            "GENERATING_VOICE",
+            async (signal) => {
+              if (round === 0) await ensureVoiceInstalled(chosenId, { signal });
+              return await synthesizeProsodyWithFallback(script, chosenId, {
+                signal,
+                speed: attemptSpeed,
+                styleId,
+                onProgress: (p) => tracker.set("GENERATING_VOICE", p ?? undefined),
+              });
+            },
+            h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.GENERATING_VOICE, retries: 0 }
           );
+          best = res;
+          voiceBlob = res.blob;
+          voiceDuration = await blobDuration(res.blob);
+          chosenId = res.voiceId;
+          usedFallback = res.usedFallback;
+          if (!target || round === 1) break;
+          const mul = correctiveSpeed(voiceDuration, target, tol);
+          if (!mul) break; // ya encaja
+          attemptSpeed = Math.min(1.5, Math.max(0.7, attemptSpeed * mul));
         }
+        if (best) {
+          segTimings.push(...best.timings);
+          if (
+            target &&
+            voiceDuration &&
+            Math.abs(voiceDuration - target) > Math.max(tol, 0.8)
+          ) {
+            validationWarnings.push(
+              `La voz mide ${voiceDuration.toFixed(1)} s y el vídeo ${target.toFixed(1)} s`
+            );
+          }
+        }
+      } catch (e) {
+        // Red de seguridad: si la voz falla, el vídeo se crea igual (solo música)
+        console.warn("voz omitida, vídeo solo con música:", e);
+        input.onlyMusic = true;
+        voiceBlob = null;
+        voiceDuration = null;
+        validationWarnings.push("No se pudo generar la voz; se creó el vídeo solo con música.");
       }
     }
 
@@ -280,7 +311,9 @@ export async function runCreationPipeline(
           goal: "ventas",
           durationSec: durationSec,
         });
-        const primaryCat = (input.preferredCategory || cls.primaryCategory) as MusicCategory;
+        const primaryCat = input.preferredCategory
+          ? (input.preferredCategory as MusicCategory)
+          : pickEnergyCategory(energy, nicheInfo.niche);
         const sel = selectTrack(primaryCat, cls.secondaryCategory, projectId);
         const secs = Math.max(8, durationSec);
         const rendered = await renderTrack(sel.track, secs, undefined);

@@ -13,6 +13,12 @@ export interface Segment {
   end: number;
 }
 
+/** Resultado del análisis de momentos: tramos + energía media (0..1). */
+export interface HighlightResult {
+  segments: Segment[];
+  energy: number;
+}
+
 /**
  * Selecciona tramos contiguos que maximizan la energía hasta sumar ~targetSec.
  * - Ventana deslizante de `windowSec` s.
@@ -69,9 +75,10 @@ export function selectSegments(
 export async function detectHighlights(
   videoBlob: Blob,
   opts: { targetSec: number; signal?: AbortSignal; maxSamples?: number }
-): Promise<Segment[]> {
+): Promise<HighlightResult> {
   const { targetSec, signal, maxSamples = 90 } = opts;
-  if (typeof document === "undefined") return [{ start: 0, end: targetSec }];
+  if (typeof document === "undefined")
+    return { segments: [{ start: 0, end: targetSec }], energy: 0.5 };
   const url = URL.createObjectURL(videoBlob);
   const video = document.createElement("video");
   video.muted = true;
@@ -91,13 +98,14 @@ export async function detectHighlights(
       };
     });
     const dur = Number.isFinite(video.duration) ? video.duration : 0;
-    if (dur <= targetSec || dur < 1) return [{ start: 0, end: dur || targetSec }];
+    if (dur <= targetSec || dur < 1)
+      return { segments: [{ start: 0, end: dur || targetSec }], energy: 0.5 };
 
     const cv = document.createElement("canvas");
     cv.width = 64;
     cv.height = 64;
     const g = cv.getContext("2d", { willReadFrequently: true });
-    if (!g) return [{ start: 0, end: dur }];
+    if (!g) return { segments: [{ start: 0, end: dur }], energy: 0.5 };
     const dt = Math.max(0.2, dur / maxSamples);
     const scores: number[] = [];
     let prev: Uint8ClampedArray | null = null;
@@ -121,10 +129,15 @@ export async function detectHighlights(
       prev = cur;
       if (scores.length >= maxSamples) break;
     }
-    if (scores.length < 3) return [{ start: 0, end: dur }];
-    return selectSegments(scores, dt, targetSec);
+    if (scores.length < 3)
+      return { segments: [{ start: 0, end: dur }], energy: 0.5 };
+    const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+    const min = Math.min(...scores);
+    const max = Math.max(...scores);
+    const energy = max > min ? Math.min(1, (mean - min) / (max - min)) : 0.5;
+    return { segments: selectSegments(scores, dt, targetSec), energy };
   } catch {
-    return [{ start: 0, end: targetSec }];
+    return { segments: [{ start: 0, end: targetSec }], energy: 0.5 };
   } finally {
     video.removeAttribute("src");
     video.load();
