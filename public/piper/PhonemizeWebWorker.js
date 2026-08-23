@@ -1858,4 +1858,6 @@ var wt = ut((je, B) => {
     }
   };
 });
-export default wt();
+// Worker clasico: sin `export` (rompia el parseo en navegadores). El modulo
+// queda accesible por si alguna integracion lo necesita.
+self.PhonemizeModule = wt;
