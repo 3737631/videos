@@ -160,6 +160,23 @@ function encodeWav(pcm: Float32Array, sampleRate: number): Blob {
   return new Blob([view.buffer], { type: "audio/wav" });
 }
 
+/** No deja congelar el hilo: reject tras `ms` si ORT no responde (iOS). */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`Timeout ${label} (${ms}ms)`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      }
+    );
+  });
+}
+
 /** Sintetiza UN fragmento con Piper a partir de su registro ya descargado */
 export async function synthesizeWithPiper(
   voiceId: string,
@@ -171,7 +188,9 @@ export async function synthesizeWithPiper(
   const pho = await phonemize(text, cfg);
   const ids = pho.phoneme_ids;
   if (!ids || ids.length < 2) throw new Error("Fonetización vacía");
-  const session = await getSession(voiceId, record.onnx);
+  // Seguridad anti-congelación: si ORT no instancia/ejecuta en 75s, falla
+  // rápido y el pipeline degrada a solo-música en lugar de quedarse pillado.
+  const session = await withTimeout(getSession(voiceId, record.onnx), 75000, "ORT session");
   const i64 = new BigInt64Array(ids.map((n) => BigInt(n)));
   const feeds: Record<string, Ort.Tensor> = {
     input: new Ort.Tensor("int64", i64, [1, ids.length]),
@@ -185,7 +204,7 @@ export async function synthesizeWithPiper(
   if (cfg.num_speakers > 1 && Object.keys(cfg.speaker_id_map).length > 0) {
     feeds.sid = new Ort.Tensor("int64", BigInt64Array.from([0n]), [1]);
   }
-  const out = await session.run(feeds);
+  const out = await withTimeout(session.run(feeds), 75000, "ORT run");
   const pcm = out.output.data as Float32Array;
   if (!pcm || pcm.length < 500) throw new Error("Audio local vacío");
   return encodeWav(pcm, cfg.audio.sample_rate || 22050);

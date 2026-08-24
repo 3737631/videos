@@ -43,6 +43,8 @@ export interface CreationInput {
   preferredCategory?: string | null;
   /** Tolerancia del ajuste de duración (def. 0.25 s) */
   toleranceSec?: number;
+  /** Si true, el render recorta/difumina las esquinas para quitar marcas de agua */
+  removeWatermark?: boolean;
 }
 
 export interface CreationResult {
@@ -399,6 +401,7 @@ export async function runCreationPipeline(
           segments,
           height,
           fps: isMobileLike ? 30 : 30,
+          removeWatermark: input.removeWatermark,
           signal,
           onPct: (p) => tracker.set("RENDERING", p),
         });

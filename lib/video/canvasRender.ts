@@ -23,6 +23,8 @@ export interface CaptionVideoOptions {
   videoBlob?: Blob | null;
   /** Momentos a usar, en segundos. Si falta, se usa el vídeo completo. */
   segments?: Segment[];
+  /** Recorta ~5% de cada borde para eliminar marcas de agua de esquina. */
+  removeWatermark?: boolean;
 }
 
 export interface CaptionVideoResult {
@@ -72,6 +74,7 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
     onPct,
     videoBlob,
     segments,
+    removeWatermark,
   } = opts;
 
   if (typeof document === "undefined") throw new Error("El render necesita navegador");
@@ -162,7 +165,7 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
       g.fillRect(0, 0, width, height);
       return;
     }
-    drawCover(g, video, width, height);
+    drawCover(g, video, width, height, removeWatermark);
   };
 
   const drawFrame = () => {
@@ -268,13 +271,22 @@ function drawCover(
   g: CanvasRenderingContext2D,
   v: HTMLVideoElement,
   w: number,
-  h: number
+  h: number,
+  removeWatermark?: boolean
 ): void {
   const vw = v.videoWidth || w;
   const vh = v.videoHeight || h;
   if (!vw || !vh) {
     g.fillStyle = "#0B0D14";
     g.fillRect(0, 0, w, h);
+    return;
+  }
+  if (removeWatermark) {
+    // Recorta ~5% de cada borde (origen) para ocultar marcas de esquina tipo
+    // TikTok, y lo estira a todo el lienzo (cover).
+    const mw = vw * 0.05;
+    const mh = vh * 0.05;
+    g.drawImage(v, mw, mh, vw - 2 * mw, vh - 2 * mh, 0, 0, w, h);
     return;
   }
   const scale = Math.max(w / vw, h / vh);

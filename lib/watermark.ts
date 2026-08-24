@@ -93,7 +93,11 @@ export async function detectWatermark(url: string): Promise<boolean> {
 
 function seekTo(video: HTMLVideoElement, t: number): Promise<void> {
   return new Promise((resolve) => {
+    // Timeout OBLIGATORIO: en iOS el evento "seeked" a veces no dispara y
+    // sin esto detectWatermark se congelaria para siempre.
+    const kill = setTimeout(resolve, 4000);
     const done = () => {
+      clearTimeout(kill);
       video.removeEventListener("seeked", done);
       setTimeout(resolve, 60);
     };
@@ -101,6 +105,7 @@ function seekTo(video: HTMLVideoElement, t: number): Promise<void> {
     try {
       video.currentTime = t;
     } catch {
+      clearTimeout(kill);
       resolve();
     }
   });

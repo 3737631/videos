@@ -12,6 +12,7 @@ import { runCreationPipeline } from "@/lib/pipeline";
 import { saveClip } from "@/lib/clips";
 import { mergeVideos } from "@/lib/video/merge";
 import { pickTargetDuration } from "@/lib/video/highlights";
+import { detectWatermark } from "@/lib/watermark";
 import { AppShell } from "@/components/AppShell";
 
 type Mode = "voice" | "music";
@@ -45,6 +46,10 @@ export default function CrearPage() {
   const [loadedUrl, setLoadedUrl] = useState("");
 
   const [musicCat, setMusicCat] = useState<string | null>(null);
+
+  // Marca de agua: la detectamos al subir el video y ofrecemos quitarla.
+  const [hasWatermark, setHasWatermark] = useState(false);
+  const [removeWm, setRemoveWm] = useState(true);
 
   const [voiceId, setVoiceId] = useState<string>(defaultVoiceForLocale("es-XX"));
   const [styleId, setStyleId] = useState<string | null>(null);
@@ -93,6 +98,8 @@ export default function CrearPage() {
 
   const onPickFiles = useCallback(async (list: File[]) => {
     if (!list.length) return;
+    setHasWatermark(false);
+    setRemoveWm(true);
     urlRefs.current.forEach((u) => URL.revokeObjectURL(u));
     urlRefs.current = [];
     setFiles(list);
@@ -126,6 +133,11 @@ export default function CrearPage() {
       const probe = await analyzeVideoFile(merged as unknown as File, { timeoutMs: 20000 });
       setMergedBlob(merged);
       setVideoDuration(probe.duration || 0);
+      // Detección de marca de agua (no bloquea: si tarda, se ignora).
+      const wmUrl = URL.createObjectURL(merged as unknown as Blob);
+      detectWatermark(wmUrl).then((wm) => setHasWatermark(wm)).catch(() => setHasWatermark(false)).finally(() => {
+        try { URL.revokeObjectURL(wmUrl); } catch {}
+      });
     } catch {
       setMergedBlob(list[0]);
       setVideoDuration(0);
@@ -207,6 +219,7 @@ export default function CrearPage() {
           videoDuration,
           preferredCategory: musicCat,
           styleId: mode === "voice" ? (styleId as string | undefined) : undefined,
+          removeWatermark: removeWm,
         },
         {
           signal: ctrl.signal,
@@ -377,6 +390,33 @@ export default function CrearPage() {
             )}
             {mode === "voice" && !preparingVoice && installedIds.includes(voiceId) && (
               <div className="text-xs font-medium text-emerald-300">Voz lista</div>
+            )}
+
+            {hasWatermark && (
+              <section className="cc-card p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-semibold text-amber-200">Marca de agua detectada</div>
+                    <div className="mt-1 text-xs text-gray-400">
+                      Recortamos los bordes para quitarla del vídeo final.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setRemoveWm((v) => !v)}
+                    className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                      removeWm ? "bg-violet-500" : "bg-white/15"
+                    }`}
+                    aria-pressed={removeWm}
+                  >
+                    <span
+                      className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${
+                        removeWm ? "left-[22px]" : "left-0.5"
+                      }`}
+                    />
+                  </button>
+                </div>
+              </section>
             )}
 
             <button
