@@ -87,7 +87,7 @@ export default function CrearPage() {
     (async () => {
       try {
         // Precarga EN PARALELO el modelo (0-70%) y el motor ORT (70-100%) con
-        // progreso real. AsÃ­ al pulsar "Crear" solo queda la inferencia (rÃ¡pida)
+        // progreso real. Así al pulsar "Crear" solo queda la inferencia (rápida)
         // y no la descarga de ~58MB que antes congelaba la barra durante el render.
         await Promise.all([
           ensureVoiceInstalled(voiceId, {
@@ -153,7 +153,7 @@ export default function CrearPage() {
       const probe = await analyzeVideoFile(merged as unknown as File, { timeoutMs: 20000 });
       setMergedBlob(merged);
       setVideoDuration(probe.duration || 0);
-      // DetecciÃ³n de marca de agua (no bloquea: si tarda, se ignora).
+      // Detección de marca de agua (no bloquea: si tarda, se ignora).
       const wmUrl = URL.createObjectURL(merged as unknown as Blob);
       detectWatermark(wmUrl).then((wm) => setHasWatermark(wm)).catch(() => setHasWatermark(false)).finally(() => {
         try { URL.revokeObjectURL(wmUrl); } catch {}
@@ -169,16 +169,16 @@ export default function CrearPage() {
   const loadProduct = useCallback(async () => {
     const raw = url.trim();
     if (!parseAliUrl(raw)) {
-      setProductNote("Pega un enlace valido de AliExpress.");
+      setProductNote("Pega un enlace válido de AliExpress.");
       return;
     }
     setLoadingProduct(true);
     setProductNote("");
     setLoadedUrl(raw);
     try {
-      const res = await fetchProduct(raw, { timeoutMs: 20000 });
+      const res = await fetchProduct(raw, { timeoutMs: 8000 });
       setProduct(res.info);
-      if (res.usedUrlName) setProductNote("La pÃ¡gina pedÃ­a captcha; usamos el nombre del enlace.");
+      if (res.usedUrlName) setProductNote("La página pedía captcha; usamos el nombre del enlace.");
       else if (res.source === "none") setProductNote("No se pudo leer solo. Escribe el nombre abajo.");
       else if (!res.info.title) setProductNote("Falta el nombre. Escribelo abajo.");
       setManualName(res.info.title ?? "");
@@ -222,8 +222,8 @@ export default function CrearPage() {
   }, [videoDuration, lang, productTitle, product]);
 
   const aliOk = !!parseAliUrl(url.trim()) && !!productTitle;
-  // En "solo mÃºsica" el enlace de producto NO es necesario (el guion va vacÃ­o
-  // y el nombre es "Video con mÃºsica"); solo se exige en modo con voz.
+  // En "solo música" el enlace de producto NO es necesario (el guion va vacío
+  // y el nombre es "Video con música"); solo se exige en modo con voz.
   const canCreate =
     phase === "setup" &&
     !!mergedBlob &&
@@ -348,7 +348,7 @@ export default function CrearPage() {
               onChange={(e) => onPickFiles(Array.from(e.target.files ?? []))}
             />
 
-            {busyMerge && <div className="text-center text-xs text-gray-400">Uniendo videosâ€¦</div>}
+            {busyMerge && <div className="text-center text-xs text-gray-400">Uniendo videos…</div>}
 
             {thumbs.length > 0 && (
               <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
@@ -425,7 +425,7 @@ export default function CrearPage() {
                   className="rounded-xl border border-white/15 px-3 py-2 text-sm font-medium hover:bg-white/5 disabled:opacity-50"
                 >
                   {loadingProduct
-                    ? "Buscandoâ€¦"
+                    ? "Buscando…"
                     : productTitle && loadedUrl === url
                     ? "Confirmado âœ“"
                     : "Buscar"}
@@ -442,7 +442,7 @@ export default function CrearPage() {
 
             {mode === "voice" && preparingVoice && (
               <div className="rounded-xl border border-violet-400/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-200">
-                Preparando voz (descarga del modelo)â€¦ {preparePct != null ? `${preparePct}%` : ""}
+                Preparando voz (descarga del modelo)… {preparePct != null ? `${preparePct}%` : ""}
               </div>
             )}
             {mode === "voice" && !preparingVoice && installedIds.includes(voiceId) && (
@@ -455,7 +455,7 @@ export default function CrearPage() {
                   <div>
                     <div className="text-xs font-semibold text-amber-200">Marca de agua detectada</div>
                     <div className="mt-1 text-xs text-gray-400">
-                      Recortamos los bordes para quitarla del vÃ­deo final.
+                      Recortamos los bordes para quitarla del vídeo final.
                     </div>
                   </div>
                   <button
@@ -493,15 +493,15 @@ export default function CrearPage() {
               <div className="h-full rounded-full bg-violet-400 transition-all" style={{ width: `${Math.max(3, pct)}%` }} />
             </div>
             <div className="mt-2 text-xs text-gray-400">
-              {pct}%{eta != null && eta > 0 ? ` Â· Quedan ~${Math.ceil(eta)} s` : ""}
+              {pct}%{eta != null && eta > 0 ? ` · Quedan ~${Math.ceil(eta)} s` : ""}
             </div>
             {stageKey === "GENERATING_VOICE" && (
               <div className="mt-2 text-xs text-violet-200">
-                Cargando el modelo de voz en tu mÃ³vil (tarda 20-30 s la primera vez). Sigue asÃ­, no cierres la pÃ¡gina.
+                Cargando el modelo de voz en tu móvil (tarda 20-30 s la primera vez). Sigue así, no cierres la página.
               </div>
             )}
             {stageKey === "RENDERING" && (
-              <div className="mt-2 text-xs text-violet-200">Montando el vÃ­deo final, esto tambiÃ©n tarda unos segundos.</div>
+              <div className="mt-2 text-xs text-violet-200">Montando el vídeo final, esto también tarda unos segundos.</div>
             )}
             <button
               onClick={reset}
@@ -537,15 +537,15 @@ export default function CrearPage() {
                 >
                   Copiar error
                 </button>
-                <div className="mt-2 text-xs text-rose-200/80">PÃ©galo aquÃ­ para arreglar la causa exacta de una vez.</div>
+                <div className="mt-2 text-xs text-rose-200/80">Pégalo aquí para arreglar la causa exacta de una vez.</div>
               </div>
             )}
             <div className="cc-card p-5">
               <div className="text-sm font-semibold text-white">{result.name}</div>
               <div className="mt-1 text-xs text-gray-400">
-                {result.duration.toFixed(1)} s Â· {result.width}x{result.height}
-                {result.voiceName ? ` Â· ${result.voiceName}` : ""}
-                {result.musicTrackName ? ` Â· ${result.musicTrackName}` : ""}
+                {result.duration.toFixed(1)} s · {result.width}x{result.height}
+                {result.voiceName ? ` · ${result.voiceName}` : ""}
+                {result.musicTrackName ? ` · ${result.musicTrackName}` : ""}
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
                 <a href={result.url} download className="cc-btn-primary rounded-xl px-4 py-2.5 text-sm font-bold text-white">

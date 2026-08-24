@@ -1,7 +1,7 @@
 ﻿/**
  * PIPELINE V3 â€” orquestador con fases REALES, timeout, reintento y limpieza.
- * GUION â†’ Analizar idioma/estilo â†’ Seleccionar voz â†’ Obtener voz
- *       â†’ Generar mÃºsica â†’ SubtÃ­tulos â†’ Mezcla â†’ Render â†’ VerificaciÃ³n â†’ Exportar
+ * GUION → Analizar idioma/estilo → Seleccionar voz → Obtener voz
+ *       → Generar música → SubtÃ­tulos → Mezcla → Render → Verificación → Exportar
  */
 import { createProgressTracker, type StageName } from "@/lib/progress";
 import { toFriendlyError, TimeoutError } from "@/lib/net";
@@ -33,15 +33,15 @@ export interface CreationInput {
   voiceId?: string | null;
   onlyMusic?: boolean;
   targetSeconds?: number;
-  /** Estilo de entonaciÃ³n (natural, viral, urgenteâ€¦) */
+  /** Estilo de entonación (natural, viral, urgente…) */
   styleId?: string;
-  /** VÃ­deo fuente subido por el usuario (obligatorio) */
+  /** Vídeo fuente subido por el usuario (obligatorio) */
   videoBlob: Blob;
-  /** DuraciÃ³n del vÃ­deo fuente en segundos */
+  /** Duración del vídeo fuente en segundos */
   videoDuration: number;
-  /** CategorÃ­a de mÃºsica preferida (modo solo mÃºsica); null = automÃ¡tico */
+  /** CategorÃ­a de música preferida (modo solo música); null = automático */
   preferredCategory?: string | null;
-  /** Tolerancia del ajuste de duraciÃ³n (def. 0.25 s) */
+  /** Tolerancia del ajuste de duración (def. 0.25 s) */
   toleranceSec?: number;
   /** Si true, el render recorta/difumina las esquinas para quitar marcas de agua */
   removeWatermark?: boolean;
@@ -61,7 +61,7 @@ export interface CreationResult {
   voiceId: string | null;
   voiceName: string | null;
   usedFallback: boolean;
-  /** Error real de la voz (si fallÃ³ y se degradÃ³ a solo mÃºsica) */
+  /** Error real de la voz (si falló y se degradó a solo música) */
   voiceError: string | null;
   musicTrackName: string | null;
   cuesCount: number;
@@ -126,14 +126,14 @@ export async function runStage<T>(
   throw lastErr instanceof Error ? lastErr : new Error("Fallo en la fase " + name);
 }
 
-// â”€â”€ DetecciÃ³n de idioma del guion (heurÃ­stica offline) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Detección de idioma del guion (heurÃ­stica offline) ──────────────────
 const LANG_HINTS: Record<string, string[]> = {
   es: ["el", "la", "los", "las", "que", "para", "con", "este", "esta", "tu", "porque", "gratis", "ahora", "mira"],
   en: ["the", "this", "that", "with", "your", "you", "and", "for", "wait", "look", "best", "free"],
   fr: ["le", "la", "les", "cette", "avec", "pour", "regarde", "voici", "gratuit", "votre"],
-  de: ["der", "die", "das", "und", "mit", "fÃ¼r", "schau", "dieses", "kostenlos", "jetzt"],
+  de: ["der", "die", "das", "und", "mit", "für", "schau", "dieses", "kostenlos", "jetzt"],
   it: ["il", "lo", "la", "che", "con", "questo", "guarda", "gratis", "ora", "tuo"],
-  pt: ["o", "a", "os", "as", "que", "com", "para", "olha", "esse", "grÃ¡tis", "agora"],
+  pt: ["o", "a", "os", "as", "que", "com", "para", "olha", "esse", "grátis", "agora"],
 };
 
 export function detectScriptLang(text: string): string {
@@ -155,7 +155,7 @@ export function detectScriptLang(text: string): string {
   return best;
 }
 
-// â”€â”€ SelecciÃ³n de mÃºsica segÃºn la ENERGÃA del vÃ­deo (momentos) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Selección de música según la ENERGÃA del vídeo (momentos) ────────────
 const ENERGY_HIGH: MusicCategory[] = ["viral", "motivational", "funny", "dramatic"];
 const ENERGY_MID: MusicCategory[] = ["lifestyle", "storytelling", "mysterious"];
 const ENERGY_LOW: MusicCategory[] = ["relaxing", "romantic", "sad"];
@@ -173,13 +173,13 @@ const NICHE_MUSIC: Partial<Record<string, MusicCategory>> = {
 };
 
 /**
- * En "AutomÃ¡tico", la categorÃ­a musical se elige por la energÃ­a media del vÃ­deo
+ * En "Automático", la categorÃ­a musical se elige por la energía media del vídeo
  * (movimiento de los momentos virales) y el nicho, nunca fijada a "viral".
- * AsÃ­ cada vÃ­deo suena distinto segÃºn su contenido.
+ * Así cada vídeo suena distinto según su contenido.
  */
 const CALM_NICHES = new Set(["romantic", "relaxing", "sad"]);
 
-/** Trocea un vÃ­deo en `cuts` partes iguales (fallback si el anÃ¡lisis falla). */
+/** Trocea un vídeo en `cuts` partes iguales (fallback si el análisis falla). */
 function splitEqual(duration: number, cuts: number): Segment[] {
   const n = Math.max(2, Math.min(6, cuts));
   const step = duration / n;
@@ -190,8 +190,8 @@ function splitEqual(duration: number, cuts: number): Segment[] {
 }
 
 /**
- * En "AutomÃ¡tico", la mÃºsica se elige por el nicho del guion y la energÃ­a del
- * vÃ­deo. El contenido de anuncio/viral debe sonar ENÃ‰RGICO (no relajante).
+ * En "Automático", la música se elige por el nicho del guion y la energía del
+ * vídeo. El contenido de anuncio/viral debe sonar ENÉRGICO (no relajante).
  */
 function pickEnergyCategory(energy: number, niche: string): MusicCategory {
   let group: MusicCategory[];
@@ -226,9 +226,9 @@ export async function runCreationPipeline(
     tracker.set("PREPARING");
     const script = input.script.trim();
     if (!script && !input.onlyMusic) throw new Error("Escribe el guion de tu anuncio primero.");
-    if (!input.videoBlob) throw new Error("Falta el vÃ­deo fuente");
+    if (!input.videoBlob) throw new Error("Falta el vídeo fuente");
 
-    // DuraciÃ³n objetivo + MOMENTOS VIRALES del vÃ­deo (los que mÃ¡s enganchan)
+    // Duración objetivo + MOMENTOS VIRALES del vídeo (los que más enganchan)
     const targetSec = pickTargetDuration(input.videoDuration, !!input.onlyMusic);
     let segments: Segment[] = [];
     let energy = 0.5;
@@ -237,7 +237,7 @@ export async function runCreationPipeline(
       segments = hl.segments;
       energy = hl.energy;
     } catch {
-      // Si el anÃ¡lisis falla, igual CORTAMOS el vÃ­deo en trozos (nunca el vÃ­deo entero)
+      // Si el análisis falla, igual CORTAMOS el vídeo en trozos (nunca el vídeo entero)
       segments = splitEqual(input.videoDuration || targetSec, 4);
     }
     const durationSec = Math.max(
@@ -245,7 +245,7 @@ export async function runCreationPipeline(
       Math.round(segments.reduce((a, s) => a + (s.end - s.start), 0) || targetSec)
     );
 
-    // â”€â”€ Analizar guion â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Analizar guion ─────────────────────────────────────────────────
     const nicheInfo = await runStage(
       "ANALYZING_SCRIPT",
       async () => detectNiche(script),
@@ -253,7 +253,7 @@ export async function runCreationPipeline(
     );
     const lang = detectScriptLang(script);
     const palette = NICHE_PALETTES[nicheInfo.niche];
-    // Tono: el elegido por el usuario o el recomendado automÃ¡ticamente
+    // Tono: el elegido por el usuario o el recomendado automáticamente
     const styleId =
       getStyle(input.styleId).id === input.styleId
         ? (input.styleId as string)
@@ -264,7 +264,7 @@ export async function runCreationPipeline(
           });
     const validationWarnings: string[] = [];
 
-    // â”€â”€ Seleccionar y generar voz (con degradaciÃ³n segura) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Seleccionar y generar voz (con degradación segura) ──────────────
     let chosenId =
       input.voiceId && getVoiceById(input.voiceId)
         ? input.voiceId
@@ -306,7 +306,7 @@ export async function runCreationPipeline(
           usedFallback = res.usedFallback;
           if (!target || round === 1) break;
           // Solo re-sintetizamos (2Âª pasada, dobla el tiempo de voz) si el
-          // desajuste es grande. Con desajustes pequeÃ±os el mix y los subtÃ­tulos
+          // desajuste es grande. Con desajustes pequeños el mix y los subtÃ­tulos
           // encajan bien y ahorramos la mitad del tiempo de inferencia.
           const mul = correctiveSpeed(voiceDuration, target, Math.max(tol, 1.5));
           if (!mul) break; // ya encaja
@@ -320,14 +320,14 @@ export async function runCreationPipeline(
             Math.abs(voiceDuration - target) > Math.max(tol, 0.8)
           ) {
             validationWarnings.push(
-              `La voz mide ${voiceDuration.toFixed(1)} s y el vÃ­deo ${target.toFixed(1)} s`
+              `La voz mide ${voiceDuration.toFixed(1)} s y el vídeo ${target.toFixed(1)} s`
             );
           }
         }
       } catch (e) {
-        // Red de seguridad: si la voz falla, el vÃ­deo se crea igual (solo mÃºsica)
+        // Red de seguridad: si la voz falla, el vídeo se crea igual (solo música)
         voiceError = e instanceof Error ? e.message : String(e);
-        console.warn("voz omitida, vÃ­deo solo con mÃºsica:", e);
+        console.warn("voz omitida, vídeo solo con música:", e);
         input.onlyMusic = true;
         voiceBlob = null;
         voiceDuration = null;
@@ -335,7 +335,7 @@ export async function runCreationPipeline(
       }
     }
 
-    // â”€â”€ Generar mÃºsica â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Generar música ─────────────────────────────────────────────────
     await runStage(
       "GENERATING_MUSIC",
       async (signal) => {
@@ -352,7 +352,7 @@ export async function runCreationPipeline(
         const secs = Math.max(8, durationSec);
         const rendered = await renderTrack(sel.track, secs, undefined);
         music.trackId = sel.track.id;
-        music.label = `${sel.track.category} Â· ${rendered.bpm} BPM`;
+        music.label = `${sel.track.category} · ${rendered.bpm} BPM`;
         music.blob = rendered.blob;
         music.duration = rendered.duration;
         music.url = rendered.url;
@@ -360,12 +360,12 @@ export async function runCreationPipeline(
       },
       h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.GENERATING_MUSIC }
     ).catch((err) => {
-      // La mÃºsica no debe tumbar el vÃ­deo: seguimos sin ella
-      console.warn("mÃºsica omitida:", err);
+      // La música no debe tumbar el vídeo: seguimos sin ella
+      console.warn("música omitida:", err);
     });
 
-    // â”€â”€ SubtÃ­tulos (anclados a timestamps REALES de la voz; si la voz
-    //     falla, se estima la duraciÃ³n para que SIEMPRE haya subtÃ­tulos) â”€
+    // ── Subtítulos (anclados a timestamps REALES de la voz; si la voz
+    //     falla, se estima la duración para que SIEMPRE haya subtítulos) ─
     const subs = explicitMusic
       ? { cues: [], style: defaultSubtitleStyle() }
       : await runStage(
@@ -382,7 +382,7 @@ export async function runCreationPipeline(
           h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.CREATING_SUBTITLES, retries: 0 }
         );
 
-    // â”€â”€ Mezcla â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Mezcla ─────────────────────────────────────────────────────────
     mixBlob = await runStage(
       "MIXING_AUDIO",
       async () => {
@@ -395,7 +395,7 @@ export async function runCreationPipeline(
       h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.MIXING_AUDIO }
     );
 
-    // â”€â”€ Render (canvas + MediaRecorder) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Render (canvas + MediaRecorder) ────────────────────────────────
     const isMobileLike =
       typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     const width = isMobileLike ? 720 : 1080;
@@ -421,35 +421,35 @@ export async function runCreationPipeline(
           });
           if (r && r.blob && r.blob.size >= 1000) return r;
         } catch (e) {
-          console.warn("render con captions fallÃ³:", e);
+          console.warn("render con captions falló:", e);
         }
-        // Fallback garantizado: usamos el vÃ­deo fuente para que SIEMPRE cargue
-        // algo reproducible, aunque sin subtÃ­tulos/recorte si el canvas fallÃ³.
+        // Fallback garantizado: usamos el vídeo fuente para que SIEMPRE cargue
+        // algo reproducible, aunque sin subtítulos/recorte si el canvas falló.
         const fb = input.videoBlob;
         if (fb) {
           return { blob: fb, url: URL.createObjectURL(fb), mime: "video/mp4", ext: "mp4", thumbnail: "" };
         }
-        throw new Error("No se pudo renderizar ni usar el vÃ­deo fuente.");
+        throw new Error("No se pudo renderizar ni usar el vídeo fuente.");
       },
       h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.RENDERING, retries: isMobileLike ? 1 : 0 }
     );
 
-    // â”€â”€ VerificaciÃ³n â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Verificación ───────────────────────────────────────────────────
     const validation = await runStage(
       "VERIFYING",
       async () => {
         const errors: string[] = [];
         if (!rendered.blob || rendered.blob.size < 1000)
-          errors.push("El vÃ­deo renderizado estÃ¡ vacÃ­o: la grabaciÃ³n del canvas fallÃ³ en este navegador (iOS a veces no finaliza MediaRecorder).");
+          errors.push("El vídeo renderizado está vacío: la grabación del canvas falló en este navegador (iOS a veces no finaliza MediaRecorder).");
         const stats = await assertFinalAudio(rendered.blob);
-        if (!stats.valid || stats.rms < 0.0005) errors.push("El audio final suena vacÃ­o");
-        if (Math.abs(stats.duration - durationSec) > 1.5) errors.push("DuraciÃ³n inesperada");
+        if (!stats.valid || stats.rms < 0.0005) errors.push("El audio final suena vacío");
+        if (Math.abs(stats.duration - durationSec) > 1.5) errors.push("Duración inesperada");
         return errors;
       },
       h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.VERIFYING }
     );
 
-    // â”€â”€ Exportar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Exportar ───────────────────────────────────────────────────────
     tracker.set("EXPORTING");
     const voiceMeta = chosenId ? getVoiceById(chosenId) : null;
     const result: CreationResult = {
