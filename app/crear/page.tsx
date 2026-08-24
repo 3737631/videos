@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { analyzeVideoFile } from "@/lib/media/probe";
-import { fetchProduct, parseAliUrl, type ProductInfo } from "@/lib/product/aliextract";
+import { fetchProduct, parseAliUrl, extractAliNameFromUrl, type ProductInfo } from "@/lib/product/aliextract";
 import { generateScript } from "@/lib/script/generator";
 import { defaultVoiceForLocale, VOICE_CATALOG } from "@/lib/voices/catalog";
 import { ensureVoiceInstalled, isVoiceInstalled } from "@/lib/voices/engine";
@@ -168,33 +168,67 @@ export default function CrearPage() {
 
   const loadProduct = useCallback(async () => {
     const raw = url.trim();
-    if (!parseAliUrl(raw)) {
+    const parsed = parseAliUrl(raw);
+    const slug = extractAliNameFromUrl(raw);
+    // Móvil: s.click/a.aliexpress y links sin ID numérico pero con slug válido también son aceptados
+    if (!parsed && !slug) {
       setProductNote("Pega un enlace válido de AliExpress.");
       return;
     }
+    // Lectura instantánea en móvil: muestra nombre del slug sin esperar red (0s vs 8s)
+    if (slug) {
+      const instant: ProductInfo = {
+        url: raw,
+        itemId: parsed?.itemId ?? null,
+        title: slug,
+        price: null,
+        currency: null,
+        images: [],
+        videoUrls: [],
+        seller: null,
+        description: null,
+        features: [],
+      };
+      setProduct(instant);
+      setManualName(slug);
+      setProductNote("Nombre del enlace listo — enriqueciendo datos…");
+      setLoadedUrl(raw);
+    } else {
+      setProductNote("");
+      setLoadedUrl(raw);
+    }
     setLoadingProduct(true);
-    setProductNote("");
-    setLoadedUrl(raw);
     try {
-      const res = await fetchProduct(raw, { timeoutMs: 8000 });
-      setProduct(res.info);
-      if (res.usedUrlName) setProductNote("La página pedía captcha; usamos el nombre del enlace.");
-      else if (res.source === "none") setProductNote("No se pudo leer solo. Escribe el nombre abajo.");
-      else if (!res.info.title) setProductNote("Falta el nombre. Escribelo abajo.");
-      setManualName(res.info.title ?? "");
+      const res = await fetchProduct(raw, { timeoutMs: 5000 });
+      // Solo sobrescribe si trae datos mejores que el slug instantáneo
+      if (res.info.title && res.info.title.length > 3) {
+        setProduct(res.info);
+        setManualName(res.info.title ?? slug ?? "");
+        if (res.usedUrlName) setProductNote("La página pedía captcha; usamos el nombre del enlace.");
+        else if (res.source === "none") setProductNote("Usando nombre del enlace.");
+        else if (!res.info.title) setProductNote("Falta el nombre. Escríbelo abajo.");
+        else setProductNote("");
+      } else if (!slug) {
+        setProduct(res.info);
+        if (res.source === "none") setProductNote("No se pudo leer solo. Escribe el nombre abajo.");
+        else setProductNote("");
+      }
     } catch {
-      setProduct(null);
-      setProductNote("No se pudo leer. Escribe el nombre abajo.");
+      if (!slug) {
+        setProduct(null);
+        setProductNote("No se pudo leer. Escribe el nombre abajo.");
+      }
+      // si ya teníamos slug, mantenemos el instantáneo
     } finally {
       setLoadingProduct(false);
     }
   }, [url]);
 
-  // AliExpress es OBLIGATORIO: si la URL es valida, se analiza siempre
-  // (para el guion personalizado), sin esperar a que el usuario pulse "Usar".
+  // AliExpress: si la URL es válida (incluido s.click móvil con slug), se analiza siempre
+  // para el guion personalizado, sin esperar a que el usuario pulse "Usar". Lectura instantánea.
   useEffect(() => {
     const raw = url.trim();
-    if (parseAliUrl(raw) && raw !== loadedUrl) loadProduct();
+    if ((parseAliUrl(raw) || extractAliNameFromUrl(raw)) && raw !== loadedUrl) loadProduct();
   }, [url, loadedUrl, loadProduct]);
 
   const productTitle = manualName.trim() || product?.title || null;
@@ -221,7 +255,7 @@ export default function CrearPage() {
     setRecommended(adStyle);
   }, [videoDuration, lang, productTitle, product]);
 
-  const aliOk = !!parseAliUrl(url.trim()) && !!productTitle;
+  const aliOk = !!(parseAliUrl(url.trim()) || extractAliNameFromUrl(url.trim())) && !!productTitle;
   // En "solo música" el enlace de producto NO es necesario (el guion va vacío
   // y el nombre es "Video con música"); solo se exige en modo con voz.
   const canCreate =
