@@ -143,7 +143,12 @@ async function synthChunk(voice: CatalogVoice, text: string, speed: number, sign
       if (voice.runtime === "kokoro") return await synthesizeChunkLocal(text, voice.id, signal);
       const rec = await cacheGet<PiperVoiceRecord>("voices", voice.id);
       if (!rec?.onnx) throw new Error("La voz no está descargada");
-      await ensurePiperRuntime(() => {}, signal);
+      // El progreso del wasm de ORT (0-100%) se mapea a la primera mitad
+      // de la banda de síntesis; luego fonetización/sesión/segmentos siguen.
+      await ensurePiperRuntime(
+        (l, t) => onProgress?.(Math.round((l / (t || l)) * 30)),
+        signal
+      );
       return await synthesizeWithPiper(voice.id, rec, text, speed, onProgress);
     } catch (err) {
       lastErr = err;

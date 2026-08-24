@@ -7,6 +7,7 @@ import { fetchProduct, parseAliUrl, type ProductInfo } from "@/lib/product/aliex
 import { generateScript } from "@/lib/script/generator";
 import { defaultVoiceForLocale, VOICE_CATALOG } from "@/lib/voices/catalog";
 import { ensureVoiceInstalled, isVoiceInstalled } from "@/lib/voices/engine";
+import { ensurePiperRuntime } from "@/lib/voices/piperRuntime";
 import { recommendStyle } from "@/lib/script/styles";
 import { runCreationPipeline } from "@/lib/pipeline";
 import { saveClip } from "@/lib/clips";
@@ -83,14 +84,32 @@ export default function CrearPage() {
     const ctrl = new AbortController();
     setPreparingVoice(voiceId);
     setPreparePct(0);
-    ensureVoiceInstalled(voiceId, { signal: ctrl.signal, onProgress: (p) => alive && setPreparePct(Math.round((p ?? 0) * 100)) })
-      .then(() => {
+    (async () => {
+      try {
+        // Precarga EN PARALELO el modelo (0-70%) y el motor ORT (70-100%) con
+        // progreso real. Así al pulsar "Crear" solo queda la inferencia (rápida)
+        // y no la descarga de ~58MB que antes congelaba la barra durante el render.
+        await Promise.all([
+          ensureVoiceInstalled(voiceId, {
+            signal: ctrl.signal,
+            onProgress: (p) => alive && setPreparePct(Math.round((p ?? 0) * 70)),
+          }),
+          ensurePiperRuntime(
+            (l, t) => alive && setPreparePct(Math.round(70 + (l / (t || l)) * 30)),
+            ctrl.signal
+          ),
+        ]);
         if (!alive) return;
         setInstalledIds(VOICE_CATALOG.filter((v) => isVoiceInstalled(v.id)).map((v) => v.id));
         setPreparingVoice(null);
         setPreparePct(null);
-      })
-      .catch(() => alive && (setPreparingVoice(null), setPreparePct(null)));
+      } catch {
+        if (alive) {
+          setPreparingVoice(null);
+          setPreparePct(null);
+        }
+      }
+    })();
     return () => {
       alive = false;
       ctrl.abort();
@@ -393,7 +412,7 @@ export default function CrearPage() {
 
             {mode === "voice" && preparingVoice && (
               <div className="rounded-xl border border-violet-400/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-200">
-                Preparando voz… {preparePct != null ? `${preparePct}%` : ""}
+                Preparando voz (descarga del modelo)… {preparePct != null ? `${preparePct}%` : ""}
               </div>
             )}
             {mode === "voice" && !preparingVoice && installedIds.includes(voiceId) && (
@@ -454,6 +473,12 @@ export default function CrearPage() {
             {stageKey === "RENDERING" && (
               <div className="mt-2 text-xs text-violet-200">Montando el vídeo final, esto también tarda unos segundos.</div>
             )}
+            <button
+              onClick={reset}
+              className="mt-4 rounded-xl border border-white/15 px-4 py-2 text-xs font-medium text-gray-300 hover:bg-white/5"
+            >
+              Cancelar
+            </button>
           </div>
         )}
 

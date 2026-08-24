@@ -42,6 +42,7 @@ export interface PiperVoiceRecord {
 const blobs = new Map<string, string>(); // cacheKey → blobURL
 const sessions = new Map<string, Promise<Ort.InferenceSession>>();
 let configured = false;
+let ortWasmLoaded = false;
 
 const PHO_WASM = piperAssetUrl("piper_phonemize.wasm");
 const PHO_DATA = piperAssetUrl("piper_phonemize.data");
@@ -52,8 +53,8 @@ const ORT_WASM_MJS = piperAssetUrl("ort-wasm-simd-threaded.js");
 const ORT_WASM_WASM = piperAssetUrl("ort-wasm-simd-threaded.wasm");
 
 export async function ensurePiperRuntime(
-  _onProgress?: ProgressFn,
-  _signal?: AbortSignal
+  onProgress?: ProgressFn,
+  signal?: AbortSignal
 ): Promise<void> {
   if (!configured) {
     Ort.env.wasm.numThreads = 1;
@@ -63,6 +64,18 @@ export async function ensurePiperRuntime(
     // falla intentando import() un .mjs 404.
     Ort.env.wasm.wasmPaths = { mjs: ORT_WASM_MJS, wasm: ORT_WASM_WASM };
     configured = true;
+  }
+  // El wasm de ORT pesa ~30MB. Lo descargamos nosotros CON PROGRESO y se lo
+  // pasamos a ORT vía wasmBinary, así la barra se mueve durante la descarga
+  // (antes parecía congelada y el usuario creía que estaba pillado).
+  if (!ortWasmLoaded) {
+    const buf = await fetchBinaryWithProgress(
+      ORT_WASM_WASM,
+      (l, t) => onProgress?.(l, t || l),
+      { signal, timeoutMs: 180000 }
+    );
+    Ort.env.wasm.wasmBinary = buf;
+    ortWasmLoaded = true;
   }
 }
 
