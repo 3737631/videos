@@ -58,6 +58,7 @@ export default function CrearPage() {
   const [, setRecommended] = useState<string>("natural");
 
   const [phase, setPhase] = useState<Phase>("setup");
+  const [stageKey, setStageKey] = useState("");
   const [stageLabel, setStageLabel] = useState("");
   const [pct, setPct] = useState(0);
   const [eta, setEta] = useState<number | null>(null);
@@ -158,7 +159,8 @@ export default function CrearPage() {
     try {
       const res = await fetchProduct(raw, { timeoutMs: 20000 });
       setProduct(res.info);
-      if (res.source === "none") setProductNote("No se pudo leer solo. Escribe el nombre abajo.");
+      if (res.usedUrlName) setProductNote("La página pedía captcha; usamos el nombre del enlace.");
+      else if (res.source === "none") setProductNote("No se pudo leer solo. Escribe el nombre abajo.");
       else if (!res.info.title) setProductNote("Falta el nombre. Escribelo abajo.");
       setManualName(res.info.title ?? "");
     } catch {
@@ -224,6 +226,8 @@ export default function CrearPage() {
         {
           signal: ctrl.signal,
           onStage: (_s, _l, p, etaSec) => {
+            setStageKey(_s);
+            setStageLabel(_l);
             setPct(Math.round(p));
             setEta(etaSec ?? null);
           },
@@ -371,7 +375,11 @@ export default function CrearPage() {
                   disabled={loadingProduct}
                   className="rounded-xl border border-white/15 px-3 py-2 text-sm font-medium hover:bg-white/5 disabled:opacity-50"
                 >
-                  {loadingProduct ? "Buscando" : "Usar"}
+                  {loadingProduct
+                    ? "Buscando…"
+                    : productTitle && loadedUrl === url
+                    ? "Confirmado ✓"
+                    : "Buscar"}
                 </button>
               </div>
               {productNote && <div className="mt-2 text-xs text-amber-200">{productNote}</div>}
@@ -438,6 +446,14 @@ export default function CrearPage() {
             <div className="mt-2 text-xs text-gray-400">
               {pct}%{eta != null && eta > 0 ? ` · Quedan ~${Math.ceil(eta)} s` : ""}
             </div>
+            {stageKey === "GENERATING_VOICE" && (
+              <div className="mt-2 text-xs text-violet-200">
+                Cargando el modelo de voz en tu móvil (tarda 20-30 s la primera vez). Sigue así, no cierres la página.
+              </div>
+            )}
+            {stageKey === "RENDERING" && (
+              <div className="mt-2 text-xs text-violet-200">Montando el vídeo final, esto también tarda unos segundos.</div>
+            )}
           </div>
         )}
 

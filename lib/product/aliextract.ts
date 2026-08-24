@@ -22,7 +22,45 @@ export interface ProductInfo {
 export interface ProductFetchResult {
   info: ProductInfo;
   missing: string[];
-  source: "direct" | "reader" | "none";
+  source: "direct" | "reader" | "none" | "slug";
+  /** true cuando usamos el nombre del propio enlace porque la página
+   *  pedía captcha/estaba bloqueada y no se pudo leer. */
+  usedUrlName?: boolean;
+}
+
+/**
+ * Extrae un nombre legible del propio enlace (OFFLINE, sin red).
+ * AliExpress suele incluir el "slug" del producto en la URL:
+ *   .../i/wireless-bluetooth-earbuds-5-3-noise-cancelling_100500...html
+ * Sirve como fallback cuando la página pide captcha o está bloqueada,
+ * de modo que el guion siempre tenga un nombre real del producto.
+ */
+export function extractAliNameFromUrl(raw: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(raw.trim());
+  } catch {
+    return null;
+  }
+  const seg = u.pathname.split("/").filter(Boolean).pop() ?? "";
+  let slug = seg
+    .replace(/_\d{10,20}\.html?$/i, "")
+    .replace(/\.html?$/i, "")
+    .replace(/^item-?/i, "");
+  const words = slug
+    .split(/[-_.]+/)
+    .map((w) => w.replace(/[^a-z0-9áéíóúñü\s]/gi, "").trim())
+    .filter((w) => w.length >= 2 && !/^\d+$/.test(w));
+  if (words.length < 2) return null;
+  const name = words.join(" ").replace(/\s+/g, " ").trim();
+  return name.length >= 4 ? name : null;
+}
+
+/** Detecta si el contenido devuelto es una página de captcha/bloqueo. */
+function looksLikeCaptcha(md: string): boolean {
+  return /captcha|verify you are (a )?human|unusual traffic|robot check|are you a robot|please enable cookies|cloudflare|just a moment/i.test(
+    md.slice(0, 4000)
+  );
 }
 
 export function emptyProduct(url: string): ProductInfo {
@@ -154,35 +192,48 @@ export async function fetchProduct(
   const { fetchWithTimeout } = await import("@/lib/net");
   const parsed = parseAliUrl(url);
   const target = parsed?.normalized ?? url;
+  const slugName = extractAliNameFromUrl(url);
 
-  // 1) directo (fallará por CORS en el navegador; útil en tests/SSR)
-  try {
-    const res = await fetchWithTimeout(target, {
-      timeoutMs: opts.timeoutMs ?? 12000,
-      signal: opts.signal,
-      headers: { Accept: "text/html,*/*" },
-    });
-    if (res.ok) {
-      const html = await res.text();
-      const info = extractFromMarkdown(html, target);
-      return { info, missing: productMissing(info), source: "direct" };
+  // Intenta leer la página. Si pide captcha/bloquea, no pasa nada: caemos
+  // al nombre del enlace (slug) para que el guion siempre tenga producto.
+  const tryRead = async (src: "direct" | "reader"): Promise<ProductInfo | null> => {
+    try {
+      const endpoint =
+        src === "direct"
+          ? target
+          : `https://r.jina.ai/${target}`;
+      const res = await fetchWithTimeout(endpoint, {
+        timeoutMs: opts.timeoutMs ?? 20000,
+        signal: opts.signal,
+        headers: src === "direct" ? { Accept: "text/html,*/*" } : {},
+      });
+      if (!res.ok) return null;
+      const text = await res.text();
+      if (looksLikeCaptcha(text)) return null; // página de captcha: ignorar
+      const info = extractFromMarkdown(text, target);
+      if (!info.title) return null;
+      return info;
+    } catch {
+      return null;
     }
-  } catch {}
+  };
+
+  // 1) directo (falla por CORS en el navegador; útil en tests/SSR)
+  const direct = await tryRead("direct");
+  if (direct) return { info: direct, missing: productMissing(direct), source: "direct" };
 
   // 2) lector público sin claves (r.jina.ai) — solo METADATOS del producto
-  try {
-    const res = await fetchWithTimeout(`https://r.jina.ai/${target}`, {
-      timeoutMs: opts.timeoutMs ?? 20000,
-      signal: opts.signal,
-    });
-    if (res.ok) {
-      const md = await res.text();
-      const info = extractFromMarkdown(md, target);
-      return { info, missing: productMissing(info), source: "reader" };
-    }
-  } catch {}
+  const reader = await tryRead("reader");
+  if (reader) return { info: reader, missing: productMissing(reader), source: "reader" };
 
-  // 3) nada — modo manual
+  // 3) captcha/bloqueo o sin red: usamos el nombre del propio enlace
+  if (slugName) {
+    const info = emptyProduct(target);
+    info.title = slugName;
+    return { info, missing: productMissing(info), source: "slug", usedUrlName: true };
+  }
+
+  // 4) nada — modo manual
   const info = emptyProduct(target);
   return { info, missing: productMissing(info), source: "none" };
 }

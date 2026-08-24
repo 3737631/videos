@@ -21,6 +21,7 @@ import { toFriendlyError, fetchBinaryWithProgress, TimeoutError } from "../lib/n
 import { hashKey } from "../lib/idb";
 import {
   parseAliUrl,
+  extractAliNameFromUrl,
   extractFromMarkdown,
   productMissing,
 } from "../lib/product/aliextract";
@@ -470,6 +471,15 @@ async function main() {
     const c = parseAliUrl("https://es.aliexpress.com/item/1005004444444444.html?itemId=1005004444444444");
     assert.ok(c && c.itemId === "1005004444444444");
     assert.equal(parseAliUrl("https://www.amazon.com/dp/B012345678"), null);
+  });
+
+  await t("extractAliNameFromUrl saca el nombre del slug aunque pida captcha", () => {
+    const a = extractAliNameFromUrl(
+      "https://es.aliexpress.com/i/wireless-bluetooth-earbuds-5-3-noise-cancelling_1005006123456789.html"
+    );
+    assert.equal(a, "wireless bluetooth earbuds noise cancelling");
+    const b = extractAliNameFromUrl("https://www.aliexpress.com/item/1005001111111111.html");
+    assert.equal(b, null); // sin slug legible -> null (modo manual)
   });
 
   console.log(`\n════════ RESULTADO: ${passed} pasan · ${failed} fallan ════════`);
