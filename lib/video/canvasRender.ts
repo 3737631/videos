@@ -170,57 +170,73 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
 
   const drawFrame = () => {
     if (stopped) return;
-    const t = (performance.now() - startedAt) / 1000;
-    if (t >= totalSec) {
-      finish();
-      return;
-    }
-    // ¿en qué segmento estamos?
-    let acc = 0;
-    let segIdx = 0;
-    for (let i = 0; i < segList.length; i++) {
-      const len = segList[i].end - segList[i].start;
-      if (t < acc + len) {
-        segIdx = i;
-        break;
+    try {
+      const t = (performance.now() - startedAt) / 1000;
+      if (t >= totalSec) {
+        finish();
+        return;
       }
-      acc += len;
-    }
-    const local = t - acc;
-    const seg = segList[segIdx];
-    const want = seg.start + local;
-    if (video) {
-      if (segIdx !== curSeg) {
-        curSeg = segIdx;
-        try {
-          video.currentTime = want;
-          const p = video.play();
-          if (p && p.catch) p.catch(() => {});
-        } catch {}
-      } else if (Math.abs((video.currentTime || 0) - want) > 0.3) {
-        try {
-          video.currentTime = want;
-        } catch {}
+      // ¿en qué segmento estamos?
+      let acc = 0;
+      let segIdx = 0;
+      for (let i = 0; i < segList.length; i++) {
+        const len = segList[i].end - segList[i].start;
+        if (t < acc + len) {
+          segIdx = i;
+          break;
+        }
+        acc += len;
       }
-      drawVideo();
-    } else {
-      g.fillStyle = "#0B0D14";
-      g.fillRect(0, 0, width, height);
+      const local = t - acc;
+      const seg = segList[segIdx];
+      const want = seg.start + local;
+      if (video) {
+        if (segIdx !== curSeg) {
+          curSeg = segIdx;
+          try {
+            video.currentTime = want;
+            const p = video.play();
+            if (p && p.catch) p.catch(() => {});
+          } catch {}
+        } else if (Math.abs((video.currentTime || 0) - want) > 0.3) {
+          try {
+            video.currentTime = want;
+          } catch {}
+        }
+        drawVideo();
+      } else {
+        g.fillStyle = "#0B0D14";
+        g.fillRect(0, 0, width, height);
+      }
+      const cue = cues.find((c) => t >= c.start && t < c.end) || null;
+      if (cue) drawCue(g, canvas, cue, t, style, palette);
+      onPct?.(Math.min(100, (t / totalSec) * 100));
+      rafId = requestAnimationFrame(drawFrame);
+    } catch (err) {
+      // Un frame erroneo NO debe matar el bucle ni congelar el render.
+      console.warn("frame omitido:", err);
+      if (!stopped) rafId = requestAnimationFrame(drawFrame);
     }
-    const cue = cues.find((c) => t >= c.start && t < c.end) || null;
-    if (cue) drawCue(g, canvas, cue, t, style, palette);
-    onPct?.(Math.min(100, (t / totalSec) * 100));
-    rafId = requestAnimationFrame(drawFrame);
   };
 
   let done: (r: CaptionVideoResult) => void;
   let fail: (e: unknown) => void;
+  let resolved = false;
   const finished = new Promise<CaptionVideoResult>((res, rej) => {
-    done = res;
-    fail = rej;
+    done = (r) => {
+      if (resolved) return;
+      resolved = true;
+      res(r);
+    };
+    fail = (e) => {
+      if (resolved) return;
+      resolved = true;
+      rej(e);
+    };
   });
 
   const finish = () => {
+    if (stopped) return;
     stopped = true;
     cancelAnimationFrame(rafId);
     try {
@@ -242,7 +258,7 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
         await actx?.close();
       } catch {}
       const type = mime.split(";")[0] || "video/webm";
-      const blob = new Blob(chunks, { type });
+      const blob = chunks.length ? new Blob(chunks, { type }) : new Blob([], { type });
       const url = URL.createObjectURL(blob);
       const thumbnail = capturePoster(canvas);
       done({ blob, url, mime: type, ext, thumbnail });
@@ -253,7 +269,14 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
   rec.onerror = (e) => {
     stopped = true;
     cancelAnimationFrame(rafId);
-    fail!(new Error(`Grabación fallida: ${(e as unknown as Error).message ?? ""}`));
+    // No colgar: resolvemos con lo grabado hasta ahora.
+    try {
+      const type = mime.split(";")[0] || "video/webm";
+      const blob = chunks.length ? new Blob(chunks, { type }) : new Blob([], { type });
+      done({ blob, url: URL.createObjectURL(blob), mime: type, ext, thumbnail: "" });
+    } catch {
+      fail!(new Error(`Grabación fallida: ${(e as unknown as Error).message ?? ""}`));
+    }
   };
 
   const onAbort = () => finish();
@@ -262,7 +285,14 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
   rec.start(250);
   rafId = requestAnimationFrame(drawFrame);
 
-  return finished.finally(() => signal?.removeEventListener("abort", onAbort));
+  // Watchdog: por si el bucle de frames se congela en iOS, forzamos el fin del
+  // render tras la duración del vídeo + margen. Así NUNCA se queda pillado.
+  const watchdog = setTimeout(() => finish(), Math.max(5000, (totalSec + 12) * 1000));
+
+  return finished.finally(() => {
+    clearTimeout(watchdog);
+    signal?.removeEventListener("abort", onAbort);
+  });
 }
 
 // ── Pintado ─────────────────────────────────────────────────────────────

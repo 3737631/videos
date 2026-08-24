@@ -63,7 +63,7 @@ function estimateRemaining(pct: number): number | null {
   const dp = pct - estimateRemaining._lastPct;
   estimateRemaining._lastPct = pct;
   estimateRemaining._t0 = now;
-  if (d < 30 || dp <= 0) return null;
+  if (d < 10 || dp <= 0) return null;
   const pctPerMs = dp / d;
   const remainingPct = 100 - pct;
   return Math.max(1, Math.round(remainingPct / pctPerMs / 1000));
