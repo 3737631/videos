@@ -417,6 +417,8 @@ export async function runCreationPipeline(
     const validation = await runStage(
       "VERIFYING",
       async () => {
+        if (!rendered.blob || rendered.blob.size < 1000)
+          throw new Error("El vídeo renderizado está vacío: la grabación del canvas falló en este navegador (iOS a veces no finaliza MediaRecorder).");
         const stats = await assertFinalAudio(rendered.blob);
         const errors: string[] = [];
         if (!stats.valid || stats.rms < 0.0005) errors.push("El audio final suena vacío");

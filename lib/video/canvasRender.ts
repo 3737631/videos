@@ -83,6 +83,12 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
   canvas.height = height;
   const g = canvas.getContext("2d", { alpha: false });
   if (!g) throw new Error("Canvas no disponible");
+  // iOS Safari: captureStream + MediaRecorder solo finalizan si el canvas
+  // está en el DOM. Lo dejamos fuera de pantalla pero presente.
+  canvas.style.cssText = "position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0.01;";
+  try {
+    document.body.appendChild(canvas);
+  } catch {}
 
   // ── Vídeo fuente ──────────────────────────────────────────────────────
   const segList = segments && segments.length ? segments : [{ start: 0, end: durationSec }];
@@ -98,9 +104,10 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
     video.playsInline = true;
     video.preload = "auto";
     video.crossOrigin = "anonymous";
-    // iOS exige el elemento en el DOM para reproducir de forma programática
+    // iOS exige el elemento en el DOM para reproducir de forma programática.
+    // Sin opacity:0 (impediría decodificar frames); lo sacamos de pantalla.
     video.style.cssText =
-      "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none;z-index:-1;";
+      "position:fixed;left:-9999px;top:0;width:2px;height:2px;pointer-events:none;";
     try {
       document.body.appendChild(video);
     } catch {}
@@ -158,6 +165,7 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
   let rafId = 0;
   let stopped = false;
   let curSeg = -1;
+  let stopTimer = 0;
 
   const drawVideo = () => {
     if (!video || video.readyState < 2) {
@@ -242,6 +250,18 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
     try {
       if (rec.state !== "inactive") rec.stop();
     } catch {}
+    // Red de seguridad: si onstop/onerror no disparan (iOS a veces no lo hace
+    // cuando no hubo frames), forzamos la resolución con lo grabado.
+    stopTimer = window.setTimeout(() => {
+      if (resolved) return;
+      try {
+        const type = mime.split(";")[0] || "video/webm";
+        const blob = chunks.length ? new Blob(chunks, { type }) : new Blob([], { type });
+        done({ blob, url: URL.createObjectURL(blob), mime: type, ext, thumbnail: capturePoster(canvas) });
+      } catch {
+        fail(new Error("El render no terminó en este navegador."));
+      }
+    }, 4000);
   };
 
   rec.onstop = async () => {
@@ -255,12 +275,16 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
       } catch {}
       if (videoUrl) URL.revokeObjectURL(videoUrl);
       try {
+        if (canvas.parentElement) canvas.parentElement.removeChild(canvas);
+      } catch {}
+      try {
         await actx?.close();
       } catch {}
       const type = mime.split(";")[0] || "video/webm";
       const blob = chunks.length ? new Blob(chunks, { type }) : new Blob([], { type });
       const url = URL.createObjectURL(blob);
       const thumbnail = capturePoster(canvas);
+      if (stopTimer) clearTimeout(stopTimer);
       done({ blob, url, mime: type, ext, thumbnail });
     } catch (err) {
       fail!(err);
@@ -270,6 +294,9 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
     stopped = true;
     cancelAnimationFrame(rafId);
     // No colgar: resolvemos con lo grabado hasta ahora.
+    try {
+      if (canvas.parentElement) canvas.parentElement.removeChild(canvas);
+    } catch {}
     try {
       const type = mime.split(";")[0] || "video/webm";
       const blob = chunks.length ? new Blob(chunks, { type }) : new Blob([], { type });
@@ -291,6 +318,10 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
 
   return finished.finally(() => {
     clearTimeout(watchdog);
+    if (stopTimer) clearTimeout(stopTimer);
+    try {
+      if (canvas.parentElement) canvas.parentElement.removeChild(canvas);
+    } catch {}
     signal?.removeEventListener("abort", onAbort);
   });
 }
