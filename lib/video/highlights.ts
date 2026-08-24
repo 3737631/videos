@@ -76,7 +76,7 @@ export async function detectHighlights(
   videoBlob: Blob,
   opts: { targetSec: number; signal?: AbortSignal; maxSamples?: number }
 ): Promise<HighlightResult> {
-  const { targetSec, signal, maxSamples = 90 } = opts;
+  const { targetSec, signal, maxSamples = 60 } = opts;
   if (typeof document === "undefined")
     return { segments: [{ start: 0, end: targetSec }], energy: 0.5 };
   const url = URL.createObjectURL(videoBlob);
@@ -177,10 +177,10 @@ function seekTo(video: HTMLVideoElement, t: number): Promise<void> {
   });
 }
 
-/** Duración objetivo del anuncio según el vídeo fuente. */
+/** Duración objetivo del anuncio según el vídeo fuente. (optimizado para voz+subtítulos rápido) */
 export function pickTargetDuration(sourceDuration: number, onlyMusic: boolean): number {
   if (!sourceDuration || sourceDuration < 12) return Math.max(6, sourceDuration || 12);
-  const ratio = onlyMusic ? 0.6 : 0.42;
+  const ratio = onlyMusic ? 0.55 : 0.38;
   const d = Math.round(sourceDuration * ratio);
-  return Math.min(24, Math.max(10, d));
+  return Math.min(20, Math.max(9, d));
 }

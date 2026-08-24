@@ -201,12 +201,25 @@ export default function CrearPage() {
 
   const buildScript = useCallback(() => {
     const target = pickTargetDuration(videoDuration, false);
-    const g = generateScript({ durationSec: target, lang, product: { title: productTitle } });
+    // Guion 100% ligado a producto + duración: pasa título, precio, moneda, features y vendedor
+    const g = generateScript({
+      durationSec: target,
+      lang,
+      product: {
+        title: productTitle,
+        price: product?.price ?? null,
+        currency: product?.currency ?? null,
+        features: product?.features ?? [],
+        seller: product?.seller ?? null,
+      },
+    });
     setScript(g.text);
+    // Tono publicitario por defecto para producto (viral/urgente), no storytelling lento
     const rec = recommendStyle({ scriptText: g.text, isDropshipping: true, durationSec: target });
-    setStyleId(rec);
-    setRecommended(rec);
-  }, [videoDuration, lang, productTitle]);
+    const adStyle: string = productTitle ? (target <= 16 ? "viral" : "energetico") : rec;
+    setStyleId(adStyle);
+    setRecommended(adStyle);
+  }, [videoDuration, lang, productTitle, product]);
 
   const aliOk = !!parseAliUrl(url.trim()) && !!productTitle;
   // En "solo mÃºsica" el enlace de producto NO es necesario (el guion va vacÃ­o
@@ -231,7 +244,17 @@ export default function CrearPage() {
       const finalScript =
         script.trim() ||
         (mode === "voice"
-          ? generateScript({ durationSec: target, lang, product: { title: productTitle } }).text
+          ? generateScript({
+              durationSec: target,
+              lang,
+              product: {
+                title: productTitle,
+                price: product?.price ?? null,
+                currency: product?.currency ?? null,
+                features: product?.features ?? [],
+                seller: product?.seller ?? null,
+              },
+            }).text
           : "");
       const r = await runCreationPipeline(
         {
