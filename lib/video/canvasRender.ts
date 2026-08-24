@@ -85,7 +85,7 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
   if (!g) throw new Error("Canvas no disponible");
   // iOS Safari: captureStream + MediaRecorder solo finalizan si el canvas
   // está en el DOM. Lo dejamos fuera de pantalla pero presente.
-  canvas.style.cssText = "position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0.01;";
+  canvas.style.cssText = "position:fixed;right:0;top:0;width:2px;height:2px;opacity:0.01;pointer-events:none;z-index:9999;";
   try {
     document.body.appendChild(canvas);
   } catch {}
@@ -104,10 +104,10 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
     video.playsInline = true;
     video.preload = "auto";
     video.crossOrigin = "anonymous";
-    // iOS exige el elemento en el DOM para reproducir de forma programática.
-    // Sin opacity:0 (impediría decodificar frames); lo sacamos de pantalla.
+    // iOS exige el elemento en el DOM y "pintado" para decodificar y para que
+    // captureStream funcione. Lo dejamos en viewport, mínimo y casi transparente.
     video.style.cssText =
-      "position:fixed;left:-9999px;top:0;width:2px;height:2px;pointer-events:none;";
+      "position:fixed;right:2px;top:0;width:2px;height:2px;opacity:0.01;pointer-events:none;z-index:9999;";
     try {
       document.body.appendChild(video);
     } catch {}

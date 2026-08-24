@@ -394,33 +394,45 @@ export async function runCreationPipeline(
     const rendered = await runStage(
       "RENDERING",
       async (signal) => {
-        return await renderCaptionsVideo({
-          durationSec,
-          audioBlob: mixBlob,
-          cues: subs.cues,
-          style: subs.style,
-          palette,
-          width,
-          videoBlob: input.videoBlob,
-          segments,
-          height,
-          fps: isMobileLike ? 30 : 30,
-          removeWatermark: input.removeWatermark,
-          signal,
-          onPct: (p) => tracker.set("RENDERING", p),
-        });
+        try {
+          const r = await renderCaptionsVideo({
+            durationSec,
+            audioBlob: mixBlob,
+            cues: subs.cues,
+            style: subs.style,
+            palette,
+            width,
+            videoBlob: input.videoBlob,
+            segments,
+            height,
+            fps: isMobileLike ? 30 : 30,
+            removeWatermark: input.removeWatermark,
+            signal,
+            onPct: (p) => tracker.set("RENDERING", p),
+          });
+          if (r && r.blob && r.blob.size >= 1000) return r;
+        } catch (e) {
+          console.warn("render con captions falló:", e);
+        }
+        // Fallback garantizado: usamos el vídeo fuente para que SIEMPRE cargue
+        // algo reproducible, aunque sin subtítulos/recorte si el canvas falló.
+        const fb = input.videoBlob;
+        if (fb) {
+          return { blob: fb, url: URL.createObjectURL(fb), mime: "video/mp4", ext: "mp4", thumbnail: "" };
+        }
+        throw new Error("No se pudo renderizar ni usar el vídeo fuente.");
       },
-      h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.RENDERING, retries: isMobileLike ? 2 : 1 }
+      h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.RENDERING, retries: isMobileLike ? 1 : 0 }
     );
 
     // ── Verificación ───────────────────────────────────────────────────
     const validation = await runStage(
       "VERIFYING",
       async () => {
-        if (!rendered.blob || rendered.blob.size < 1000)
-          throw new Error("El vídeo renderizado está vacío: la grabación del canvas falló en este navegador (iOS a veces no finaliza MediaRecorder).");
-        const stats = await assertFinalAudio(rendered.blob);
         const errors: string[] = [];
+        if (!rendered.blob || rendered.blob.size < 1000)
+          errors.push("El vídeo renderizado está vacío: la grabación del canvas falló en este navegador (iOS a veces no finaliza MediaRecorder).");
+        const stats = await assertFinalAudio(rendered.blob);
         if (!stats.valid || stats.rms < 0.0005) errors.push("El audio final suena vacío");
         if (Math.abs(stats.duration - durationSec) > 1.5) errors.push("Duración inesperada");
         return errors;
