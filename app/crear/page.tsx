@@ -351,7 +351,7 @@ export default function CrearPage() {
                     {m === "voice" ? "Con voz" : "Solo musica"}
                   </div>
                   <div className="mt-1 text-xs text-gray-400">
-                    {m === "voice" ? "Locucion + subtitulos." : "Tu video con musica."}
+                    {m === "voice" ? "Voz + subtitulos." : "Tu video con musica."}
                   </div>
                 </button>
               ))}
