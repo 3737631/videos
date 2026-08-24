@@ -209,10 +209,12 @@ export default function CrearPage() {
   }, [videoDuration, lang, productTitle]);
 
   const aliOk = !!parseAliUrl(url.trim()) && !!productTitle;
+  // En "solo música" el enlace de producto NO es necesario (el guion va vacío
+  // y el nombre es "Video con música"); solo se exige en modo con voz.
   const canCreate =
     phase === "setup" &&
     !!mergedBlob &&
-    aliOk &&
+    (mode === "music" || aliOk) &&
     (mode === "music" || (!preparingVoice && installedIds.includes(voiceId)));
 
   const start = useCallback(async () => {
@@ -375,7 +377,12 @@ export default function CrearPage() {
             <section className="cc-card p-4">
               <div className="flex items-center justify-between">
                 <div className="text-xs font-semibold text-gray-200">
-                  Producto de AliExpress <span className="text-rose-300">* obligatorio</span>
+                  Producto de AliExpress{" "}
+                  {mode === "music" ? (
+                    <span className="text-gray-400">(opcional)</span>
+                  ) : (
+                    <span className="text-rose-300">* obligatorio</span>
+                  )}
                 </div>
                 {productTitle && (
                   <div className="text-xs font-medium text-emerald-300">Analizado</div>
