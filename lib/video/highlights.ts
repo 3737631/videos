@@ -180,7 +180,7 @@ function seekTo(video: HTMLVideoElement, t: number): Promise<void> {
 /** Duración objetivo del anuncio según el vídeo fuente. */
 export function pickTargetDuration(sourceDuration: number, onlyMusic: boolean): number {
   if (!sourceDuration || sourceDuration < 12) return Math.max(6, sourceDuration || 12);
-  const ratio = onlyMusic ? 0.7 : 0.55;
+  const ratio = onlyMusic ? 0.6 : 0.42;
   const d = Math.round(sourceDuration * ratio);
-  return Math.min(34, Math.max(12, d));
+  return Math.min(24, Math.max(10, d));
 }

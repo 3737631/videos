@@ -430,9 +430,9 @@ async function main() {
   console.log("\n── Momentos virales (highlights) ──");
   await t("pickTargetDuration acota segun fuente y modo", () => {
     assert.equal(pickTargetDuration(8, false), 8); // corto: usa todo
-    assert.equal(pickTargetDuration(30, false), 17); // 30*0.55=16.5 -> 17
-    assert.equal(pickTargetDuration(30, true), 21); // 30*0.7=21
-    assert.equal(pickTargetDuration(200, false), 34); // tope 34
+    assert.equal(pickTargetDuration(30, false), 13); // 30*0.42=12.6 -> 13
+    assert.equal(pickTargetDuration(30, true), 18); // 30*0.6=18
+    assert.equal(pickTargetDuration(200, false), 24); // tope 24
     assert.equal(pickTargetDuration(0, false), 12); // sin dato -> 12
   });
   await t("selectSegments elige el tramo mas movido y encaja el objetivo", () => {
