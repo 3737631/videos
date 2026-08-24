@@ -135,7 +135,7 @@ export function splitSentences(text: string, maxLen = 180): string[] {
   return out.length ? out : [text.trim()].filter(Boolean);
 }
 
-async function synthChunk(voice: CatalogVoice, text: string, speed: number, signal?: AbortSignal): Promise<Blob> {
+async function synthChunk(voice: CatalogVoice, text: string, speed: number, signal?: AbortSignal, onProgress?: (pct: number) => void): Promise<Blob> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     if (signal?.aborted) throw new DOMException("cancelado", "AbortError");
@@ -144,7 +144,7 @@ async function synthChunk(voice: CatalogVoice, text: string, speed: number, sign
       const rec = await cacheGet<PiperVoiceRecord>("voices", voice.id);
       if (!rec?.onnx) throw new Error("La voz no está descargada");
       await ensurePiperRuntime(() => {}, signal);
-      return await synthesizeWithPiper(voice.id, rec, text, speed);
+      return await synthesizeWithPiper(voice.id, rec, text, speed, onProgress);
     } catch (err) {
       lastErr = err;
       if (signal?.aborted || err instanceof DOMException) throw err;
@@ -234,9 +234,11 @@ export async function synthesize(
   const blobs: Blob[] = [];
   for (let i = 0; i < chunks.length; i++) {
     if (opts.signal?.aborted) throw new DOMException("cancelado", "AbortError");
-    const b = await synthChunk(voice, chunks[i], speed, opts.signal);
+    const b = await synthChunk(voice, chunks[i], speed, opts.signal, (p) =>
+      opts.onProgress?.(Math.round(60 + (p / 100) * 40))
+    );
     blobs.push(b);
-    opts.onProgress?.(Math.round(((i + 1) / chunks.length) * 100));
+    opts.onProgress?.(Math.round(60 + (40 * (i + 1)) / chunks.length));
   }
 
   const merged = chunks.length === 1 ? blobs[0] : await concatWavs(blobs, opts.signal);
@@ -403,6 +405,7 @@ export async function synthesizeProsody(
     const r = await synthesize(s.text, voiceId, {
       speed: eff,
       signal: opts.signal,
+      onProgress: opts.onProgress,
     });
     blobs.push(r.blob);
     durations.push(r.duration);

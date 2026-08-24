@@ -284,12 +284,16 @@ export async function runCreationPipeline(
           const res = await runStage(
             "GENERATING_VOICE",
             async (signal) => {
-              if (round === 0) await ensureVoiceInstalled(chosenId, { signal });
+              if (round === 0)
+                await ensureVoiceInstalled(chosenId, {
+                  signal,
+                  onProgress: (p) => tracker.set("GENERATING_VOICE", ((p ?? 0) / 2)),
+                });
               return await synthesizeProsodyWithFallback(script, chosenId, {
                 signal,
                 speed: attemptSpeed,
                 styleId,
-                onProgress: (p) => tracker.set("GENERATING_VOICE", p ?? undefined),
+                onProgress: (p) => tracker.set("GENERATING_VOICE", 50 + ((p ?? 0) / 2)),
               });
             },
             h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.GENERATING_VOICE, retries: 0 }

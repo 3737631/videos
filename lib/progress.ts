@@ -76,7 +76,9 @@ export function createProgressTracker(
 ): ProgressTracker {
   let max = -1;
   const apply = (stage: StageName, pct: number) => {
-    // MONOTONÍA: nunca menor que lo ya mostrado
+    // MONOTONÍA: nunca menor que lo ya mostrado. Si llega NaN (un onProgress
+    // indeterminado), lo ignoramos para no corromper la barra (quedaba pillada).
+    if (!Number.isFinite(pct)) return;
     const clamped = Math.max(max, Math.max(0, Math.min(100, Math.round(pct))));
     max = clamped;
     report(stage, STAGE_LABELS[stage], clamped, estimateRemaining(clamped));
