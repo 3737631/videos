@@ -273,6 +273,7 @@ export async function runCreationPipeline(
     let usedFallback = false;
     let voiceError: string | null = null;
     const segTimings: Array<{ text: string; start: number; end: number }> = [];
+    const explicitMusic = input.onlyMusic;
     if (!input.onlyMusic) {
       try {
         const target = targetSec;
@@ -363,16 +364,21 @@ export async function runCreationPipeline(
       console.warn("música omitida:", err);
     });
 
-    // ── Subtítulos (anclados a timestamps REALES de la voz) ────────────
-    const subs = input.onlyMusic
+    // ── Subtítulos (anclados a timestamps REALES de la voz; si la voz
+    //     falla, se estima la duración para que SIEMPRE haya subtítulos) ─
+    const subs = explicitMusic
       ? { cues: [], style: defaultSubtitleStyle() }
       : await runStage(
           "CREATING_SUBTITLES",
           async () =>
-            buildSubtitles(script, voiceDuration, {
-              niche: nicheInfo.niche,
-              segTimings,
-            }),
+            buildSubtitles(
+              script,
+              voiceDuration && voiceDuration > 0.3 ? voiceDuration : targetSec,
+              {
+                niche: nicheInfo.niche,
+                segTimings: voiceDuration && voiceDuration > 0.3 ? segTimings : [],
+              }
+            ),
           h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.CREATING_SUBTITLES, retries: 0 }
         );
 
