@@ -67,15 +67,37 @@ export async function ensurePiperRuntime(
   }
   // El wasm de ORT pesa ~30MB. Lo descargamos nosotros CON PROGRESO y se lo
   // pasamos a ORT vía wasmBinary, así la barra se mueve durante la descarga
-  // (antes parecía congelada y el usuario creía que estaba pillado).
+  // (antes parecía congelada en 12% en iPhone y el usuario creía que estaba pillado).
   if (!ortWasmLoaded) {
-    const buf = await fetchBinaryWithProgress(
-      ORT_WASM_WASM,
-      (l, t) => onProgress?.(l, t || l),
-      { signal, timeoutMs: 180000 }
-    );
-    Ort.env.wasm.wasmBinary = buf;
-    ortWasmLoaded = true;
+    // Heartbeat iPhone: garantiza avance aunque fetch no reporte Content-Length
+    let lastLoaded = 0;
+    let lastTotal = 30 * 1024 * 1024; // estimado ORT ~30MB
+    let hb: ReturnType<typeof setInterval> | null = setInterval(() => {
+      // Avance artificial 0.7% cada 600ms hasta 90% si no hay progreso real
+      lastLoaded = Math.min(lastTotal * 0.9, lastLoaded + lastTotal * 0.007);
+      onProgress?.(lastLoaded, lastTotal);
+    }, 600);
+    const clearHb = () => {
+      if (hb) clearInterval(hb);
+      hb = null;
+    };
+    try {
+      onProgress?.(0, lastTotal);
+      const buf = await fetchBinaryWithProgress(
+        ORT_WASM_WASM,
+        (l, t) => {
+          lastLoaded = l;
+          lastTotal = t && t > 0 ? t : 30 * 1024 * 1024;
+          onProgress?.(l, lastTotal);
+        },
+        { signal, timeoutMs: 120000 }
+      );
+      onProgress?.(lastTotal, lastTotal);
+      Ort.env.wasm.wasmBinary = buf;
+      ortWasmLoaded = true;
+    } finally {
+      clearHb();
+    }
   }
 }
 

@@ -78,7 +78,7 @@ export interface PipelineHandlers {
 
 const STAGE_TIMEOUT_MS: Partial<Record<StageName, number>> = {
   ANALYZING_SCRIPT: 10000,
-  GENERATING_VOICE: 180000, 
+  GENERATING_VOICE: 90000, // iPhone: fallback a solo-música en 90s si red lenta, no quedarse pillado en 12%
   GENERATING_MUSIC: 60000,
   CREATING_SUBTITLES: 15000,
   MIXING_AUDIO: 120000,

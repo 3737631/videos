@@ -62,22 +62,38 @@ async function downloadPiperVoice(
 ): Promise<void> {
   const existing = await cacheGet<PiperVoiceRecord>("voices", voice.id);
   if (existing?.onnx && existing.onnx.byteLength > 0) return;
+  // Progreso 0% inmediato para que la barra no se quede en 12% en iPhone mientras espera red/IndexedDB
+  report?.(0, 100);
   const configUrl = resolveVoiceUrl(voice.configUrl);
   const modelUrl = resolveVoiceUrl(voice.modelUrl);
-  const config = await fetchJsonWithTimeout<PiperVoiceRecord["config"]>(configUrl!, {
-    timeoutMs: 30000,
-    signal,
-  });
+  let config: PiperVoiceRecord["config"];
+  try {
+    config = await fetchJsonWithTimeout<PiperVoiceRecord["config"]>(configUrl!, {
+      timeoutMs: 30000,
+      signal,
+    });
+  } catch (e) {
+    report?.(5, 100);
+    throw e;
+  }
+  report?.(8, 100);
   const onnx = await fetchBinaryWithProgress(
     modelUrl!,
-    (l, t) => report?.(l, t || voice.sizeBytes),
+    (l, t) => {
+      const total = t || voice.sizeBytes || 1;
+      // Mapea descarga ONNX 0-100% a 8-100% del progreso de voz
+      const pctLoaded = Math.min(100, Math.round((l / total) * 100));
+      const mapped = 8 + Math.round((pctLoaded * 92) / 100);
+      report?.(mapped, 100);
+    },
     { signal, timeoutMs: 600000 }
   );
   if (onnx.byteLength < 1024) throw new Error("Descarga incompleta");
+  report?.(100, 100);
   await cachePut("voices", voice.id, { config, onnx, size: onnx.byteLength, savedAt: Date.now() });
 }
 
-/** Garantiza que una voz esté lista; pct real durante la descarga */
+/** Garantiza que una voz esté lista; pct real durante la descarga + heartbeat iPhone */
 export async function ensureVoiceInstalled(
   voiceId: string,
   opts: { onProgress?: (pct: number | null) => void; signal?: AbortSignal } = {}
@@ -85,27 +101,63 @@ export async function ensureVoiceInstalled(
   const voice = getVoiceById(voiceId);
   if (!voice) throw new Error("Voz desconocida");
   const rep = opts.onProgress;
+  // Heartbeat para iPhone: si la descarga no reporta, avanzamos artificialmente para que la barra no se quede en 12%
+  let lastPct = 0;
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
+  const startHeartbeat = () => {
+    heartbeat = setInterval(() => {
+      if (lastPct < 85) {
+        lastPct = Math.min(85, lastPct + 1.5);
+        rep?.(Math.round(lastPct));
+      }
+    }, 700);
+  };
+  const stopHeartbeat = () => {
+    if (heartbeat) clearInterval(heartbeat);
+    heartbeat = null;
+  };
+  const wrapRep = (pct: number | null) => {
+    if (pct != null && Number.isFinite(pct)) {
+      lastPct = Math.max(lastPct, pct);
+      rep?.(pct);
+    } else if (pct === null) {
+      // Kokoro indeterminado: no resetea lastPct, solo asegura heartbeat activo
+      rep?.(null);
+    }
+  };
   if (voice.runtime === "kokoro") {
     if (await isVoiceInstalled(voiceId)) return;
-    rep?.(null); // indeterminado: el progreso real lo emite kokoro
+    wrapRep(2);
+    startHeartbeat();
     const { onKokoroDownload } = await import("@/lib/audio/kokoro");
-    const off = onKokoroDownload((pct) => rep?.(pct));
+    const off = onKokoroDownload((pct) => wrapRep(pct));
     try {
       await preloadKokoro();
       try {
         localStorage.setItem(KOKORO_FLAG, "1");
       } catch {}
-      rep?.(100);
+      wrapRep(100);
     } finally {
       off();
+      stopHeartbeat();
     }
     return;
   }
-  await downloadPiperVoice(
-    voice,
-    (l, t) => t > 0 && rep?.(Math.min(100, Math.round((l / t) * 100))),
-    opts.signal
-  );
+  wrapRep(1);
+  startHeartbeat();
+  try {
+    await downloadPiperVoice(
+      voice,
+      (l, t) => {
+        const pct = t > 0 ? Math.min(100, Math.round((l / t) * 100)) : Math.min(95, Math.round(lastPct + 1));
+        wrapRep(pct);
+      },
+      opts.signal
+    );
+    wrapRep(100);
+  } finally {
+    stopHeartbeat();
+  }
 }
 
 // ── Síntesis con cache y reintentos ─────────────────────────────────────
