@@ -515,6 +515,26 @@ export default function CrearPage() {
               />
             </section>
 
+            {script && (
+              <section className="cc-card p-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-semibold text-gray-200">Guion personalizado</div>
+                  <div className="text-xs text-gray-400">{script.split(/\s+/).filter(Boolean).length} palabras · ~{pickTargetDuration(videoDuration, false)}s</div>
+                </div>
+                <textarea
+                  value={script}
+                  onChange={(e) => setScript(e.target.value)}
+                  rows={5}
+                  className="mt-2 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm outline-none focus:border-violet-400/60"
+                  placeholder="Guion generado automáticamente según producto y duración..."
+                />
+                <div className="mt-1 flex gap-2">
+                  <button onClick={buildScript} className="text-xs text-violet-300 hover:text-violet-200">⟳ Regenerar</button>
+                  <span className="text-xs text-gray-500">Se lee en alto con tono publicitario</span>
+                </div>
+              </section>
+            )}
+
             {mode === "voice" && preparingVoice && (
               <div className="rounded-xl border border-violet-400/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-200">
                 Preparando voz (descarga del modelo)… {preparePct != null ? `${preparePct}%` : ""}
