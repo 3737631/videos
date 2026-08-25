@@ -89,8 +89,8 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
   const g = canvas.getContext("2d", { alpha: false });
   if (!g) throw new Error("Canvas no disponible");
   // iOS Safari: captureStream + MediaRecorder solo finalizan si el canvas
-  // está en el DOM. Lo dejamos fuera de pantalla pero presente.
-  canvas.style.cssText = "position:fixed;right:0;top:0;width:2px;height:2px;opacity:0.01;pointer-events:none;z-index:9999;";
+  // está en el DOM y es considerado visible. 16px evita throttling de rAF en iPhone (2px era throttled y se quedaba en 88%).
+  canvas.style.cssText = "position:fixed;right:0;top:0;width:16px;height:16px;opacity:0.01;pointer-events:none;z-index:9999;";
   try {
     document.body.appendChild(canvas);
   } catch {}
@@ -110,9 +110,9 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
     video.preload = "auto";
     video.crossOrigin = "anonymous";
     // iOS exige el elemento en el DOM y "pintado" para decodificar y para que
-    // captureStream funcione. Lo dejamos en viewport, mínimo y casi transparente.
+    // captureStream funcione. 16px evita throttling (2px se quedaba pillado en 88%).
     video.style.cssText =
-      "position:fixed;right:2px;top:0;width:2px;height:2px;opacity:0.01;pointer-events:none;z-index:9999;";
+      "position:fixed;right:2px;top:0;width:16px;height:16px;opacity:0.01;pointer-events:none;z-index:9999;";
     try {
       document.body.appendChild(video);
     } catch {}

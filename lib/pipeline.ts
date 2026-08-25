@@ -430,20 +430,20 @@ export async function runCreationPipeline(
     const rendered = await runStage(
       "RENDERING",
       async (signal) => {
-        // Heartbeat para que la barra no se quede pillada en 88% en iPhone si el canvas tarda (Safari throttles rAF)
+        // Heartbeat iPhone: avanza 88%→99% aunque rAF throttled (540p/24fps ya es 2× más rápido)
         let renderFake = 0;
         let renderHb: ReturnType<typeof setInterval> | null = setInterval(() => {
-          if (renderFake < 99) {
-            renderFake = Math.min(99, renderFake + 2.4);
+          if (renderFake < 99.5) {
+            renderFake = Math.min(99.5, renderFake + 3.0);
             tracker.set("RENDERING", renderFake);
           }
-        }, 380);
+        }, 320);
         const clearHb = () => {
           if (renderHb) clearInterval(renderHb);
           renderHb = null;
         };
         try {
-          const r = await renderCaptionsVideo({
+          const renderPromise = renderCaptionsVideo({
             durationSec,
             audioBlob: mixBlob,
             cues: subs.cues,
@@ -461,6 +461,10 @@ export async function runCreationPipeline(
               tracker.set("RENDERING", p);
             },
           });
+          // iPhone: si render no responde en 20s (rAF throttled), usa fallback rápido en vez de quedarse en 88%
+          const tOut = isMobileLike ? 20000 : 30000;
+          const timeoutRace = new Promise<never>((_, rej) => setTimeout(() => rej(new Error("render timeout " + tOut + "ms")), tOut));
+          const r = await Promise.race([renderPromise, timeoutRace]);
           if (r && r.blob && r.blob.size >= 1000) return r;
         } catch (e) {
           console.warn("render con captions falló:", e);
@@ -475,7 +479,7 @@ export async function runCreationPipeline(
         }
         throw new Error("No se pudo renderizar ni usar el vídeo fuente.");
       },
-      h, tracker, { timeoutMs: isMobileLike ? 55000 : STAGE_TIMEOUT_MS.RENDERING, retries: isMobileLike ? 1 : 0 }
+      h, tracker, { timeoutMs: isMobileLike ? 32000 : STAGE_TIMEOUT_MS.RENDERING, retries: isMobileLike ? 1 : 0 }
     );
 
     // ── Verificación ───────────────────────────────────────────────────
