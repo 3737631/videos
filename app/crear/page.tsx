@@ -515,11 +515,25 @@ export default function CrearPage() {
               />
             </section>
 
+            {product && (
+              <section className="cc-card p-4">
+                <div className="text-xs font-semibold text-gray-200">Producto investigado</div>
+                <div className="mt-1 text-sm text-white">{product.title}</div>
+                {(product.price || product.seller) && (
+                  <div className="mt-1 text-xs text-gray-400">
+                    {product.price && <span>{product.price} {product.currency} · </span>}
+                    {product.seller && <span>{product.seller}</span>}
+                    {product.features?.length ? <span> · {product.features[0].slice(0, 60)}</span> : null}
+                  </div>
+                )}
+                <div className="mt-1 text-xs text-emerald-300">✓ Investigado para guion personalizado</div>
+              </section>
+            )}
             {script && (
               <section className="cc-card p-4">
                 <div className="flex items-center justify-between">
-                  <div className="text-xs font-semibold text-gray-200">Guion personalizado</div>
-                  <div className="text-xs text-gray-400">{script.split(/\s+/).filter(Boolean).length} palabras · ~{pickTargetDuration(videoDuration, false)}s</div>
+                  <div className="text-xs font-semibold text-gray-200">Guion personalizado — lo que se va a decir</div>
+                  <div className="text-xs text-gray-400">{script.split(/\s+/).filter(Boolean).length} palabras · ~{pickTargetDuration(videoDuration, false)}s · tono publicitario</div>
                 </div>
                 <textarea
                   value={script}
@@ -529,8 +543,8 @@ export default function CrearPage() {
                   placeholder="Guion generado automáticamente según producto y duración..."
                 />
                 <div className="mt-1 flex gap-2">
-                  <button onClick={buildScript} className="text-xs text-violet-300 hover:text-violet-200">⟳ Regenerar</button>
-                  <span className="text-xs text-gray-500">Se lee en alto con tono publicitario</span>
+                  <button onClick={buildScript} className="text-xs text-violet-300 hover:text-violet-200">⟳ Regenerar guion</button>
+                  <span className="text-xs text-gray-500">Se lee en alto con voz + subtítulos</span>
                 </div>
               </section>
             )}

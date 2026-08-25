@@ -120,13 +120,19 @@ export function extractFromMarkdown(md: string, baseUrl: string): ProductInfo {
   const info = emptyProduct(baseUrl);
   info.itemId = parseAliUrl(baseUrl)?.itemId ?? null;
 
-  // Título: <title>, og:title, cabecera # o línea "Title:"
+  // Título: múltiples patrones AliExpress (incluye subject/productTitle de JSON-LD y s.click)
   const titleTag = md.match(/<title>([^<]{6,200})<\/title>/i);
   const ogTitle = md.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']{6,200})["']/i);
   const h1 = md.match(/^#\s+(.{6,180})$/m);
   const tLine = md.match(/^Title:\s*(.+)$/m);
   const jsonLd = md.match(/"name"\s*:\s*"([^"]{6,200})"/);
-  info.title = (ogTitle?.[1] || titleTag?.[1] || tLine?.[1] || h1?.[1] || jsonLd?.[1] || "").trim() || null;
+  const subject = md.match(/"subject"\s*:\s*"([^"]{6,200})"/i);
+  const prodTitle = md.match(/"productTitle"\s*:\s*"([^"]{6,200})"/i);
+  const aliTitle = md.match(/"title"\s*:\s*"([^"]{6,200})"\s*,\s*"detailDesc"/i);
+  let rawTitle = (ogTitle?.[1] || subject?.[1] || prodTitle?.[1] || aliTitle?.[1] || titleTag?.[1] || tLine?.[1] || h1?.[1] || jsonLd?.[1] || "").trim();
+  // Limpia sufijo " - AliExpress" y entidades
+  rawTitle = rawTitle.replace(/\s*-\s*AliExpress\s*$/i, "").replace(/&amp;/g, "&").replace(/&quot;/g, '"').trim();
+  info.title = rawTitle || null;
 
   // Precio
   const pm = md.match(PRICE_RE);
