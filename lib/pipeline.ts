@@ -78,7 +78,7 @@ export interface PipelineHandlers {
 
 const STAGE_TIMEOUT_MS: Partial<Record<StageName, number>> = {
   ANALYZING_SCRIPT: 10000,
-  GENERATING_VOICE: 90000, // iPhone: fallback a solo-música en 90s si red lenta, no quedarse pillado en 12%
+  GENERATING_VOICE: 60000, // iPhone: fallback a solo-música en 60s si red lenta, no quedarse pillado en 12% (antes 180s)
   GENERATING_MUSIC: 60000,
   CREATING_SUBTITLES: 15000,
   MIXING_AUDIO: 120000,
@@ -281,6 +281,15 @@ export async function runCreationPipeline(
         const baseSpeed = suggestedSpeechRate(nicheInfo);
         let attemptSpeed = baseSpeed;
         let best: Awaited<ReturnType<typeof synthesizeProsodyWithFallback>> | null = null;
+        // Heartbeat iPhone: si la descarga/síntesis no reporta, la barra avanza de 12→42 sola para no quedarse pillado en 33
+        let voiceFake = 0;
+        let voiceHb: ReturnType<typeof setInterval> | null = setInterval(() => {
+          if (voiceFake < 88) {
+            voiceFake = Math.min(88, voiceFake + 1.2);
+            tracker.set("GENERATING_VOICE", voiceFake);
+          }
+        }, 650);
+        try {
         for (let round = 0; round < 2; round++) {
           const res = await runStage(
             "GENERATING_VOICE",
@@ -288,13 +297,19 @@ export async function runCreationPipeline(
               if (round === 0)
                 await ensureVoiceInstalled(chosenId, {
                   signal,
-                  onProgress: (p) => tracker.set("GENERATING_VOICE", (p ?? 0) * 0.7),
+                  onProgress: (p) => {
+                    if (p != null) voiceFake = Math.max(voiceFake, (p ?? 0) * 0.7);
+                    tracker.set("GENERATING_VOICE", (p ?? 0) * 0.7);
+                  },
                 });
               return await synthesizeProsodyWithFallback(script, chosenId, {
                 signal,
                 speed: attemptSpeed,
                 styleId,
-                onProgress: (p) => tracker.set("GENERATING_VOICE", 70 + (p ?? 0) * 0.3),
+                onProgress: (p) => {
+                  if (p != null) voiceFake = Math.max(voiceFake, 70 + (p ?? 0) * 0.3);
+                  tracker.set("GENERATING_VOICE", 70 + (p ?? 0) * 0.3);
+                },
               });
             },
             h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.GENERATING_VOICE, retries: 0 }
@@ -323,6 +338,9 @@ export async function runCreationPipeline(
               `La voz mide ${voiceDuration.toFixed(1)} s y el vídeo ${target.toFixed(1)} s`
             );
           }
+        }
+        } finally {
+          if (voiceHb) clearInterval(voiceHb);
         }
       } catch (e) {
         // Red de seguridad: si la voz falla, el vídeo se crea igual (solo música)
