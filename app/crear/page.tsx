@@ -170,12 +170,13 @@ export default function CrearPage() {
     const raw = url.trim();
     const parsed = parseAliUrl(raw);
     const slug = extractAliNameFromUrl(raw);
-    // Móvil: s.click/a.aliexpress y links sin ID numérico pero con slug válido también son aceptados
-    if (!parsed && !slug) {
+    // Móvil: s.click/a.aliexpress y links sin ID numérico - lectura instantánea 0s
+    const isAliHost = /aliexpress|ali\.express/i.test(raw);
+    if (!parsed && !slug && !isAliHost) {
       setProductNote("Pega un enlace válido de AliExpress.");
       return;
     }
-    // Lectura instantánea en móvil: muestra nombre del slug sin esperar red (0s vs 8s)
+    // Lectura instantánea en móvil: muestra nombre del slug o genérico sin esperar red (0s vs 5s)
     if (slug) {
       const instant: ProductInfo = {
         url: raw,
@@ -192,6 +193,24 @@ export default function CrearPage() {
       setProduct(instant);
       setManualName(slug);
       setProductNote("Nombre del enlace listo — enriqueciendo datos…");
+      setLoadedUrl(raw);
+    } else if (isAliHost) {
+      const genericTitle = parsed?.itemId ? `Producto AliExpress ${parsed.itemId}` : "Producto AliExpress";
+      const instant: ProductInfo = {
+        url: raw,
+        itemId: parsed?.itemId ?? null,
+        title: genericTitle,
+        price: null,
+        currency: null,
+        images: [],
+        videoUrls: [],
+        seller: null,
+        description: null,
+        features: [],
+      };
+      setProduct(instant);
+      setManualName(genericTitle);
+      setProductNote("Enlace móvil detectado — puedes editar el nombre abajo.");
       setLoadedUrl(raw);
     } else {
       setProductNote("");
@@ -241,11 +260,10 @@ export default function CrearPage() {
     }
   }, [url]);
 
-  // AliExpress: si la URL es válida (incluido s.click móvil con slug), se analiza siempre
-  // para el guion personalizado, sin esperar a que el usuario pulse "Usar". Lectura instantánea.
+  // AliExpress: si la URL es válida (incluido s.click móvil), se analiza siempre para guion
   useEffect(() => {
     const raw = url.trim();
-    if ((parseAliUrl(raw) || extractAliNameFromUrl(raw)) && raw !== loadedUrl) loadProduct();
+    if ((parseAliUrl(raw) || extractAliNameFromUrl(raw) || /aliexpress|ali\.express/i.test(raw)) && raw !== loadedUrl) loadProduct();
   }, [url, loadedUrl, loadProduct]);
 
   const productTitle = manualName.trim() || product?.title || null;
@@ -272,7 +290,7 @@ export default function CrearPage() {
     setRecommended(adStyle);
   }, [videoDuration, lang, productTitle, product]);
 
-  const aliOk = !!(parseAliUrl(url.trim()) || extractAliNameFromUrl(url.trim())) && !!productTitle;
+  const aliOk = !!(parseAliUrl(url.trim()) || extractAliNameFromUrl(url.trim()) || /aliexpress|ali\.express/i.test(url.trim())) && !!productTitle;
   // En "solo música" el enlace de producto NO es necesario (el guion va vacío
   // y el nombre es "Video con música"); solo se exige en modo con voz.
   const canCreate =

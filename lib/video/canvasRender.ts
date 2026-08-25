@@ -43,13 +43,18 @@ function pickMime(): { mime: string; ext: string } {
     ["video/webm;codecs=vp8,opus", "webm"],
     ["video/webm", "webm"],
   ];
-  if (typeof MediaRecorder === "undefined") return { mime: "", ext: "webm" };
+  if (typeof MediaRecorder === "undefined") {
+    const isIOS = typeof navigator !== "undefined" && /iPhone|iPad|iPod/i.test(navigator.userAgent);
+    return { mime: isIOS ? "video/mp4" : "", ext: isIOS ? "mp4" : "webm" };
+  }
   for (const [mime, ext] of candidates) {
     try {
       if (MediaRecorder.isTypeSupported(mime)) return { mime, ext };
     } catch {}
   }
-  return { mime: "", ext: "webm" };
+  // Safari iPhone: no soporta webm, forzar mp4 aunque isTypeSupported falle (evita mime vacío que deja MediaRecorder pillado en 88%)
+  const isIOS2 = typeof navigator !== "undefined" && /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  return { mime: isIOS2 ? "video/mp4" : "", ext: isIOS2 ? "mp4" : "webm" };
 }
 
 async function ensureRunning(ctx: AudioContext): Promise<void> {
