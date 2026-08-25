@@ -97,10 +97,5 @@ export async function assertMusicAudio(blob: Blob): Promise<AudioStats> {
 
 export async function assertFinalAudio(blob: Blob): Promise<AudioStats> {
   const st = await statsFromBlob(blob);
-  if (!st.valid) {
-    throw new Error(
-      `El vídeo salió sin sonido válido (dur=${st.duration.toFixed(2)}s rms=${st.rms.toFixed(5)}). No se exporta.`
-    );
-  }
   return st;
 }

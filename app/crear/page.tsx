@@ -290,6 +290,12 @@ export default function CrearPage() {
     setRecommended(adStyle);
   }, [videoDuration, lang, productTitle, product]);
 
+  // Auto-guion: en cuanto hay producto y duración, crea el guion justo para esa duración y lo muestra abajo para solo leerlo
+  useEffect(() => {
+    if (!productTitle || !videoDuration || script.trim() || phase !== "setup" || mode === "music") return;
+    buildScript();
+  }, [productTitle, videoDuration, phase, mode, script, buildScript]);
+
   const aliOk = !!(parseAliUrl(url.trim()) || extractAliNameFromUrl(url.trim()) || /aliexpress|ali\.express/i.test(url.trim())) && !!productTitle;
   // En "solo música" el enlace de producto NO es necesario (el guion va vacío
   // y el nombre es "Video con música"); solo se exige en modo con voz.

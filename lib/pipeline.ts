@@ -320,10 +320,9 @@ export async function runCreationPipeline(
           chosenId = res.voiceId;
           usedFallback = res.usedFallback;
           if (!target || round === 1) break;
-          // Solo re-sintetizamos (2Âª pasada, dobla el tiempo de voz) si el
-          // desajuste es grande. Con desajustes pequeños el mix y los subtÃ­tulos
-          // encajan bien y ahorramos la mitad del tiempo de inferencia.
-          const mul = correctiveSpeed(voiceDuration, target, Math.max(tol, 1.5));
+          // Solo re-sintetizamos (2ª pasada, dobla el tiempo de voz) si el
+          // desajuste es muy grande. Para lectura simple, casi nunca se hace 2ª pasada.
+          const mul = correctiveSpeed(voiceDuration, target, Math.max(tol, 3.0));
           if (!mul) break; // ya encaja
           attemptSpeed = Math.min(1.5, Math.max(0.7, attemptSpeed * mul));
         }
