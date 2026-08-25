@@ -422,10 +422,12 @@ export async function runCreationPipeline(
     );
 
     // ── Render (canvas + MediaRecorder) ────────────────────────────────
+    // iPhone: 720p+30fps es muy pesado y se queda pillado en 88% por rAF throttled + MediaRecorder. Usamos 540p/24fps para 2× más rápido
     const isMobileLike =
       typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-    const width = isMobileLike ? 720 : 1080;
-    const height = isMobileLike ? 1280 : 1920;
+    const width = isMobileLike ? 540 : 1080;
+    const height = isMobileLike ? 960 : 1920;
+    const renderFps = isMobileLike ? 24 : 30;
     const rendered = await runStage(
       "RENDERING",
       async (signal) => {
@@ -433,10 +435,10 @@ export async function runCreationPipeline(
         let renderFake = 0;
         let renderHb: ReturnType<typeof setInterval> | null = setInterval(() => {
           if (renderFake < 99) {
-            renderFake = Math.min(99, renderFake + 2.0);
+            renderFake = Math.min(99, renderFake + 2.4);
             tracker.set("RENDERING", renderFake);
           }
-        }, 450);
+        }, 380);
         const clearHb = () => {
           if (renderHb) clearInterval(renderHb);
           renderHb = null;
@@ -452,7 +454,7 @@ export async function runCreationPipeline(
             videoBlob: input.videoBlob,
             segments,
             height,
-            fps: isMobileLike ? 30 : 30,
+            fps: renderFps,
             removeWatermark: input.removeWatermark,
             signal,
             onPct: (p) => {
@@ -474,7 +476,7 @@ export async function runCreationPipeline(
         }
         throw new Error("No se pudo renderizar ni usar el vídeo fuente.");
       },
-      h, tracker, { timeoutMs: STAGE_TIMEOUT_MS.RENDERING, retries: isMobileLike ? 1 : 0 }
+      h, tracker, { timeoutMs: isMobileLike ? 55000 : STAGE_TIMEOUT_MS.RENDERING, retries: isMobileLike ? 1 : 0 }
     );
 
     // ── Verificación ───────────────────────────────────────────────────
