@@ -256,7 +256,7 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
       if (rec.state !== "inactive") rec.stop();
     } catch {}
     // Red de seguridad: si onstop/onerror no disparan (iOS a veces no lo hace
-    // cuando no hubo frames), forzamos la resolución con lo grabado.
+    // cuando no hubo frames), forzamos la resolución con lo grabado. 4s→2s para no quedarse en 88%.
     stopTimer = window.setTimeout(() => {
       if (resolved) return;
       try {
@@ -266,7 +266,7 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
       } catch {
         fail(new Error("El render no terminó en este navegador."));
       }
-    }, 4000);
+    }, 2000);
   };
 
   rec.onstop = async () => {
@@ -317,9 +317,9 @@ export async function renderCaptionsVideo(opts: CaptionVideoOptions): Promise<Ca
   rec.start(250);
   rafId = requestAnimationFrame(drawFrame);
 
-  // Watchdog: por si el bucle de frames se congela en iOS, forzamos el fin del
-  // render tras la duración del vídeo + margen. Así NUNCA se queda pillado.
-  const watchdog = setTimeout(() => finish(), Math.max(5000, (totalSec + 12) * 1000));
+  // Watchdog: por si el bucle de frames se congela en iOS (rAF throttled), forzamos el fin
+  // en 8s + duración para no quedarse pillado en 88% (antes 12s). Nunca se queda pillado.
+  const watchdog = setTimeout(() => finish(), Math.max(8000, (totalSec + 8) * 1000));
 
   return finished.finally(() => {
     clearTimeout(watchdog);

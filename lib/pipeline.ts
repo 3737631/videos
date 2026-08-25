@@ -82,7 +82,7 @@ const STAGE_TIMEOUT_MS: Partial<Record<StageName, number>> = {
   GENERATING_MUSIC: 60000,
   CREATING_SUBTITLES: 15000,
   MIXING_AUDIO: 120000,
-  RENDERING: 120000, // iPhone Safari: 420s→120s para no quedarse pillado en 88% (watchdog 23s + margen)
+  RENDERING: 75000, // iPhone Safari: 420s→75s para no quedarse pillado en 88% (watchdog 15s + margen) - 88% debe avanzar a 100% en <15s
   VERIFYING: 60000,
 };
 
@@ -432,11 +432,11 @@ export async function runCreationPipeline(
         // Heartbeat para que la barra no se quede pillada en 88% en iPhone si el canvas tarda (Safari throttles rAF)
         let renderFake = 0;
         let renderHb: ReturnType<typeof setInterval> | null = setInterval(() => {
-          if (renderFake < 98) {
-            renderFake = Math.min(98, renderFake + 1.6);
+          if (renderFake < 99) {
+            renderFake = Math.min(99, renderFake + 2.0);
             tracker.set("RENDERING", renderFake);
           }
-        }, 550);
+        }, 450);
         const clearHb = () => {
           if (renderHb) clearInterval(renderHb);
           renderHb = null;
