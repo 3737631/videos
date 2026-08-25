@@ -196,7 +196,7 @@ export default function CrearPage() {
       setProductNote("Nombre del enlace listo — enriqueciendo datos…");
       setLoadedUrl(raw);
     } else if (isAliHost) {
-      const genericTitle = parsed?.itemId ? `Producto AliExpress ${parsed.itemId}` : "Producto AliExpress";
+      const genericTitle = "Producto AliExpress";
       const instant: ProductInfo = {
         url: raw,
         itemId: parsed?.itemId ?? null,
@@ -229,7 +229,7 @@ export default function CrearPage() {
         else if (!res.info.title) setProductNote("Falta el nombre. Escríbelo abajo.");
         else setProductNote("");
       } else if (!slug) {
-        const genericTitle = res.info.title || (parsed?.itemId ? `Producto AliExpress ${parsed.itemId}` : "Producto AliExpress");
+        const genericTitle = res.info.title || "Producto AliExpress";
         const genericInfo: ProductInfo = { ...res.info, title: genericTitle };
         setProduct(genericInfo);
         setManualName(genericTitle);
@@ -238,7 +238,7 @@ export default function CrearPage() {
       }
     } catch {
       if (!slug) {
-        const genericTitle = parsed?.itemId ? `Producto AliExpress ${parsed.itemId}` : "Producto AliExpress";
+        const genericTitle = "Producto AliExpress";
         const genericInfo: ProductInfo = {
           url: raw,
           itemId: parsed?.itemId ?? null,
@@ -534,25 +534,28 @@ export default function CrearPage() {
                   </div>
                 )}
                 <div className="mt-1 text-xs text-emerald-300">✓ Investigado para guion personalizado</div>
-              </section>
-            )}
-            {script && (
-              <section className="cc-card p-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-xs font-semibold text-gray-200">Guion personalizado — lo que se va a decir</div>
-                  <div className="text-xs text-gray-400">{script.split(/\s+/).filter(Boolean).length} palabras · ~{pickTargetDuration(videoDuration, false)}s · tono publicitario</div>
-                </div>
-                <textarea
-                  value={script}
-                  onChange={(e) => { setScript(e.target.value); setScriptEdited(true); }}
-                  rows={5}
-                  className="mt-2 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm outline-none focus:border-violet-400/60"
-                  placeholder="Guion generado automáticamente según producto y duración..."
-                />
-                <div className="mt-1 flex gap-2">
-                  <button onClick={buildScript} className="text-xs text-violet-300 hover:text-violet-200">⟳ Regenerar guion</button>
-                  <span className="text-xs text-gray-500">Se lee en alto con voz + subtítulos</span>
-                </div>
+                {script ? (
+                  <div className="mt-3 border-t border-white/10 pt-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs font-semibold text-gray-200">Guion personalizado — lo que se va a decir</div>
+                      <div className="text-xs text-gray-400">{script.split(/\s+/).filter(Boolean).length} palabras · ~{pickTargetDuration(videoDuration, false)}s</div>
+                    </div>
+                    <div className="mt-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-sm text-gray-100 whitespace-pre-wrap leading-relaxed">{script}</div>
+                    <textarea
+                      value={script}
+                      onChange={(e) => { setScript(e.target.value); setScriptEdited(true); }}
+                      rows={4}
+                      className="mt-2 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm outline-none focus:border-violet-400/60"
+                      placeholder="Guion generado automáticamente según producto y duración..."
+                    />
+                    <div className="mt-1 flex gap-2">
+                      <button onClick={buildScript} className="text-xs text-violet-300 hover:text-violet-200">⟳ Regenerar</button>
+                      <span className="text-xs text-gray-500">Se lee en alto con tono publicitario</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-gray-500">Analizando producto y duración para crear guion justo…</div>
+                )}
               </section>
             )}
 
