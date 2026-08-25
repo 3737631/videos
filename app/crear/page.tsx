@@ -55,6 +55,7 @@ export default function CrearPage() {
   const [voiceId, setVoiceId] = useState<string>(defaultVoiceForLocale("es-XX"));
   const [styleId, setStyleId] = useState<string | null>(null);
   const [script, setScript] = useState("");
+  const [scriptEdited, setScriptEdited] = useState(false);
   const [lang, setLang] = useState("es");
   const [, setRecommended] = useState<string>("natural");
 
@@ -283,6 +284,7 @@ export default function CrearPage() {
       },
     });
     setScript(g.text);
+    setScriptEdited(false);
     // Tono publicitario por defecto para producto (viral/urgente), no storytelling lento
     const rec = recommendStyle({ scriptText: g.text, isDropshipping: true, durationSec: target });
     const adStyle: string = productTitle ? (target <= 16 ? "viral" : "energetico") : rec;
@@ -290,11 +292,16 @@ export default function CrearPage() {
     setRecommended(adStyle);
   }, [videoDuration, lang, productTitle, product]);
 
-  // Auto-guion: en cuanto hay producto y duración, crea el guion justo para esa duración y lo muestra abajo para solo leerlo
+  // Auto-guion: en cuanto hay producto y duracion, crea guion justo y lo muestra abajo (se regenera si producto pasa de generico a real)
   useEffect(() => {
-    if (!productTitle || !videoDuration || script.trim() || phase !== "setup" || mode === "music") return;
-    buildScript();
-  }, [productTitle, videoDuration, phase, mode, script, buildScript]);
+    if (!productTitle || !videoDuration || phase !== "setup" || mode === "music") return;
+    if (scriptEdited) return;
+    const isGeneric = /Producto AliExpress/i.test(script);
+    const isNewRealProduct = productTitle && !script.includes(productTitle.slice(0, 8)) && isGeneric;
+    if (!script.trim() || isNewRealProduct) {
+      buildScript();
+    }
+  }, [productTitle, videoDuration, phase, mode, script, scriptEdited, buildScript]);
 
   const aliOk = !!(parseAliUrl(url.trim()) || extractAliNameFromUrl(url.trim()) || /aliexpress|ali\.express/i.test(url.trim())) && !!productTitle;
   // En "solo música" el enlace de producto NO es necesario (el guion va vacío
@@ -537,7 +544,7 @@ export default function CrearPage() {
                 </div>
                 <textarea
                   value={script}
-                  onChange={(e) => setScript(e.target.value)}
+                  onChange={(e) => { setScript(e.target.value); setScriptEdited(true); }}
                   rows={5}
                   className="mt-2 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm outline-none focus:border-violet-400/60"
                   placeholder="Guion generado automáticamente según producto y duración..."
