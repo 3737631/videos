@@ -403,6 +403,18 @@ export async function runCreationPipeline(
     const rendered = await runStage(
       "RENDERING",
       async (signal) => {
+        // Heartbeat para que la barra no se quede pillada en 79% en iPhone si el canvas tarda
+        let renderFake = 0;
+        let renderHb: ReturnType<typeof setInterval> | null = setInterval(() => {
+          if (renderFake < 88) {
+            renderFake = Math.min(88, renderFake + 1.2);
+            tracker.set("RENDERING", renderFake);
+          }
+        }, 700);
+        const clearHb = () => {
+          if (renderHb) clearInterval(renderHb);
+          renderHb = null;
+        };
         try {
           const r = await renderCaptionsVideo({
             durationSec,
@@ -417,11 +429,16 @@ export async function runCreationPipeline(
             fps: isMobileLike ? 30 : 30,
             removeWatermark: input.removeWatermark,
             signal,
-            onPct: (p) => tracker.set("RENDERING", p),
+            onPct: (p) => {
+              renderFake = Math.max(renderFake, p);
+              tracker.set("RENDERING", p);
+            },
           });
           if (r && r.blob && r.blob.size >= 1000) return r;
         } catch (e) {
           console.warn("render con captions falló:", e);
+        } finally {
+          clearHb();
         }
         // Fallback garantizado: usamos el vídeo fuente para que SIEMPRE cargue
         // algo reproducible, aunque sin subtítulos/recorte si el canvas falló.

@@ -209,14 +209,31 @@ export default function CrearPage() {
         else if (!res.info.title) setProductNote("Falta el nombre. Escríbelo abajo.");
         else setProductNote("");
       } else if (!slug) {
-        setProduct(res.info);
-        if (res.source === "none") setProductNote("No se pudo leer solo. Escribe el nombre abajo.");
+        const genericTitle = res.info.title || (parsed?.itemId ? `Producto AliExpress ${parsed.itemId}` : "Producto AliExpress");
+        const genericInfo: ProductInfo = { ...res.info, title: genericTitle };
+        setProduct(genericInfo);
+        setManualName(genericTitle);
+        if (res.source === "none") setProductNote("Usando nombre genérico — puedes editarlo abajo.");
         else setProductNote("");
       }
     } catch {
       if (!slug) {
-        setProduct(null);
-        setProductNote("No se pudo leer. Escribe el nombre abajo.");
+        const genericTitle = parsed?.itemId ? `Producto AliExpress ${parsed.itemId}` : "Producto AliExpress";
+        const genericInfo: ProductInfo = {
+          url: raw,
+          itemId: parsed?.itemId ?? null,
+          title: genericTitle,
+          price: null,
+          currency: null,
+          images: [],
+          videoUrls: [],
+          seller: null,
+          description: null,
+          features: [],
+        };
+        setProduct(genericInfo);
+        setManualName(genericTitle);
+        setProductNote("Usando nombre genérico — puedes editarlo abajo.");
       }
       // si ya teníamos slug, mantenemos el instantáneo
     } finally {
