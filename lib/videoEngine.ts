@@ -2,6 +2,35 @@ import { RenderConfig, SubtitleCue } from "@/types";
 
 const INVISIBLE_CSS = "position:fixed;top:0;left:-9999px;width:270px;height:480px;z-index:-100;pointer-events:none;";
 
+// FUNCIÓN DE AUTO-AJUSTE DE TEXTO (Para que nunca se salga de pantalla)
+function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number) {
+  const words = text.split(' ');
+  let line = '';
+  const lines = [];
+  const lineHeight = 30; // Altura entre líneas
+
+  for (let n = 0; n < words.length; n++) {
+    const testLine = line + words[n] + ' ';
+    const metrics = ctx.measureText(testLine);
+    if (metrics.width > maxWidth && n > 0) {
+      lines.push(line);
+      line = words[n] + ' ';
+    } else {
+      line = testLine;
+    }
+  }
+  lines.push(line);
+  
+  // Centramos el bloque de texto verticalmente
+  let currentY = y - ((lines.length - 1) * lineHeight) / 2; 
+  
+  for (let k = 0; k < lines.length; k++) {
+    ctx.strokeText(lines[k].trim(), x, currentY);
+    ctx.fillText(lines[k].trim(), x, currentY);
+    currentY += lineHeight;
+  }
+}
+
 export async function renderFinalVideo(config: RenderConfig): Promise<string> {
   const { clips, audioBlob, cues, targetDuration, onProgress, mode } = config;
   
@@ -45,14 +74,11 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         const source = audioCtx.createBufferSource();
         source.buffer = decoded;
         
-        // HACK VIRAL: Acelera la voz de la IA para que coincida con tu vídeo exacto
         if (mode === "voice") {
           let speedRatio = decoded.duration / targetDuration;
-          // Limitamos para que no suene a ardilla (Max 2x velocidad) ni en cámara lenta
           speedRatio = Math.max(0.8, Math.min(speedRatio, 1.8)); 
           source.playbackRate.value = speedRatio;
         } else {
-          // En modo música, dejamos que el ritmo suene a velocidad normal y se repita
           source.loop = true;
         }
 
@@ -190,31 +216,34 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         await loadVideo(currentClipIdx);
       }
 
-      ctx.fillStyle = "#000000"; 
-      ctx.fillRect(0, 0, width, height);
-      
+      // SOLUCIÓN PANTALLAZO NEGRO: 
+      // Solo borramos y pintamos negro si el vídeo nuevo YA ha cargado (readyState >= 2).
+      // Si no ha cargado, dejamos la imagen congelada del vídeo anterior. ¡Mucho más profesional!
       if (activeVideo && activeVideo.readyState >= 2) {
+        ctx.fillStyle = "#000000"; 
+        ctx.fillRect(0, 0, width, height);
+
         const scale = Math.max(width / activeVideo.videoWidth, height / activeVideo.videoHeight);
         const dw = activeVideo.videoWidth * scale;
         const dh = activeVideo.videoHeight * scale;
         ctx.drawImage(activeVideo, (width - dw) / 2, (height - dh) / 2, dw, dh);
       }
 
+      // DIBUJO DE SUBTÍTULOS AJUSTADO
       if (config.mode === "voice") {
         const cue = cues.find(c => elapsed >= c.start && elapsed <= c.end);
         if (cue) {
-          ctx.font = '900 22px "Inter", sans-serif'; 
+          ctx.font = '900 24px "Inter", sans-serif'; 
           ctx.textAlign = "center"; 
           ctx.textBaseline = "middle";
           ctx.lineJoin = "round";
-          const txt = cue.text;
-          const y = height * 0.75;
           
-          ctx.lineWidth = 4; 
+          ctx.lineWidth = 5; 
           ctx.strokeStyle = "#000";
-          ctx.strokeText(txt, width / 2, y);
           ctx.fillStyle = "#FFE600";
-          ctx.fillText(txt, width / 2, y);
+          
+          // Usamos el Auto-Ajuste: Max width de 240px (deja un margen de 15px por lado)
+          drawWrappedText(ctx, cue.text, width / 2, height * 0.75, 240);
         }
       }
 

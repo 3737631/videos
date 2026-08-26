@@ -82,26 +82,58 @@ export default function App() {
     setStep(2);
   };
 
+  // NUEVO GENERADOR DE GUIONES INTELIGENTE
   const generateScriptLocal = (info: string, durationSeconds: number) => {
-    const duration = Math.max(5, Math.min(60, Number(durationSeconds) || 15));
-    const targetWordCount = Math.round(duration * 3);
+    // Aprox 2.5 palabras por segundo para que se entienda bien y suene natural
+    const targetWordCount = Math.floor(durationSeconds * 2.5); 
 
     const cleanInfo = info
       .replace(/https?:\/\/\S+/gi, "")
-      .replace(/(aliexpress|amazon|shein|temu|tienda|comprar|vendedor|descuento)/gi, "")
-      .trim() || "este producto";
+      .replace(/(aliexpress|amazon|shein|temu|tienda|comprar|vendedor|descuento|link|bio)/gi, "")
+      .trim() || "este producto revolucionario";
 
-    let fullText = `¡Deja de perder el tiempo! Con ${cleanInfo}, todo se hace tres veces más rápido. Solo aplícalo y verás cómo elimina cualquier problema sin esfuerzo. ¡Una locura, pruébalo y nota la diferencia al instante!`;
+    const hooks = [
+      `¿Cansado de los mismos problemas? Necesitas ${cleanInfo}.`,
+      `El secreto que nadie te quiere contar sobre ${cleanInfo}.`,
+      `Mira cómo ${cleanInfo} me salvó el día por completo.`,
+      `Si sigues haciéndolo mal, es porque no tienes ${cleanInfo}.`
+    ];
     
-    let words = fullText.split(/\s+/);
-    if (words.length > targetWordCount) {
-      words = words.slice(0, targetWordCount);
-    } else {
-      while (words.length < targetWordCount) {
-        words.push("¡Funciona!");
-      }
+    const benefits = [
+      "Te ahorra horas de esfuerzo y es súper fácil de usar.",
+      "La calidad te dejará con la boca abierta desde el primer uso.",
+      "Es el mejor invento del año y funciona a la perfección.",
+      "Diseñado para que dejes de complicarte la vida inútilmente."
+    ];
+
+    const callsToAction = [
+      "Consíguelo hoy y cambia tu rutina.",
+      "Pruébalo ahora, no te arrepentirás.",
+      "Hazte un favor y empieza a usarlo."
+    ];
+
+    // Construir historia dinámica
+    let script = hooks[Math.floor(Math.random() * hooks.length)];
+    let words = script.split(" ");
+    
+    // Rellenamos inteligentemente con beneficios variados hasta acercarnos al tiempo
+    let benefitCount = 0;
+    while (words.length < targetWordCount - 6) { 
+      script += " " + benefits[benefitCount % benefits.length];
+      words = script.split(" ");
+      benefitCount++;
     }
-    return words.join(" ");
+
+    // Rematamos con la llamada a la acción
+    script += " " + callsToAction[Math.floor(Math.random() * callsToAction.length)];
+    words = script.split(" ");
+
+    // Ajuste final al milímetro
+    if (words.length > targetWordCount) {
+      return words.slice(0, targetWordCount).join(" ") + "!";
+    }
+    
+    return script;
   };
 
   const processVideo = async () => {
@@ -114,18 +146,19 @@ export default function App() {
       let cues: any = [];
 
       if (mode === "voice") {
-        setStatus("Descargando Voz Humana Real...");
+        setStatus("Generando guion a medida...");
         const script = generateScriptLocal(productPrompt, totalDuration);
+        
+        setStatus("Sintetizando voz humana...");
         const tts = await generateSpeechAndCues(script, totalDuration);
         audioBlob = tts.audioBlob;
         cues = tts.cues;
       } else {
-        // MODO MÚSICA SOLUCIONADO
         setStatus("Generando base musical Lo-Fi / Phonk...");
         audioBlob = await generateViralMusic(totalDuration);
       }
 
-      setStatus("Renderizando a máxima velocidad...");
+      setStatus("Renderizando vídeo vertical...");
       const url = await renderFinalVideo({
         clips, audioBlob, cues, mode: mode!, targetDuration: totalDuration,
         onProgress: (p) => setProgress(Math.round(p))
@@ -151,7 +184,7 @@ export default function App() {
     <main className="min-h-[100dvh] bg-[#09090b] text-white flex flex-col items-center justify-center p-4 sm:p-6 overflow-x-hidden">
       <div className="w-full max-w-xl text-center mb-6 sm:mb-8 mt-4">
         <div className="inline-block bg-purple-500/10 border border-purple-500/30 text-purple-400 px-3 py-1 rounded-full text-[10px] sm:text-xs font-bold mb-3 sm:mb-4 tracking-widest">
-          TIKTOK AUTOMATOR FINAL (VOZ REAL + MÚSICA)
+          TIKTOK AUTOMATOR FINAL PRO
         </div>
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent leading-tight">
           Creador Viral
@@ -178,14 +211,14 @@ export default function App() {
               <div className="p-3 sm:p-4 bg-blue-500/10 rounded-full shrink-0"><Music className="text-blue-400 w-6 h-6" /></div>
               <div className="text-left">
                 <h3 className="font-bold text-base sm:text-lg">Modo Musical</h3>
-                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Cortes dinámicos y base Lo-Fi generada.</p>
+                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Cortes rápidos + Beat autogenerado.</p>
               </div>
             </button>
             <button onClick={() => { setMode("voice"); setStep(3); }} className="w-full p-4 sm:p-6 bg-zinc-950 border border-zinc-800 rounded-2xl flex items-center gap-4 hover:border-purple-500 active:bg-purple-900/20 transition-all touch-manipulation">
               <div className="p-3 sm:p-4 bg-purple-500/10 rounded-full shrink-0"><Mic className="text-purple-400 w-6 h-6" /></div>
               <div className="text-left">
                 <h3 className="font-bold text-base sm:text-lg">Modo Narrador IA</h3>
-                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Voz humana real (Mia) + Subtítulos.</p>
+                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Guion único + Voz + Subtítulos.</p>
               </div>
             </button>
           </div>
@@ -195,16 +228,16 @@ export default function App() {
           <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
             {mode === "voice" && (
               <>
-                <label className="font-bold text-base sm:text-lg">Describe el producto</label>
+                <label className="font-bold text-base sm:text-lg">¿De qué trata el producto?</label>
                 <textarea 
                   value={productPrompt} onChange={(e) => setProductPrompt(e.target.value)}
-                  placeholder="Ej: Aspiradora portátil para el coche..."
+                  placeholder="Ej: Aspiradora portátil para coche..."
                   className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-3 sm:p-4 focus:border-purple-500 outline-none h-28 sm:h-32 resize-none text-sm sm:text-base"
                 />
               </>
             )}
             <button onClick={processVideo} disabled={mode === "voice" && productPrompt.length < 5} className="w-full py-3 sm:py-4 bg-white text-black rounded-xl font-bold text-base sm:text-lg flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50 touch-manipulation transition-transform">
-              <Wand2 className="w-5 h-5" /> Generar Vídeo Definitivo
+              <Wand2 className="w-5 h-5" /> Crear Vídeo
             </button>
           </div>
         )}
