@@ -27,31 +27,35 @@ export async function generateSpeechAndCues(
     });
   }
 
-  // SOLUCIÓN AL PITIDO: Troceamos el texto para burlar el límite de caracteres de la API
-  // Separa el texto en bloques de máximo 150 letras.
+  // TROCEADOR DE TEXTO (Para que las APIs no lo bloqueen por ser muy largo)
   const textChunks = cleanText.match(/.{1,150}(?:\s|$)/g) || [cleanText];
   const audioBuffers: ArrayBuffer[] = [];
 
   for (const chunk of textChunks) {
     if (!chunk.trim()) continue;
     try {
-      // Voz real y humana de Amazon Polly (Mia = Español neutro)
-      const url = `https://api.streamelements.com/kappa/v2/speech?voice=Mia&text=${encodeURIComponent(chunk.trim())}`;
-      const res = await fetch(url);
+      // INTENTO 1: Amazon Polly (Voz de mujer "Mia")
+      let res = await fetch(`https://api.streamelements.com/kappa/v2/speech?voice=Mia&text=${encodeURIComponent(chunk.trim())}`);
+      
+      if (!res.ok) {
+        // INTENTO 2 (FALLBACK ANTI-BLOQUEO): API oculta de Google Translate
+        res = await fetch(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=es-ES&client=gtx&q=${encodeURIComponent(chunk.trim())}`);
+      }
+      
       if (res.ok) {
         audioBuffers.push(await res.arrayBuffer());
       }
     } catch (e) {
-      console.warn("Fallo al descargar un trozo de voz.");
+      console.warn("Fallo al descargar un fragmento de voz.");
     }
   }
 
+  // SI FALLAN TODAS LAS REDES (Cero internet o adblocker extremo)
   if (audioBuffers.length === 0) {
-    // Si no hay internet, genera el ritmo musical en vez de pitar
-    return { audioBlob: await generateViralMusic(targetDurationSec), cues };
+    // Genera una voz robótica que simula hablar, NUNCA MÚSICA.
+    return { audioBlob: await generateRoboticVoice(rawWords, targetDurationSec), cues };
   }
 
-  // Unimos todos los trozos humanos en un único audio MP3
   const totalLength = audioBuffers.reduce((acc, b) => acc + b.byteLength, 0);
   const merged = new Uint8Array(totalLength);
   let offset = 0;
@@ -63,19 +67,47 @@ export async function generateSpeechAndCues(
   return { audioBlob: new Blob([merged], { type: "audio/mp3" }), cues };
 }
 
-// NUEVO: SINTETIZADOR DE MÚSICA VIRAL
-// Genera una base de música Lo-Fi / Phonk de 120 BPM automáticamente
+// VOZ DE EMERGENCIA (Robot) - Solo se activa si falla el internet
+async function generateRoboticVoice(words: string[], duration: number): Promise<Blob> {
+  const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+  const sampleRate = 44100;
+  const offlineCtx = new AC(1, sampleRate * duration, sampleRate);
+  
+  const timePerWord = duration / words.length;
+  
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    const osc = offlineCtx.createOscillator();
+    const gain = offlineCtx.createGain();
+    
+    // Calcula la frecuencia basándose en cuántas letras tiene la palabra
+    osc.frequency.value = 300 + (word.length * 40);
+    osc.type = "triangle";
+    
+    gain.gain.setValueAtTime(0.4, i * timePerWord);
+    gain.gain.exponentialRampToValueAtTime(0.01, (i * timePerWord) + (timePerWord * 0.8));
+    
+    osc.connect(gain);
+    gain.connect(offlineCtx.destination);
+    
+    osc.start(i * timePerWord);
+    osc.stop((i * timePerWord) + timePerWord);
+  }
+  
+  const renderedBuffer = await offlineCtx.startRendering();
+  return audioBufferToWav(renderedBuffer);
+}
+
+// MÚSICA VIRAL - Ahora EXCLUSIVA del modo "Solo Música"
 export async function generateViralMusic(duration: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
   const sampleRate = 44100;
-  // Añadimos un pequeño margen extra de tiempo
   const offlineCtx = new AC(1, sampleRate * (duration + 2), sampleRate);
   
   const bpm = 120;
-  const beatTime = 60 / bpm; // 0.5 segundos por golpe
+  const beatTime = 60 / bpm; 
   
   for (let i = 0; i < duration + 2; i += beatTime) {
-    // BOMBO (Kick)
     const kick = offlineCtx.createOscillator();
     const kickGain = offlineCtx.createGain();
     kick.frequency.setValueAtTime(150, i);
@@ -87,7 +119,6 @@ export async function generateViralMusic(duration: number): Promise<Blob> {
     kick.start(i);
     kick.stop(i + 0.5);
     
-    // CAJA (Hi-Hat) a contratiempo
     if (i + beatTime / 2 < duration + 2) {
       const hat = offlineCtx.createOscillator();
       const hatGain = offlineCtx.createGain();
@@ -101,11 +132,10 @@ export async function generateViralMusic(duration: number): Promise<Blob> {
       hat.stop(i + beatTime / 2 + 0.1);
     }
     
-    // BAJO (Bassline) oscuro
     const bass = offlineCtx.createOscillator();
     const bassGain = offlineCtx.createGain();
     bass.type = "triangle";
-    bass.frequency.setValueAtTime(55, i); // Nota La grave
+    bass.frequency.setValueAtTime(55, i); 
     bassGain.gain.setValueAtTime(0.6, i);
     bassGain.gain.exponentialRampToValueAtTime(0.01, i + beatTime);
     bass.connect(bassGain);
@@ -118,6 +148,7 @@ export async function generateViralMusic(duration: number): Promise<Blob> {
   return audioBufferToWav(renderedBuffer);
 }
 
+// Transformador de Audio
 function audioBufferToWav(buffer: AudioBuffer): Blob {
   const numOfChan = buffer.numberOfChannels;
   const length = buffer.length * numOfChan * 2 + 44;
