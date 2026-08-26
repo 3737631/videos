@@ -292,16 +292,16 @@ export default function CrearPage() {
     setRecommended(adStyle);
   }, [videoDuration, lang, productTitle, product]);
 
-  // Auto-guion: en cuanto hay producto y duracion, crea guion justo y lo muestra abajo (se regenera si producto pasa de generico a real)
+  // Auto-guion: al dar a Buscar, muestra guion abajo al instante (sin esperar vídeo) con duración estimada
   useEffect(() => {
-    if (!productTitle || !videoDuration || phase !== "setup" || mode === "music") return;
+    if (!productTitle || phase !== "setup" || mode === "music") return;
     if (scriptEdited) return;
     const isGeneric = /Producto AliExpress/i.test(script);
     const isNewRealProduct = productTitle && !script.includes(productTitle.slice(0, 8)) && isGeneric;
     if (!script.trim() || isNewRealProduct) {
       buildScript();
     }
-  }, [productTitle, videoDuration, phase, mode, script, scriptEdited, buildScript]);
+  }, [productTitle, phase, mode, script, scriptEdited, buildScript]);
 
   const aliOk = !!(parseAliUrl(url.trim()) || extractAliNameFromUrl(url.trim()) || /aliexpress|ali\.express/i.test(url.trim())) && !!productTitle;
   // En "solo música" el enlace de producto NO es necesario (el guion va vacío
@@ -462,22 +462,24 @@ export default function CrearPage() {
               ))}
             </div>
 
-            <section className="cc-card p-4">
-              <div className="text-xs font-semibold text-gray-300">Estilo de musica</div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {MUSIC_CHOICES.map((c) => (
-                  <button
-                    key={c.label}
-                    onClick={() => setMusicCat(c.cat)}
-                    className={`rounded-full border px-3 py-1.5 text-xs ${
-                      musicCat === c.cat ? "border-violet-400/70 bg-violet-500/10 text-white" : "border-white/10 text-gray-300 hover:bg-white/5"
-                    }`}
-                  >
-                    {c.label}
-                  </button>
-                ))}
-              </div>
-            </section>
+            {mergedBlob && (
+              <section className="cc-card p-4">
+                <div className="text-xs font-semibold text-gray-300">Estilo de musica</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {MUSIC_CHOICES.map((c) => (
+                    <button
+                      key={c.label}
+                      onClick={() => setMusicCat(c.cat)}
+                      className={`rounded-full border px-3 py-1.5 text-xs ${
+                        musicCat === c.cat ? "border-violet-400/70 bg-violet-500/10 text-white" : "border-white/10 text-gray-300 hover:bg-white/5"
+                      }`}
+                    >
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
 
             <section className="cc-card p-4">
               <div className="flex items-center justify-between">
@@ -524,37 +526,24 @@ export default function CrearPage() {
 
             {product && (
               <section className="cc-card p-4">
-                <div className="text-xs font-semibold text-gray-200">Producto investigado</div>
-                <div className="mt-1 text-sm text-white">{product.title}</div>
-                {(product.price || product.seller) && (
-                  <div className="mt-1 text-xs text-gray-400">
-                    {product.price && <span>{product.price} {product.currency} · </span>}
-                    {product.seller && <span>{product.seller}</span>}
-                    {product.features?.length ? <span> · {product.features[0].slice(0, 60)}</span> : null}
-                  </div>
-                )}
-                <div className="mt-1 text-xs text-emerald-300">✓ Investigado para guion personalizado</div>
+                <div className="text-xs font-semibold text-gray-200">Guion personalizado</div>
                 {script ? (
-                  <div className="mt-3 border-t border-white/10 pt-3">
-                    <div className="flex items-center justify-between">
-                      <div className="text-xs font-semibold text-gray-200">Guion personalizado — lo que se va a decir</div>
-                      <div className="text-xs text-gray-400">{script.split(/\s+/).filter(Boolean).length} palabras · ~{pickTargetDuration(videoDuration, false)}s</div>
-                    </div>
+                  <>
                     <div className="mt-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-sm text-gray-100 whitespace-pre-wrap leading-relaxed">{script}</div>
                     <textarea
                       value={script}
                       onChange={(e) => { setScript(e.target.value); setScriptEdited(true); }}
                       rows={4}
                       className="mt-2 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm outline-none focus:border-violet-400/60"
-                      placeholder="Guion generado automáticamente según producto y duración..."
+                      placeholder="Guion generado automáticamente..."
                     />
                     <div className="mt-1 flex gap-2">
                       <button onClick={buildScript} className="text-xs text-violet-300 hover:text-violet-200">⟳ Regenerar</button>
-                      <span className="text-xs text-gray-500">Se lee en alto con tono publicitario</span>
+                      <span className="text-xs text-gray-500">Se lee en alto con voz + subtítulos</span>
                     </div>
-                  </div>
+                  </>
                 ) : (
-                  <div className="mt-2 text-xs text-gray-500">Analizando producto y duración para crear guion justo…</div>
+                  <div className="mt-2 text-xs text-gray-500">Creando guion para {(product.title ?? "producto").slice(0, 40)}…</div>
                 )}
               </section>
             )}
