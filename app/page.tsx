@@ -17,24 +17,31 @@ export default function App() {
   const [finalVideo, setFinalVideo] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
-  // EXTREMA OPTIMIZACIÓN DE RAM PARA MÓVILES
+  // LIBERACIÓN DE MEMORIA PREVIA (Si el usuario sube vídeos varias veces)
+  const clearMemory = () => {
+    clips.forEach(clip => URL.revokeObjectURL(clip.url));
+    if (finalVideo) URL.revokeObjectURL(finalVideo);
+  };
+
   const handleUpload = async (files: FileList | null) => {
     if (!files || !files.length) return;
+    
+    clearMemory(); // Vaciamos RAM antes de empezar
+    
     const newClips: VideoClip[] = [];
     let dur = 0;
     
     for (const file of Array.from(files)) {
       const url = URL.createObjectURL(file);
       
-      // Cargamos solo los metadatos y destruimos el elemento para no ocupar RAM
       const videoDur = await new Promise<number>((res) => {
         const v = document.createElement("video");
         v.src = url;
-        v.preload = "metadata"; // Crítico: NO cargar el vídeo entero
+        v.preload = "metadata"; 
         v.playsInline = true;
         v.onloadedmetadata = () => {
           const d = v.duration || 3;
-          v.removeAttribute('src'); // Destrucción inmediata
+          v.src = ""; // Liberación destructiva
           v.load(); 
           res(d);
         };
@@ -59,14 +66,14 @@ export default function App() {
       .replace(/(aliexpress|amazon|shein|temu|tienda|comprar|vendedor|descuento)/gi, "")
       .trim() || "este producto";
 
-    let fullText = `¡Deja de perder el tiempo! Con ${cleanInfo}, todo se hace tres veces más rápido. Solo tienes que aplicarlo y verás cómo elimina cualquier problema sin esfuerzo. ¡Una auténtica locura, pruébalo y notarás la diferencia al instante!`;
+    let fullText = `¡Deja de perder el tiempo! Con ${cleanInfo}, todo se hace tres veces más rápido. Solo tienes que aplicarlo y verás cómo elimina cualquier problema sin esfuerzo. ¡Una locura, pruébalo y nota la diferencia al instante!`;
     
     let words = fullText.split(/\s+/);
     if (words.length > targetWordCount) {
       words = words.slice(0, targetWordCount);
     } else {
       while (words.length < targetWordCount) {
-        words.push("¡Funciona de verdad!");
+        words.push("¡Funciona!");
       }
     }
     return words.join(" ");
@@ -82,7 +89,7 @@ export default function App() {
       let cues: any = [];
 
       if (mode === "voice") {
-        setStatus("Generando guion optimizado...");
+        setStatus("Generando guion (Modo Seguro)...");
         const script = generateScriptLocal(productPrompt, totalDuration);
         
         setStatus("Sintetizando voz y subtítulos...");
@@ -91,7 +98,7 @@ export default function App() {
         cues = tts.cues;
       }
 
-      setStatus("Renderizando píxeles (Modo Ahorro de Memoria)...");
+      setStatus("Renderizando píxeles (qHD)...");
       const url = await renderFinalVideo({
         clips, audioBlob, cues, mode: mode!, targetDuration: totalDuration,
         onProgress: (p) => setProgress(Math.round(p))
@@ -101,16 +108,23 @@ export default function App() {
       setStep(5);
     } catch (e) {
       console.error(e);
-      alert("Error en el renderizado. El navegador abortó el proceso para proteger la memoria del sistema.");
+      alert("Error. Sube vídeos más cortos o cierra otras aplicaciones en tu móvil.");
       setStep(1);
     }
+  };
+
+  const resetAll = () => {
+    clearMemory();
+    setClips([]);
+    setFinalVideo(null);
+    setStep(1);
   };
 
   return (
     <main className="min-h-[100dvh] bg-[#09090b] text-white flex flex-col items-center justify-center p-4 sm:p-6 overflow-x-hidden">
       <div className="w-full max-w-xl text-center mb-6 sm:mb-8 mt-4">
         <div className="inline-block bg-purple-500/10 border border-purple-500/30 text-purple-400 px-3 py-1 rounded-full text-[10px] sm:text-xs font-bold mb-3 sm:mb-4 tracking-widest">
-          TIKTOK AUTOMATOR V5 (ULTRA LITE)
+          TIKTOK AUTOMATOR V6 (ULTRA OOM-SAFE)
         </div>
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent leading-tight">
           Creador Viral
@@ -144,7 +158,7 @@ export default function App() {
               <div className="p-3 sm:p-4 bg-purple-500/10 rounded-full shrink-0"><Mic className="text-purple-400 w-6 h-6" /></div>
               <div className="text-left">
                 <h3 className="font-bold text-base sm:text-lg">Modo Narrador IA</h3>
-                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Voz IA automática + Subtítulos virales.</p>
+                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Voz automática y subtítulos.</p>
               </div>
             </button>
           </div>
@@ -174,7 +188,7 @@ export default function App() {
               <div className="absolute inset-0 border-4 border-zinc-800 border-t-purple-500 rounded-full animate-spin"></div>
               <div className="absolute inset-0 flex items-center justify-center font-bold font-mono text-sm sm:text-base">{progress}%</div>
             </div>
-            <h2 className="text-lg sm:text-xl font-bold text-center">Procesando sin colapsar...</h2>
+            <h2 className="text-lg sm:text-xl font-bold text-center">Procesando ligero...</h2>
             <p className="text-zinc-500 text-xs sm:text-sm mt-2 text-center px-4">{status}</p>
             <div className="w-full h-2 bg-zinc-800 rounded-full mt-6 overflow-hidden">
               <div className="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all" style={{ width: `${progress}%` }}></div>
@@ -188,7 +202,7 @@ export default function App() {
               <video src={finalVideo} controls autoPlay loop playsInline className="w-full h-full object-cover" />
             </div>
             <div className="flex w-full gap-3 sm:gap-4">
-              <button onClick={() => { setStep(1); setClips([]); }} className="flex-1 py-3 sm:py-4 bg-zinc-800 rounded-xl font-bold flex items-center justify-center gap-2 active:bg-zinc-700 text-sm sm:text-base touch-manipulation">
+              <button onClick={resetAll} className="flex-1 py-3 sm:py-4 bg-zinc-800 rounded-xl font-bold flex items-center justify-center gap-2 active:bg-zinc-700 text-sm sm:text-base touch-manipulation">
                 <RefreshCcw className="w-4 h-4 sm:w-5 sm:h-5" /> Otro
               </button>
               <a href={finalVideo} download="tiktok-viral.mp4" className="flex-1 py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl font-bold flex items-center justify-center gap-2 text-sm sm:text-base touch-manipulation">

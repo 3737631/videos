@@ -8,19 +8,22 @@ const INVISIBLE_CSS = "position:fixed;left:-9999px;top:0;width:300px;height:300p
 export async function renderFinalVideo(config: RenderConfig): Promise<string> {
   const { clips, audioBlob, cues, targetDuration, onProgress } = config;
   
-  // Tamaño estandarizado TikTok/Reels que no satura los móviles (720x1280)
-  const width = 720;
-  const height = 1280;
-  const FPS = 30; 
-  const fpsInterval = 1000 / FPS; // Forzamos 30fps máximos
+  // SOLUCIÓN ANTI-CRASH (OOM): Reducimos a 540x960 (qHD). 
+  // Se ve perfecto en TikTok pero usa la MITAD de memoria RAM que 720x1280.
+  const width = 540;
+  const height = 960;
+  // Reducimos a 25 FPS (Formato cine). Ahorra un 15% extra de memoria.
+  const FPS = 25; 
+  const fpsInterval = 1000 / FPS; 
 
   const canvas = document.createElement("canvas");
-  canvas.width = width; canvas.height = height;
+  canvas.width = width; 
+  canvas.height = height;
   canvas.style.cssText = INVISIBLE_CSS;
   document.body.appendChild(canvas);
   
-  // WillReadFrequently optimiza el uso de la memoria gráfica en móviles
-  const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: false })!;
+  // willReadFrequently: true ayuda a los móviles a no saturar la GPU compartida
+  const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: true })!;
 
   const AC = window.AudioContext || (window as any).webkitAudioContext;
   let audioCtx = new AC();
@@ -42,7 +45,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       source.connect(dest);
       source.start(0);
     } catch (e) {
-      console.warn("Audio silenciado por seguridad del sistema.");
+      console.warn("Audio ignorado por falta de memoria.");
     }
   }
 
@@ -52,10 +55,10 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
   
   const mime = IS_APPLE ? "video/mp4" : "video/webm";
   
-  // OPTIMIZACIÓN: Bitrate ajustado a 1.5 Mbps (Calidad perfecta móvil, 0 crasheos)
+  // Bitrate ligero adaptado a la nueva resolución (1.2 Mbps)
   const recorder = new MediaRecorder(combinedStream, { 
     mimeType: mime,
-    videoBitsPerSecond: 1500000 
+    videoBitsPerSecond: 1200000 
   });
   
   const chunks: BlobPart[] = [];
@@ -70,11 +73,11 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
     
     const clipDur = targetDuration / clips.length;
 
-    // Carga Ultra Secuencial
+    // CARGA DESTRUCTIVA: Borra totalmente el rastro del vídeo anterior de la RAM
     const loadVideo = async (index: number) => {
       if (activeVideoEl) {
         activeVideoEl.pause();
-        activeVideoEl.removeAttribute('src');
+        activeVideoEl.src = ""; // Liberación agresiva
         activeVideoEl.load();
         activeVideoEl.remove();
         activeVideoEl = null;
@@ -104,15 +107,18 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       cancelAnimationFrame(frameId);
       tracks.forEach(t => t.stop());
       if (activeVideoEl) {
-        activeVideoEl.removeAttribute('src');
+        activeVideoEl.src = "";
         activeVideoEl.remove();
       }
       canvas.remove();
-      if (chunks.length === 0) reject(new Error("Fallo de memoria"));
+      
+      try { audioCtx.close(); } catch(e){}
+
+      if (chunks.length === 0) reject(new Error("No se obtuvieron fotogramas."));
       resolve(URL.createObjectURL(new Blob(chunks, { type: mime })));
     };
 
-    // OPTIMIZACIÓN DE MEMORIA 2: Trozos de 1000ms (1 segundo) para no colapsar la RAM
+    // Grabamos guardando los trozos cada 1000ms
     recorder.start(1000);
     const start = performance.now();
     
@@ -125,7 +131,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       const now = performance.now();
       const elapsed = (now - start) / 1000;
       
-      // BLOQUEADOR DE FPS: Evita que el móvil dibuje a 120Hz y queme la RAM
       const timeSinceLastDraw = now - lastDrawTime;
       if (timeSinceLastDraw > fpsInterval) {
         lastDrawTime = now - (timeSinceLastDraw % fpsInterval);
@@ -145,7 +150,8 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
           loadVideo(currentClipIdx);
         }
 
-        ctx.clearRect(0, 0, width, height); // Libera memoria gráfica del lienzo
+        // Limpiar el lienzo (fundamental para liberar la VRAM)
+        ctx.clearRect(0, 0, width, height); 
         ctx.fillStyle = "#000000"; 
         ctx.fillRect(0, 0, width, height);
         
@@ -156,15 +162,18 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
           ctx.drawImage(activeVideoEl, (width - dw) / 2, (height - dh) / 2, dw, dh);
         }
 
+        // Subtítulos adaptados a la nueva resolución
         const cue = cues.find(c => elapsed >= c.start && elapsed <= c.end);
         if (cue) {
-          ctx.font = '900 42px "Inter", sans-serif';
-          ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.font = '900 32px "Inter", sans-serif'; // Letra más pequeña para el lienzo más pequeño
+          ctx.textAlign = "center"; 
+          ctx.textBaseline = "middle";
           ctx.lineJoin = "round";
           const txt = cue.text;
           const y = height * 0.75;
           
-          ctx.lineWidth = 8; ctx.strokeStyle = "#000";
+          ctx.lineWidth = 6; 
+          ctx.strokeStyle = "#000";
           ctx.strokeText(txt, width / 2, y);
           ctx.fillStyle = "#FFE600";
           ctx.fillText(txt, width / 2, y);
@@ -176,6 +185,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
     
     frameId = requestAnimationFrame(draw);
     
+    // Watchdog
     setTimeout(() => {
       if (!isFinished) {
         isFinished = true;
