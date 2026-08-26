@@ -29,7 +29,6 @@ export default function App() {
     const newClips: VideoClip[] = [];
     let dur = 0;
     
-    // CREAMOS UN SOLO LECTOR PARA AHORRAR 90% DE RAM
     const lector = document.createElement("video");
     lector.playsInline = true;
     lector.muted = true;
@@ -41,14 +40,14 @@ export default function App() {
       const videoDur = await new Promise<number>((res) => {
         lector.onloadedmetadata = () => res(lector.duration || 3);
         lector.onerror = () => res(3);
-        setTimeout(() => res(3), 1000); // Cortafuegos: Si tarda más de 1s, seguimos.
+        setTimeout(() => res(3), 1000); 
       });
 
       newClips.push({ file, url, duration: videoDur });
       dur += videoDur;
     }
     
-    lector.removeAttribute("src"); // Matamos al lector
+    lector.removeAttribute("src"); 
     lector.load();
 
     setClips(newClips);
@@ -91,13 +90,14 @@ export default function App() {
         setStatus("Generando guion...");
         const script = generateScriptLocal(productPrompt, totalDuration);
         
-        setStatus("Creando voz (Lite)...");
+        setStatus("Creando voz...");
+        // Si este archivo falta o da error, el chivato nos lo dirá
         const tts = await generateSpeechAndCues(script, totalDuration);
         audioBlob = tts.audioBlob;
         cues = tts.cues;
       }
 
-      setStatus("Renderizando Modo Supervivencia...");
+      setStatus("Arrancando el motor gráfico...");
       const url = await renderFinalVideo({
         clips, audioBlob, cues, mode: mode!, targetDuration: totalDuration,
         onProgress: (p) => setProgress(Math.round(p))
@@ -105,10 +105,10 @@ export default function App() {
 
       setFinalVideo(url);
       setStep(5);
-    } catch (e) {
-      // Ahora si falla, te dará el motivo real en la consola, pero ya no debería.
+    } catch (e: any) {
+      // AQUÍ ESTÁ EL CHIVATO: Te mostrará el error real en pantalla
       console.error(e);
-      alert("Error inesperado en tu móvil. Actualiza la página e inténtalo de nuevo.");
+      alert(`DETALLE DEL ERROR: ${e.message || "Error desconocido"}. Hazle captura a esto.`);
       setStep(1);
     }
   };
@@ -124,7 +124,7 @@ export default function App() {
     <main className="min-h-[100dvh] bg-[#09090b] text-white flex flex-col items-center justify-center p-4 sm:p-6 overflow-x-hidden">
       <div className="w-full max-w-xl text-center mb-6 sm:mb-8 mt-4">
         <div className="inline-block bg-purple-500/10 border border-purple-500/30 text-purple-400 px-3 py-1 rounded-full text-[10px] sm:text-xs font-bold mb-3 sm:mb-4 tracking-widest">
-          TIKTOK AUTOMATOR V7 (BULLETPROOF)
+          TIKTOK AUTOMATOR V8 (FALLBACK SEGURO)
         </div>
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent leading-tight">
           Creador Viral
@@ -140,7 +140,7 @@ export default function App() {
               <UploadCloud className="w-8 h-8 sm:w-10 sm:h-10 text-purple-400" />
             </div>
             <h2 className="text-lg sm:text-xl font-bold text-center">Toca para subir vídeos</h2>
-            <p className="text-zinc-500 mt-2 text-xs sm:text-sm text-center">Selecciona clips desde tu galería.</p>
+            <p className="text-zinc-500 mt-2 text-xs sm:text-sm text-center">Selecciona clips (MP4/MOV).</p>
           </div>
         )}
 
@@ -190,9 +190,6 @@ export default function App() {
             </div>
             <h2 className="text-lg sm:text-xl font-bold text-center">Exportando vídeo...</h2>
             <p className="text-zinc-500 text-xs sm:text-sm mt-2 text-center px-4">{status}</p>
-            <div className="w-full h-2 bg-zinc-800 rounded-full mt-6 overflow-hidden">
-              <div className="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all" style={{ width: `${progress}%` }}></div>
-            </div>
           </div>
         )}
 
