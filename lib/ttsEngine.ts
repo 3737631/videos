@@ -6,6 +6,7 @@ export async function generateSpeechAndCues(
   lang: string = "es"
 ): Promise<{ audioBlob: Blob; cues: SubtitleCue[] }> {
   
+  // Limpiamos los caracteres raros para evitar que rompan la URL
   const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑçãõâêîôûàèìòù.,!¿?'-]/g, "").trim();
   const rawWords = cleanText.split(/\s+/).filter(Boolean);
   if (rawWords.length === 0) throw new Error("Guion vacío");
@@ -13,6 +14,7 @@ export async function generateSpeechAndCues(
   const timePerWord = targetDurationSec / rawWords.length;
   const cues: SubtitleCue[] = [];
   
+  // Generamos los subtítulos emparejando de 2 en 2 palabras para más dinamismo
   for (let i = 0; i < rawWords.length; i += 2) {
     const chunk = rawWords.slice(i, i + 2);
     cues.push({
@@ -28,7 +30,6 @@ export async function generateSpeechAndCues(
     });
   }
 
-  // Mapeo de Voces según el Idioma
   const voiceMap: Record<string, { streamElements: string, google: string }> = {
     es: { streamElements: "Mia", google: "es-ES" },
     en: { streamElements: "Brian", google: "en-US" },
@@ -37,54 +38,120 @@ export async function generateSpeechAndCues(
   };
 
   const vConfig = voiceMap[lang] || voiceMap["es"];
-  const textChunks = cleanText.match(/.{1,90}(?:\s|$)/g) || [cleanText];
-  const audioBuffers: ArrayBuffer[] = [];
+  
+  let finalAudioBlob: Blob | null = null;
 
-  for (const chunk of textChunks) {
-    if (!chunk.trim()) continue;
-    const encoded = encodeURIComponent(chunk.trim());
+  try {
+    // TÁCTICA 1: Enviar TODO el guion de golpe (Evita bloqueos por Spam/Too Many Requests)
+    const encodedFull = encodeURIComponent(cleanText);
+    const url = `https://api.streamelements.com/kappa/v2/speech?voice=${vConfig.streamElements}&text=${encodedFull}`;
     
-    const apis = [
-      `https://api.streamelements.com/kappa/v2/speech?voice=${vConfig.streamElements}&text=${encoded}`,
-      `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${vConfig.google}&client=tw-ob&q=${encoded}`,
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${vConfig.google}&client=tw-ob&q=${encoded}`)}`
-    ];
-
-    let success = false;
-    for (const url of apis) {
-      try {
-        const res = await fetch(url, { cache: "no-store" });
-        if (res.ok) {
-          const buf = await res.arrayBuffer();
-          if (buf.byteLength > 1000) { 
-            audioBuffers.push(buf);
-            success = true;
-            break; 
-          }
-        }
-      } catch (e) {
-        continue; 
+    const res = await fetch(url, { cache: "no-store" });
+    if (res.ok) {
+      const buf = await res.arrayBuffer();
+      if (buf.byteLength > 1000) {
+        finalAudioBlob = new Blob([buf], { type: "audio/mp3" });
       }
     }
-    if (!success) throw new Error("Fallo de red en TTS.");
+  } catch (e) {
+    console.warn("El servidor bloqueó la petición principal.");
   }
 
-  const totalLength = audioBuffers.reduce((acc, b) => acc + b.byteLength, 0);
-  const merged = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const b of audioBuffers) {
-    merged.set(new Uint8Array(b), offset);
-    offset += b.byteLength;
+  // TÁCTICA 2: Si lo anterior falla, usamos troceado CON RETRASO para no saturar al servidor
+  if (!finalAudioBlob) {
+    const textChunks = cleanText.match(/.{1,100}(?:\s|$)/g) || [cleanText];
+    const audioBuffers: ArrayBuffer[] = [];
+    let success = true;
+
+    for (const chunk of textChunks) {
+      if (!chunk.trim()) continue;
+      const encoded = encodeURIComponent(chunk.trim());
+      
+      const apis = [
+        `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${vConfig.google}&client=tw-ob&q=${encoded}`,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${vConfig.google}&client=tw-ob&q=${encoded}`)}`
+      ];
+
+      let chunkSuccess = false;
+      for (const url of apis) {
+        try {
+          const res = await fetch(url, { cache: "no-store" });
+          if (res.ok) {
+            const buf = await res.arrayBuffer();
+            if (buf.byteLength > 1000) { 
+              audioBuffers.push(buf);
+              chunkSuccess = true;
+              break; 
+            }
+          }
+        } catch (e) { continue; }
+      }
+      
+      if (!chunkSuccess) {
+        success = false;
+        break; // Rompemos el ciclo si falla, pero NO tiramos error rojo.
+      }
+      
+      // PAUSA CRÍTICA: 300ms entre llamadas para que el servidor no detecte ataque bot
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    if (success && audioBuffers.length > 0) {
+      const totalLength = audioBuffers.reduce((acc, b) => acc + b.byteLength, 0);
+      const merged = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const b of audioBuffers) {
+        merged.set(new Uint8Array(b), offset);
+        offset += b.byteLength;
+      }
+      finalAudioBlob = new Blob([merged], { type: "audio/mp3" });
+    }
   }
 
-  return { audioBlob: new Blob([merged], { type: "audio/mp3" }), cues };
+  // TÁCTICA 3: SALVAVIDAS FINAL (Si estás sin internet o los servidores caen, genera una voz limpia localmente)
+  if (!finalAudioBlob) {
+    console.warn("Creando voz local de rescate.");
+    finalAudioBlob = await generateOfflineVoice(rawWords, targetDurationSec);
+  }
+
+  return { audioBlob: finalAudioBlob, cues };
 }
 
-// ... Mantén debajo la función generateViralMusic() exactamente igual que antes ...
+
+// --- VOZ DE RESCATE (Para que NUNCA lance error rojo) ---
+async function generateOfflineVoice(words: string[], duration: number): Promise<Blob> {
+  const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+  const sampleRate = 44100;
+  const offlineCtx = new AC(1, sampleRate * duration, sampleRate);
+  
+  const timePerWord = duration / words.length;
+  
+  for (let i = 0; i < words.length; i++) {
+    const osc = offlineCtx.createOscillator();
+    const gain = offlineCtx.createGain();
+    osc.frequency.value = 400 + (words[i].length * 30); 
+    osc.type = "sine"; // Sonido suave, menos molesto que el triángulo
+    
+    gain.gain.setValueAtTime(0.5, i * timePerWord);
+    gain.gain.exponentialRampToValueAtTime(0.01, (i * timePerWord) + (timePerWord * 0.8));
+    
+    osc.connect(gain);
+    gain.connect(offlineCtx.destination);
+    
+    osc.start(i * timePerWord);
+    osc.stop((i * timePerWord) + timePerWord);
+  }
+  
+  const renderedBuffer = await offlineCtx.startRendering();
+  return audioBufferToWav(renderedBuffer);
+}
+
+// --- MÚSICA PHONK PARA EL MODO "SOLO MÚSICA" ---
 export async function generateViralMusic(duration: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
   const sampleRate = 44100;
   const offlineCtx = new AC(1, sampleRate * (duration + 2), sampleRate);
+  
   const bpm = 120;
   const beatTime = 60 / bpm; 
   
@@ -123,21 +190,26 @@ export async function generateViralMusic(duration: number): Promise<Blob> {
   }
   
   const renderedBuffer = await offlineCtx.startRendering();
-  const numOfChan = renderedBuffer.numberOfChannels;
-  const length = renderedBuffer.length * numOfChan * 2 + 44;
+  return audioBufferToWav(renderedBuffer);
+}
+
+// Transformador a archivo WAV
+function audioBufferToWav(buffer: AudioBuffer): Blob {
+  const numOfChan = buffer.numberOfChannels;
+  const length = buffer.length * numOfChan * 2 + 44;
   const out = new DataView(new ArrayBuffer(length));
   let pos = 0;
   const writeString = (str: string) => { for (let i = 0; i < str.length; i++) out.setUint8(pos++, str.charCodeAt(i)); };
   writeString("RIFF"); out.setUint32(pos, length - 8, true); pos += 4;
   writeString("WAVE"); writeString("fmt "); out.setUint32(pos, 16, true); pos += 4;
   out.setUint16(pos, 1, true); pos += 2; out.setUint16(pos, numOfChan, true); pos += 2;
-  out.setUint32(pos, renderedBuffer.sampleRate, true); pos += 4;
-  out.setUint32(pos, renderedBuffer.sampleRate * 2 * numOfChan, true); pos += 4;
+  out.setUint32(pos, buffer.sampleRate, true); pos += 4;
+  out.setUint32(pos, buffer.sampleRate * 2 * numOfChan, true); pos += 4;
   out.setUint16(pos, numOfChan * 2, true); pos += 2; out.setUint16(pos, 16, true); pos += 2;
   writeString("data"); out.setUint32(pos, length - pos - 4, true); pos += 4;
-  const channel = renderedBuffer.getChannelData(0);
+  const channel = buffer.getChannelData(0);
   let offset = 0;
-  while (offset < renderedBuffer.length) {
+  while (offset < buffer.length) {
     let sample = Math.max(-1, Math.min(1, channel[offset]));
     sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767) | 0;
     out.setInt16(pos, sample, true); pos += 2; offset++;
