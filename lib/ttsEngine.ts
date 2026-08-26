@@ -27,35 +27,67 @@ export async function generateSpeechAndCues(
     });
   }
 
-  // TROCEADOR DE TEXTO (Para que las APIs no lo bloqueen por ser muy largo)
+  // Troceamos el guion en partes pequeñas de 150 caracteres para burlar todos los límites
   const textChunks = cleanText.match(/.{1,150}(?:\s|$)/g) || [cleanText];
   const audioBuffers: ArrayBuffer[] = [];
 
   for (const chunk of textChunks) {
     if (!chunk.trim()) continue;
-    try {
-      // INTENTO 1: Amazon Polly (Voz de mujer "Mia")
-      let res = await fetch(`https://api.streamelements.com/kappa/v2/speech?voice=Mia&text=${encodeURIComponent(chunk.trim())}`);
-      
-      if (!res.ok) {
-        // INTENTO 2 (FALLBACK ANTI-BLOQUEO): API oculta de Google Translate
-        res = await fetch(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=es-ES&client=gtx&q=${encodeURIComponent(chunk.trim())}`);
+    
+    const t = encodeURIComponent(chunk.trim());
+    let chunkBuffer: ArrayBuffer | null = null;
+
+    // SISTEMA "HYDRA" DE 4 CAPAS ANTI-ADBLOCK
+    // Si una falla, salta a la siguiente inmediatamente
+    const attempts = [
+      // INTENTO 1: Usar el Backend propio (100% Inmune a AdBlockers)
+      async () => {
+        const r = await fetch('/api/tts', { 
+            method: 'POST', 
+            body: JSON.stringify({ text: chunk.trim(), lang: 'es-ES' }),
+            headers: { 'Content-Type': 'application/json' }
+        });
+        if (!r.ok) throw new Error();
+        return await r.arrayBuffer();
+      },
+      // INTENTO 2: Amazon Polly vía StreamElements (Voz Femenina "Mia")
+      async () => {
+        const r = await fetch(`https://api.streamelements.com/kappa/v2/speech?voice=Mia&text=${t}`);
+        if (!r.ok) throw new Error();
+        return await r.arrayBuffer();
+      },
+      // INTENTO 3: Conexión directa a Google TTS
+      async () => {
+        const r = await fetch(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=es-ES&client=tw-ob&q=${t}`);
+        if (!r.ok) throw new Error();
+        return await r.arrayBuffer();
+      },
+      // INTENTO 4: Proxy público CORS (Si el navegador prohíbe Google y StreamElements)
+      async () => {
+        const googleUrl = `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=es-ES&client=tw-ob&q=${t}`;
+        const r = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(googleUrl)}`);
+        if (!r.ok) throw new Error();
+        return await r.arrayBuffer();
       }
-      
-      if (res.ok) {
-        audioBuffers.push(await res.arrayBuffer());
+    ];
+
+    for (const tryFetch of attempts) {
+      try {
+        chunkBuffer = await tryFetch();
+        break; // Si consigue el audio, sale del bucle de intentos con éxito
+      } catch (e) {
+        continue; // Si el AdBlock lo bloqueó, pasa silenciosamente al siguiente
       }
-    } catch (e) {
-      console.warn("Fallo al descargar un fragmento de voz.");
+    }
+
+    if (chunkBuffer) {
+      audioBuffers.push(chunkBuffer);
+    } else {
+      throw new Error("Imposible obtener voz. Revisa tu conexión a internet.");
     }
   }
 
-  // SI FALLAN TODAS LAS REDES (Cero internet o adblocker extremo)
-  if (audioBuffers.length === 0) {
-    // Genera una voz robótica que simula hablar, NUNCA MÚSICA.
-    return { audioBlob: await generateRoboticVoice(rawWords, targetDurationSec), cues };
-  }
-
+  // Unimos todos los trozos humanos obtenidos
   const totalLength = audioBuffers.reduce((acc, b) => acc + b.byteLength, 0);
   const merged = new Uint8Array(totalLength);
   let offset = 0;
@@ -67,38 +99,8 @@ export async function generateSpeechAndCues(
   return { audioBlob: new Blob([merged], { type: "audio/mp3" }), cues };
 }
 
-// VOZ DE EMERGENCIA (Robot) - Solo se activa si falla el internet
-async function generateRoboticVoice(words: string[], duration: number): Promise<Blob> {
-  const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
-  const sampleRate = 44100;
-  const offlineCtx = new AC(1, sampleRate * duration, sampleRate);
-  
-  const timePerWord = duration / words.length;
-  
-  for (let i = 0; i < words.length; i++) {
-    const word = words[i];
-    const osc = offlineCtx.createOscillator();
-    const gain = offlineCtx.createGain();
-    
-    // Calcula la frecuencia basándose en cuántas letras tiene la palabra
-    osc.frequency.value = 300 + (word.length * 40);
-    osc.type = "triangle";
-    
-    gain.gain.setValueAtTime(0.4, i * timePerWord);
-    gain.gain.exponentialRampToValueAtTime(0.01, (i * timePerWord) + (timePerWord * 0.8));
-    
-    osc.connect(gain);
-    gain.connect(offlineCtx.destination);
-    
-    osc.start(i * timePerWord);
-    osc.stop((i * timePerWord) + timePerWord);
-  }
-  
-  const renderedBuffer = await offlineCtx.startRendering();
-  return audioBufferToWav(renderedBuffer);
-}
 
-// MÚSICA VIRAL - Ahora EXCLUSIVA del modo "Solo Música"
+// --- MANTENEMOS LA MÚSICA LO-FI PARA EL MODO "SOLO MÚSICA" ---
 export async function generateViralMusic(duration: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
   const sampleRate = 44100;
@@ -145,43 +147,26 @@ export async function generateViralMusic(duration: number): Promise<Blob> {
   }
   
   const renderedBuffer = await offlineCtx.startRendering();
-  return audioBufferToWav(renderedBuffer);
-}
-
-// Transformador de Audio
-function audioBufferToWav(buffer: AudioBuffer): Blob {
-  const numOfChan = buffer.numberOfChannels;
-  const length = buffer.length * numOfChan * 2 + 44;
+  
+  // Transformador WAV
+  const numOfChan = renderedBuffer.numberOfChannels;
+  const length = renderedBuffer.length * numOfChan * 2 + 44;
   const out = new DataView(new ArrayBuffer(length));
   let pos = 0;
-
-  const writeString = (str: string) => {
-    for (let i = 0; i < str.length; i++) out.setUint8(pos++, str.charCodeAt(i));
-  };
-
-  writeString("RIFF");
-  out.setUint32(pos, length - 8, true); pos += 4;
-  writeString("WAVE");
-  writeString("fmt ");
-  out.setUint32(pos, 16, true); pos += 4;
-  out.setUint16(pos, 1, true); pos += 2;
-  out.setUint16(pos, numOfChan, true); pos += 2;
-  out.setUint32(pos, buffer.sampleRate, true); pos += 4;
-  out.setUint32(pos, buffer.sampleRate * 2 * numOfChan, true); pos += 4;
-  out.setUint16(pos, numOfChan * 2, true); pos += 2;
-  out.setUint16(pos, 16, true); pos += 2;
-  writeString("data");
-  out.setUint32(pos, length - pos - 4, true); pos += 4;
-
-  const channel = buffer.getChannelData(0);
+  const writeString = (str: string) => { for (let i = 0; i < str.length; i++) out.setUint8(pos++, str.charCodeAt(i)); };
+  writeString("RIFF"); out.setUint32(pos, length - 8, true); pos += 4;
+  writeString("WAVE"); writeString("fmt "); out.setUint32(pos, 16, true); pos += 4;
+  out.setUint16(pos, 1, true); pos += 2; out.setUint16(pos, numOfChan, true); pos += 2;
+  out.setUint32(pos, renderedBuffer.sampleRate, true); pos += 4;
+  out.setUint32(pos, renderedBuffer.sampleRate * 2 * numOfChan, true); pos += 4;
+  out.setUint16(pos, numOfChan * 2, true); pos += 2; out.setUint16(pos, 16, true); pos += 2;
+  writeString("data"); out.setUint32(pos, length - pos - 4, true); pos += 4;
+  const channel = renderedBuffer.getChannelData(0);
   let offset = 0;
-  while (offset < buffer.length) {
+  while (offset < renderedBuffer.length) {
     let sample = Math.max(-1, Math.min(1, channel[offset]));
     sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767) | 0;
-    out.setInt16(pos, sample, true);
-    pos += 2;
-    offset++;
+    out.setInt16(pos, sample, true); pos += 2; offset++;
   }
-
   return new Blob([out], { type: "audio/wav" });
 }
