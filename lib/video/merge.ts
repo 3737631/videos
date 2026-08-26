@@ -1,7 +1,8 @@
 /**
- * UNE varios vídeos subidos en uno solo (reproducción secuencial + audio
- * original). El resultado se trata como un vídeo único: el detector de momentos
+ * UNE varios vídeos subidos en uno solo (reproducción secuencial).
+ * El resultado se trata como un vídeo único: el detector de momentos
  * virales ya elige los mejores tramos sobre la línea de tiempo unida.
+ * Siempre sin audio original (voz+música generadas después).
  */
 function pickMime(): { mime: string; ext: string } {
   const candidates: Array<[string, string]> = [
@@ -40,7 +41,7 @@ export async function mergeVideos(
   opts: { signal?: AbortSignal; width?: number; height?: number } = {}
 ): Promise<Blob> {
   if (blobs.length === 0) throw new Error("No hay vídeos");
-  // Siempre pasamos por canvas para quitar audio original (petición usuario: siempre sin audio)
+  // Siempre pasamos por canvas para quitar audio original (voz+música se generan después)
   const width = opts.width ?? 720;
   const height = opts.height ?? 1280;
   if (typeof document === "undefined") return blobs[0];
@@ -51,7 +52,7 @@ export async function mergeVideos(
   const g = canvas.getContext("2d", { alpha: false });
   if (!g) return blobs[0];
 
-  // Siempre sin audio original (petición usuario: quitar audios de videos subidos)
+  // Siempre sin audio original — solo vídeo, audio se mezcla después con voz IA
   const vStream = canvas.captureStream(30);
   const tracks: MediaStreamTrack[] = [...vStream.getVideoTracks()];
   const stream = new MediaStream(tracks);
@@ -85,7 +86,8 @@ export async function mergeVideos(
       video.defaultMuted = true;
       video.playsInline = true;
       video.preload = "auto";
-      video.style.cssText = "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none;z-index:-1;";
+      // iOS: 16px evita throttling de rAF (2px se quedaba pillado) — igual que canvasRender
+      video.style.cssText = "position:fixed;left:0;top:0;width:16px;height:16px;opacity:0.01;pointer-events:none;z-index:-1;";
       document.body.appendChild(video);
 
       await new Promise<void>((res, rej) => {

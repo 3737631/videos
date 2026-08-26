@@ -165,16 +165,25 @@ export function generateScript(opts: {
 
   const P = opts.product ?? {};
   // Si el producto es un limpiador, aerógrafo, etc. inyectamos su función real en el guion
-  // usando features del producto (lo que hace), nunca inventamos.
+  // usando features del producto (lo que hace), nunca inventamos. Copia local para no mutar global.
+  const localEs = {
+    hook: [...es_.hook] as Tpl<string>,
+    problema: [...es_.problema] as Tpl<string>,
+    beneficio: [...es_.beneficio] as Tpl<string>,
+    demostracion: [...es_.demostracion] as Tpl<string>,
+    prueba: [...es_.prueba] as Tpl<string>,
+    oferta: [...es_.oferta] as Tpl<string>,
+    cta: [...es_.cta] as Tpl<string>,
+  };
   const hasFeatures = (P.features?.length ?? 0) > 0;
   if (hasFeatures) {
-    // Primera feature describe qué hace el producto -> la metemos como beneficio tangible
     const feat = sanitizeTitle(P.features![0]).slice(0, 90);
-    const featText = `${feat.charAt(0).toUpperCase() + feat.slice(1)}.`;
-    // Sobrescribe beneficio con feature real si existe
-    (es_.beneficio as unknown as Array<(p: ProductSeed) => string>).unshift(() => featText);
+    if (feat) {
+      const featText = `${feat.charAt(0).toUpperCase() + feat.slice(1)}.`;
+      localEs.beneficio.unshift(() => featText);
+    }
   }
-  const sections: Array<{ key: keyof typeof es_; weight: number }> = [
+  const sections: Array<{ key: keyof typeof localEs; weight: number }> = [
     { key: "hook", weight: 0.16 },
     { key: "problema", weight: 0.16 },
     { key: "beneficio", weight: 0.2 },
@@ -186,15 +195,15 @@ export function generateScript(opts: {
 
   const chosen: string[] = [];
   for (const sec of sections) {
-    chosen.push(pick(es_[sec.key] as unknown as Tpl<string>)(P));
+    chosen.push(pick(localEs[sec.key] as unknown as Tpl<string>)(P));
   }
 
   // Relleno con variantes hasta el presupuesto
-  const fillerKeys: Array<keyof typeof es_> = ["beneficio", "demostracion", "problema"];
+  const fillerKeys: Array<keyof typeof localEs> = ["beneficio", "demostracion", "problema"];
   let guard = 24;
   while (countWords(chosen.join(" ")) < targetWords - 6 && guard-- > 0) {
     const key = fillerKeys[chosen.length % fillerKeys.length];
-    const cand = pick(es_[key] as unknown as Tpl<string>)(P);
+    const cand = pick(localEs[key] as unknown as Tpl<string>)(P);
     if (!chosen.includes(cand)) chosen.push(cand);
     else break;
   }
