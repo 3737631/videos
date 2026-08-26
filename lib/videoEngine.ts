@@ -1,6 +1,5 @@
 import { RenderConfig, SubtitleCue } from "@/types";
 
-// CSS corregido: Oculto fuera de pantalla, pero con tamaño real para que la gráfica no lo descarte.
 const INVISIBLE_CSS = "position:fixed;top:0;left:-9999px;width:270px;height:480px;z-index:-100;pointer-events:none;";
 
 export async function renderFinalVideo(config: RenderConfig): Promise<string> {
@@ -8,25 +7,22 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
   
   const width = 270;
   const height = 480;
-  const FPS = 15; // Ligeramente subido para mayor fluidez, pero sigue siendo ultra ligero
+  const FPS = 15; 
   const frameTime = 1000 / FPS;
 
   const canvas = document.createElement("canvas");
-  canvas.width = width; 
-  canvas.height = height;
+  canvas.width = width; canvas.height = height;
   canvas.style.cssText = INVISIBLE_CSS;
   document.body.appendChild(canvas);
   
   const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
   if (!ctx) throw new Error("Tu navegador no permite gráficos 2D.");
 
-  // Forzamos un fotograma inicial para que el grabador de vídeo se "despierte"
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, width, height);
 
   let dest: MediaStreamAudioDestinationNode | null = null;
   let audioCtx: AudioContext | null = null;
-  let isAudioAlive = false;
 
   try {
     const AC = window.AudioContext || (window as any).webkitAudioContext;
@@ -34,15 +30,12 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       audioCtx = new AC();
       dest = audioCtx.createMediaStreamDestination();
       
-      if (audioCtx.state === "suspended") {
-        await audioCtx.resume();
-      }
+      if (audioCtx.state === "suspended") await audioCtx.resume();
 
-      // EL "MARCAPASOS" DE AUDIO: Mantiene el canal activo reproduciendo silencio absoluto.
-      // Evita que el MediaRecorder se quede esperando sonido y devuelva 0 fotogramas.
+      // Inyectamos un sonido "fantasma" mínimo para asegurar que la pista graba
       const osc = audioCtx.createOscillator();
       const silentGain = audioCtx.createGain();
-      silentGain.gain.value = 0; // Silencio total
+      silentGain.gain.value = 0.01; 
       osc.connect(silentGain);
       silentGain.connect(dest);
       osc.start();
@@ -50,29 +43,22 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       if (audioBlob) {
         const ab = await audioBlob.arrayBuffer();
         const decoded = await audioCtx.decodeAudioData(ab);
-        const src = audioCtx.createBufferSource();
-        src.buffer = decoded;
-        src.connect(dest);
-        src.start(0);
-      }
-      
-      // Solo consideramos el audio vivo si el estado es realmente "running"
-      if (audioCtx.state === "running") {
-        isAudioAlive = true;
+        const source = audioCtx.createBufferSource();
+        source.buffer = decoded;
+        source.connect(dest);
+        source.start(0);
       }
     }
   } catch (e) {
-    console.warn("Módulo de Audio bloqueado o sin permisos. El vídeo se generará sin la pista de audio para evitar cuelgues.");
+    console.warn("Error inicializando AudioContext:", e);
   }
 
   const captureStreamFunc = canvas.captureStream || (canvas as any).mozCaptureStream || (canvas as any).webkitCaptureStream;
-  if (!captureStreamFunc) throw new Error("Tu navegador no soporta captura de Canvas.");
-  
   const canvasStream = captureStreamFunc.call(canvas, FPS);
   const tracks = [...canvasStream.getVideoTracks()];
   
-  // INYECCIÓN CONDICIONAL: Solo añadimos el audio si estamos 100% seguros de que está enviando señal.
-  if (dest && isAudioAlive) {
+  // OBLIGAMOS a añadir el audio siempre (hemos quitado la restricción que lo borraba)
+  if (dest) {
     tracks.push(...dest.stream.getAudioTracks());
   }
   
@@ -97,7 +83,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
   }
   
   const chunks: BlobPart[] = [];
-  // Recogemos los pedazos con comprobación de que realmente traen datos
   recorder.ondataavailable = e => { 
     if (e.data && e.data.size > 0) chunks.push(e.data); 
   };
@@ -122,7 +107,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       try { audioCtx?.close(); } catch(e){}
 
       if (chunks.length === 0) {
-        reject(new Error("No se procesó ningún fotograma de vídeo (A/V Sync Crash). Tu navegador bloqueó la captura de imágenes."));
+        reject(new Error("No se procesó ningún fotograma de vídeo."));
       } else {
         resolve(URL.createObjectURL(new Blob(chunks, { type: mime || "video/mp4" })));
       }
@@ -131,15 +116,13 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
     const stopRecording = () => {
       if (isFinished) return;
       isFinished = true;
-      
       try {
         if (recorder.state !== "inactive") {
           try { recorder.requestData(); } catch(e){} 
           try { recorder.stop(); } catch(e){}
         }
       } catch(e){}
-      
-      setTimeout(finalize, 1000); // Failsafe para dar tiempo a recoger el último trozo
+      setTimeout(finalize, 1000); 
     };
 
     const loadVideo = async (index: number) => {
@@ -170,7 +153,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
     recorder.onstop = finalize;
     recorder.onerror = () => reject(new Error("La grabación colapsó internamente."));
 
-    // Reducimos el tiempo de captura a 250ms para asegurar que nos entrega fotogramas rápido
     recorder.start(250); 
     const start = performance.now();
     await loadVideo(0);
@@ -223,7 +205,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
     };
     
     drawLoop();
-    
     setTimeout(stopRecording, (targetDuration + 2) * 1000);
   });
 }
