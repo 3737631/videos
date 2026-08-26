@@ -42,10 +42,17 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       if (audioBlob) {
         const ab = await audioBlob.arrayBuffer();
         const decoded = await audioCtx.decodeAudioData(ab);
-        const src = audioCtx.createBufferSource();
-        src.buffer = decoded;
-        src.connect(dest);
-        src.start(0);
+        const source = audioCtx.createBufferSource();
+        source.buffer = decoded;
+        
+        // HACK VIRAL TIKTOK: ACELERACIÓN DE VOZ
+        // Calculamos cuánto tarda la voz originalmente vs cuánto dura tu vídeo.
+        // Aceleramos la voz automáticamente para que suene dinámica y encaje perfecta.
+        const speedRatio = decoded.duration / targetDuration;
+        source.playbackRate.value = speedRatio; // Fuerza la velocidad
+
+        source.connect(dest);
+        source.start(0);
       }
       if (audioCtx.state === "running") isAudioAlive = true;
     }
@@ -86,7 +93,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
     let currentClipIdx = -1;
     let activeVideo: HTMLVideoElement | null = null;
     
-    // CALCULAR TIEMPOS DE INICIO PARA CADA CORTE
     const clipStartTimes: number[] = [];
     let acc = 0;
     for (const c of clips) {
@@ -133,7 +139,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
 
       activeVideo = document.createElement("video");
       activeVideo.src = clips[index].url;
-      activeVideo.currentTime = clips[index].startOffset; // MAGIA: EMPIEZA EN EL MOMENTO VIRAL
+      activeVideo.currentTime = clips[index].startOffset; 
       activeVideo.muted = true;
       activeVideo.playsInline = true;
       activeVideo.style.cssText = INVISIBLE_CSS;
@@ -145,7 +151,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         setTimeout(res, 500); 
       });
       
-      // Asegurarse de que el tiempo se aplicó correctamente tras la carga
       if (activeVideo) activeVideo.currentTime = clips[index].startOffset;
       activeVideo?.play().catch(()=>{});
     };
@@ -169,7 +174,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         return;
       }
 
-      // Averiguar qué corte toca reproducir ahora
       let activeIdx = clipStartTimes.findIndex((time, i) => {
         const nextTime = clipStartTimes[i + 1] || targetDuration + 1;
         return elapsed >= time && elapsed < nextTime;
