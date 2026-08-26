@@ -196,7 +196,7 @@ export default function CrearPage() {
       setProductNote("Nombre del enlace listo — enriqueciendo datos…");
       setLoadedUrl(raw);
     } else if (isAliHost) {
-      const genericTitle = "Producto AliExpress";
+      const genericTitle = "este producto";
       const instant: ProductInfo = {
         url: raw,
         itemId: parsed?.itemId ?? null,
@@ -229,7 +229,7 @@ export default function CrearPage() {
         else if (!res.info.title) setProductNote("Falta el nombre. Escríbelo abajo.");
         else setProductNote("");
       } else if (!slug) {
-        const genericTitle = res.info.title || "Producto AliExpress";
+        const genericTitle = res.info.title || "este producto";
         const genericInfo: ProductInfo = { ...res.info, title: genericTitle };
         setProduct(genericInfo);
         setManualName(genericTitle);
@@ -238,7 +238,7 @@ export default function CrearPage() {
       }
     } catch {
       if (!slug) {
-        const genericTitle = "Producto AliExpress";
+        const genericTitle = "este producto";
         const genericInfo: ProductInfo = {
           url: raw,
           itemId: parsed?.itemId ?? null,
@@ -292,16 +292,16 @@ export default function CrearPage() {
     setRecommended(adStyle);
   }, [videoDuration, lang, productTitle, product]);
 
-  // Auto-guion: al dar a Buscar, muestra guion abajo al instante (sin esperar vídeo) con duración estimada
+  // Auto-guion: espera a tener producto Y duración real del vídeo para crear guion justo (ideal TikTok) sin mencionar AliExpress
   useEffect(() => {
-    if (!productTitle || phase !== "setup" || mode === "music") return;
+    if (!productTitle || !videoDuration || phase !== "setup" || mode === "music") return;
     if (scriptEdited) return;
-    const isGeneric = /Producto AliExpress/i.test(script);
+    const isGeneric = /Producto AliExpress|este producto/i.test(script);
     const isNewRealProduct = productTitle && !script.includes(productTitle.slice(0, 8)) && isGeneric;
     if (!script.trim() || isNewRealProduct) {
       buildScript();
     }
-  }, [productTitle, phase, mode, script, scriptEdited, buildScript]);
+  }, [productTitle, videoDuration, phase, mode, script, scriptEdited, buildScript]);
 
   const aliOk = !!(parseAliUrl(url.trim()) || extractAliNameFromUrl(url.trim()) || /aliexpress|ali\.express/i.test(url.trim())) && !!productTitle;
   // En "solo música" el enlace de producto NO es necesario (el guion va vacío
