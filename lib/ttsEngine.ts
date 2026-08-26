@@ -5,13 +5,15 @@ export async function generateSpeechAndCues(
   targetDurationSec: number
 ): Promise<{ audioBlob: Blob; cues: SubtitleCue[] }> {
   
-  const cleanText = text.replace(/[*#_~]/g, "").trim();
+  // 1. Limpieza extrema del texto para que no haya caracteres que rompan la red
+  const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ.,!¿? ]/g, "").trim();
   const rawWords = cleanText.split(/\s+/).filter(Boolean);
   if (rawWords.length === 0) throw new Error("Guion vacío");
 
   const timePerWord = targetDurationSec / rawWords.length;
   const cues: SubtitleCue[] = [];
   
+  // 2. Sincronización de los subtítulos en pantalla
   for (let i = 0; i < rawWords.length; i += 3) {
     const chunk = rawWords.slice(i, i + 3);
     cues.push({
@@ -27,67 +29,49 @@ export async function generateSpeechAndCues(
     });
   }
 
-  // Troceamos el guion en partes pequeñas de 150 caracteres para burlar todos los límites
-  const textChunks = cleanText.match(/.{1,150}(?:\s|$)/g) || [cleanText];
+  // 3. Troceamos el guion en frases muy cortas para que se descarguen rapidísimo
+  const textChunks = cleanText.match(/.{1,90}(?:\s|$)/g) || [cleanText];
   const audioBuffers: ArrayBuffer[] = [];
 
   for (const chunk of textChunks) {
     if (!chunk.trim()) continue;
+    const encoded = encodeURIComponent(chunk.trim());
     
-    const t = encodeURIComponent(chunk.trim());
-    let chunkBuffer: ArrayBuffer | null = null;
-
-    // SISTEMA "HYDRA" DE 4 CAPAS ANTI-ADBLOCK
-    // Si una falla, salta a la siguiente inmediatamente
-    const attempts = [
-      // INTENTO 1: Usar el Backend propio (100% Inmune a AdBlockers)
-      async () => {
-        const r = await fetch('/api/tts', { 
-            method: 'POST', 
-            body: JSON.stringify({ text: chunk.trim(), lang: 'es-ES' }),
-            headers: { 'Content-Type': 'application/json' }
-        });
-        if (!r.ok) throw new Error();
-        return await r.arrayBuffer();
-      },
-      // INTENTO 2: Amazon Polly vía StreamElements (Voz Femenina "Mia")
-      async () => {
-        const r = await fetch(`https://api.streamelements.com/kappa/v2/speech?voice=Mia&text=${t}`);
-        if (!r.ok) throw new Error();
-        return await r.arrayBuffer();
-      },
-      // INTENTO 3: Conexión directa a Google TTS
-      async () => {
-        const r = await fetch(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=es-ES&client=tw-ob&q=${t}`);
-        if (!r.ok) throw new Error();
-        return await r.arrayBuffer();
-      },
-      // INTENTO 4: Proxy público CORS (Si el navegador prohíbe Google y StreamElements)
-      async () => {
-        const googleUrl = `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=es-ES&client=tw-ob&q=${t}`;
-        const r = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(googleUrl)}`);
-        if (!r.ok) throw new Error();
-        return await r.arrayBuffer();
-      }
+    // SISTEMA "DIOS": 6 Servidores diferentes. 
+    // Si un AdBlocker bloquea uno, el sistema usa el siguiente de forma invisible.
+    const apis = [
+      `https://api.streamelements.com/kappa/v2/speech?voice=Mia&text=${encoded}`, // Servidor 1 (Amazon Polly)
+      `https://texttospeech.responsivevoice.org/v1/text:synthesize?text=${encoded}&lang=es&engine=g3&name=&pitch=0.5&rate=0.5&vol=1&gender=female`, // Servidor 2 (ResponsiveVoice)
+      `https://api.streamelements.com/kappa/v2/speech?voice=Conchita&text=${encoded}`, // Servidor 3 (Respaldo Amazon)
+      `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=es-ES&client=tw-ob&q=${encoded}`, // Servidor 4 (Google Cloud Proxy A)
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=es-ES&client=tw-ob&q=${encoded}`)}`, // Servidor 5 (Google Cloud Proxy B)
+      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=es-ES&client=tw-ob&q=${encoded}`)}` // Servidor 6 (Google Cloud Proxy C)
     ];
 
-    for (const tryFetch of attempts) {
+    let success = false;
+    
+    for (const url of apis) {
       try {
-        chunkBuffer = await tryFetch();
-        break; // Si consigue el audio, sale del bucle de intentos con éxito
+        const res = await fetch(url, { cache: "no-store" });
+        if (res.ok) {
+          const buf = await res.arrayBuffer();
+          if (buf.byteLength > 1000) { // Confirmamos que el archivo de audio es real y no un error vacío
+            audioBuffers.push(buf);
+            success = true;
+            break; // ¡Exito! Salimos de la búsqueda y pasamos a la siguiente frase.
+          }
+        }
       } catch (e) {
-        continue; // Si el AdBlock lo bloqueó, pasa silenciosamente al siguiente
+        continue; // El navegador cortó la conexión. No pasa nada, saltamos al siguiente servidor en 0.01s.
       }
     }
 
-    if (chunkBuffer) {
-      audioBuffers.push(chunkBuffer);
-    } else {
-      throw new Error("Imposible obtener voz. Revisa tu conexión a internet.");
+    if (!success) {
+      throw new Error("Tus bloqueadores de anuncios están cortando el internet. Desactiva el AdBlocker o el escudo de Brave para esta página.");
     }
   }
 
-  // Unimos todos los trozos humanos obtenidos
+  // 4. Cosemos todos los audios descargados en un solo archivo MP3 maestro
   const totalLength = audioBuffers.reduce((acc, b) => acc + b.byteLength, 0);
   const merged = new Uint8Array(totalLength);
   let offset = 0;
@@ -100,7 +84,7 @@ export async function generateSpeechAndCues(
 }
 
 
-// --- MANTENEMOS LA MÚSICA LO-FI PARA EL MODO "SOLO MÚSICA" ---
+// MANTENEMOS LA MÚSICA PHONK PARA EL MODO "SOLO MÚSICA"
 export async function generateViralMusic(duration: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
   const sampleRate = 44100;
@@ -110,6 +94,7 @@ export async function generateViralMusic(duration: number): Promise<Blob> {
   const beatTime = 60 / bpm; 
   
   for (let i = 0; i < duration + 2; i += beatTime) {
+    // Batería Electrónica
     const kick = offlineCtx.createOscillator();
     const kickGain = offlineCtx.createGain();
     kick.frequency.setValueAtTime(150, i);
@@ -121,6 +106,7 @@ export async function generateViralMusic(duration: number): Promise<Blob> {
     kick.start(i);
     kick.stop(i + 0.5);
     
+    // Platillos
     if (i + beatTime / 2 < duration + 2) {
       const hat = offlineCtx.createOscillator();
       const hatGain = offlineCtx.createGain();
@@ -134,6 +120,7 @@ export async function generateViralMusic(duration: number): Promise<Blob> {
       hat.stop(i + beatTime / 2 + 0.1);
     }
     
+    // Bajo
     const bass = offlineCtx.createOscillator();
     const bassGain = offlineCtx.createGain();
     bass.type = "triangle";
@@ -148,7 +135,7 @@ export async function generateViralMusic(duration: number): Promise<Blob> {
   
   const renderedBuffer = await offlineCtx.startRendering();
   
-  // Transformador WAV
+  // Transformador a WAV
   const numOfChan = renderedBuffer.numberOfChannels;
   const length = renderedBuffer.length * numOfChan * 2 + 44;
   const out = new DataView(new ArrayBuffer(length));
