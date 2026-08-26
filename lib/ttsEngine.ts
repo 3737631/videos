@@ -2,17 +2,17 @@ import { SubtitleCue } from "@/types";
 
 export async function generateSpeechAndCues(
   text: string,
-  targetDurationSec: number
+  targetDurationSec: number,
+  lang: string = "es"
 ): Promise<{ audioBlob: Blob; cues: SubtitleCue[] }> {
   
-  const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ.,!¿? ]/g, "").trim();
+  const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑçãõâêîôûàèìòù.,!¿?'-]/g, "").trim();
   const rawWords = cleanText.split(/\s+/).filter(Boolean);
   if (rawWords.length === 0) throw new Error("Guion vacío");
 
   const timePerWord = targetDurationSec / rawWords.length;
   const cues: SubtitleCue[] = [];
   
-  // AHORA AGRUPA DE 2 EN 2 (Más rápido y dinámico para TikTok)
   for (let i = 0; i < rawWords.length; i += 2) {
     const chunk = rawWords.slice(i, i + 2);
     cues.push({
@@ -28,6 +28,15 @@ export async function generateSpeechAndCues(
     });
   }
 
+  // Mapeo de Voces según el Idioma
+  const voiceMap: Record<string, { streamElements: string, google: string }> = {
+    es: { streamElements: "Mia", google: "es-ES" },
+    en: { streamElements: "Brian", google: "en-US" },
+    pt: { streamElements: "Vitoria", google: "pt-BR" },
+    fr: { streamElements: "Celine", google: "fr-FR" }
+  };
+
+  const vConfig = voiceMap[lang] || voiceMap["es"];
   const textChunks = cleanText.match(/.{1,90}(?:\s|$)/g) || [cleanText];
   const audioBuffers: ArrayBuffer[] = [];
 
@@ -36,10 +45,9 @@ export async function generateSpeechAndCues(
     const encoded = encodeURIComponent(chunk.trim());
     
     const apis = [
-      `https://api.streamelements.com/kappa/v2/speech?voice=Mia&text=${encoded}`, 
-      `https://texttospeech.responsivevoice.org/v1/text:synthesize?text=${encoded}&lang=es&engine=g3&name=&pitch=0.5&rate=0.5&vol=1&gender=female`, 
-      `https://api.streamelements.com/kappa/v2/speech?voice=Conchita&text=${encoded}`, 
-      `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=es-ES&client=tw-ob&q=${encoded}`
+      `https://api.streamelements.com/kappa/v2/speech?voice=${vConfig.streamElements}&text=${encoded}`,
+      `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${vConfig.google}&client=tw-ob&q=${encoded}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${vConfig.google}&client=tw-ob&q=${encoded}`)}`
     ];
 
     let success = false;
@@ -72,6 +80,7 @@ export async function generateSpeechAndCues(
   return { audioBlob: new Blob([merged], { type: "audio/mp3" }), cues };
 }
 
+// ... Mantén debajo la función generateViralMusic() exactamente igual que antes ...
 export async function generateViralMusic(duration: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
   const sampleRate = 44100;

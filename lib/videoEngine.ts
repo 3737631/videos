@@ -34,8 +34,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
   
   const width = 270;
   const height = 480;
-  
-  // SOLUCIÓN A LOS TIRONES: Subimos a 30 FPS para fluidez total (Estándar de TikTok)
   const FPS = 30; 
   const frameInterval = 1000 / FPS;
 
@@ -74,9 +72,12 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         const source = audioCtx.createBufferSource();
         source.buffer = decoded;
         
+        // CERO SILENCIOS: Fuerza a la pista a estirarse/comprimirse para cuadrar PERFECTO con el vídeo.
+        // Al haber generado muchas más palabras en la UI, el audio original dura mucho más que el vídeo.
+        // Por tanto, decoded.duration > targetDuration. 
+        // Esto hará que speedRatio sea > 1, forzando a la voz a hablar RÁPIDO y terminar en el seg 00.
         if (mode === "voice") {
           let speedRatio = decoded.duration / targetDuration;
-          speedRatio = Math.max(0.8, Math.min(speedRatio, 1.8)); 
           source.playbackRate.value = speedRatio;
         } else {
           source.loop = true;
@@ -159,8 +160,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       setTimeout(finalize, 1000); 
     };
 
-    // MAGIA ANTI-TIRONES: Carga Asíncrona con Doble Búfer
-    // Carga el nuevo vídeo de fondo sin detener NUNCA el bucle de dibujo
     const loadVideoAsync = async (index: number) => {
       if (index >= clips.length) return;
 
@@ -179,11 +178,9 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       
       newVideo.play().catch(()=>{});
 
-      // El cambiazo instantáneo (evita pantallazos negros)
       const oldVideo = activeVideo;
       activeVideo = newVideo;
 
-      // Destruimos el viejo para liberar la RAM
       if (oldVideo) {
         oldVideo.pause();
         oldVideo.removeAttribute("src");
@@ -198,19 +195,16 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
     recorder.start(250); 
     const start = performance.now();
     
-    // Carga el primero obligatoriamente antes de arrancar
     currentClipIdx = 0;
     await loadVideoAsync(0);
 
-    // NUEVO MOTOR DE DIBUJO (requestAnimationFrame ultra suave)
     const drawLoop = () => {
       if (isFinished) return;
-      frameId = requestAnimationFrame(drawLoop); // Engancha el siguiente fotograma a la pantalla
+      frameId = requestAnimationFrame(drawLoop); 
       
       const now = performance.now();
       const delta = now - lastDrawTime;
 
-      // Capador a 30 FPS (Protege tu móvil de sobrecargas sin perder fluidez)
       if (delta >= frameInterval) {
         lastDrawTime = now - (delta % frameInterval);
 
@@ -228,10 +222,9 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         });
         if (activeIdx === -1) activeIdx = clips.length - 1;
 
-        // Si toca un corte, lo pedimos asíncronamente (NO DETIENE EL DIBUJO)
         if (activeIdx !== currentClipIdx) {
           currentClipIdx = activeIdx;
-          loadVideoAsync(currentClipIdx); // <- ¡Este es el secreto sin 'await'!
+          loadVideoAsync(currentClipIdx); 
         }
 
         if (activeVideo && activeVideo.readyState >= 2) {
