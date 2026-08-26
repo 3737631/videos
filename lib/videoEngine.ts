@@ -2,12 +2,11 @@ import { RenderConfig, SubtitleCue } from "@/types";
 
 const INVISIBLE_CSS = "position:fixed;top:0;left:-9999px;width:270px;height:480px;z-index:-100;pointer-events:none;";
 
-// FUNCIÓN DE AUTO-AJUSTE DE TEXTO (Para que nunca se salga de pantalla)
 function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number) {
   const words = text.split(' ');
   let line = '';
   const lines = [];
-  const lineHeight = 30; // Altura entre líneas
+  const lineHeight = 30; 
 
   for (let n = 0; n < words.length; n++) {
     const testLine = line + words[n] + ' ';
@@ -21,7 +20,6 @@ function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number,
   }
   lines.push(line);
   
-  // Centramos el bloque de texto verticalmente
   let currentY = y - ((lines.length - 1) * lineHeight) / 2; 
   
   for (let k = 0; k < lines.length; k++) {
@@ -36,8 +34,10 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
   
   const width = 270;
   const height = 480;
-  const FPS = 15; 
-  const frameTime = 1000 / FPS;
+  
+  // SOLUCIÓN A LOS TIRONES: Subimos a 30 FPS para fluidez total (Estándar de TikTok)
+  const FPS = 30; 
+  const frameInterval = 1000 / FPS;
 
   const canvas = document.createElement("canvas");
   canvas.width = width; canvas.height = height;
@@ -87,9 +87,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       }
       if (audioCtx.state === "running") isAudioAlive = true;
     }
-  } catch (e) {
-    console.warn("Audio desactivado.");
-  }
+  } catch (e) {}
 
   const captureStreamFunc = canvas.captureStream || (canvas as any).mozCaptureStream || (canvas as any).webkitCaptureStream;
   const canvasStream = captureStreamFunc.call(canvas, FPS);
@@ -109,7 +107,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
   let recorder: MediaRecorder;
   try {
     recorder = mime 
-      ? new MediaRecorder(combinedStream, { mimeType: mime, videoBitsPerSecond: 800000 }) 
+      ? new MediaRecorder(combinedStream, { mimeType: mime, videoBitsPerSecond: 1000000 }) 
       : new MediaRecorder(combinedStream);
   } catch (err) {
     recorder = new MediaRecorder(combinedStream);
@@ -123,6 +121,8 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
     let isResolved = false; 
     let currentClipIdx = -1;
     let activeVideo: HTMLVideoElement | null = null;
+    let lastDrawTime = performance.now();
+    let frameId = 0;
     
     const clipStartTimes: number[] = [];
     let acc = 0;
@@ -134,6 +134,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
     const finalize = () => {
       if (isResolved) return;
       isResolved = true; 
+      cancelAnimationFrame(frameId);
       tracks.forEach(t => t.stop());
       if (activeVideo) {
         activeVideo.removeAttribute("src");
@@ -158,32 +159,37 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       setTimeout(finalize, 1000); 
     };
 
-    const loadVideo = async (index: number) => {
-      if (activeVideo) {
-        activeVideo.pause();
-        activeVideo.removeAttribute("src");
-        activeVideo.load();
-        activeVideo.remove();
-        activeVideo = null;
-      }
+    // MAGIA ANTI-TIRONES: Carga Asíncrona con Doble Búfer
+    // Carga el nuevo vídeo de fondo sin detener NUNCA el bucle de dibujo
+    const loadVideoAsync = async (index: number) => {
       if (index >= clips.length) return;
 
-      activeVideo = document.createElement("video");
-      activeVideo.src = clips[index].url;
-      activeVideo.currentTime = clips[index].startOffset; 
-      activeVideo.muted = true;
-      activeVideo.playsInline = true;
-      activeVideo.style.cssText = INVISIBLE_CSS;
-      document.body.appendChild(activeVideo);
+      const newVideo = document.createElement("video");
+      newVideo.src = clips[index].url;
+      newVideo.currentTime = clips[index].startOffset; 
+      newVideo.muted = true;
+      newVideo.playsInline = true;
+      newVideo.style.cssText = INVISIBLE_CSS;
+      document.body.appendChild(newVideo);
       
       await new Promise<void>(res => { 
-        if (!activeVideo) return res();
-        activeVideo.oncanplay = () => res(); 
-        setTimeout(res, 500); 
+        newVideo.oncanplay = () => res(); 
+        setTimeout(res, 400); 
       });
       
-      if (activeVideo) activeVideo.currentTime = clips[index].startOffset;
-      activeVideo?.play().catch(()=>{});
+      newVideo.play().catch(()=>{});
+
+      // El cambiazo instantáneo (evita pantallazos negros)
+      const oldVideo = activeVideo;
+      activeVideo = newVideo;
+
+      // Destruimos el viejo para liberar la RAM
+      if (oldVideo) {
+        oldVideo.pause();
+        oldVideo.removeAttribute("src");
+        oldVideo.load();
+        oldVideo.remove();
+      }
     };
 
     recorder.onstop = finalize;
@@ -191,63 +197,69 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
 
     recorder.start(250); 
     const start = performance.now();
-    await loadVideo(0);
+    
+    // Carga el primero obligatoriamente antes de arrancar
     currentClipIdx = 0;
+    await loadVideoAsync(0);
 
-    const drawLoop = async () => {
+    // NUEVO MOTOR DE DIBUJO (requestAnimationFrame ultra suave)
+    const drawLoop = () => {
       if (isFinished) return;
+      frameId = requestAnimationFrame(drawLoop); // Engancha el siguiente fotograma a la pantalla
       
-      const elapsed = (performance.now() - start) / 1000;
-      onProgress(Math.min(100, (elapsed / targetDuration) * 100));
+      const now = performance.now();
+      const delta = now - lastDrawTime;
 
-      if (elapsed >= targetDuration) {
-        stopRecording();
-        return;
-      }
+      // Capador a 30 FPS (Protege tu móvil de sobrecargas sin perder fluidez)
+      if (delta >= frameInterval) {
+        lastDrawTime = now - (delta % frameInterval);
 
-      let activeIdx = clipStartTimes.findIndex((time, i) => {
-        const nextTime = clipStartTimes[i + 1] || targetDuration + 1;
-        return elapsed >= time && elapsed < nextTime;
-      });
-      if (activeIdx === -1) activeIdx = clips.length - 1;
+        const elapsed = (now - start) / 1000;
+        onProgress(Math.min(100, (elapsed / targetDuration) * 100));
 
-      if (activeIdx !== currentClipIdx) {
-        currentClipIdx = activeIdx;
-        await loadVideo(currentClipIdx);
-      }
+        if (elapsed >= targetDuration) {
+          stopRecording();
+          return;
+        }
 
-      // SOLUCIÓN PANTALLAZO NEGRO: 
-      // Solo borramos y pintamos negro si el vídeo nuevo YA ha cargado (readyState >= 2).
-      // Si no ha cargado, dejamos la imagen congelada del vídeo anterior. ¡Mucho más profesional!
-      if (activeVideo && activeVideo.readyState >= 2) {
-        ctx.fillStyle = "#000000"; 
-        ctx.fillRect(0, 0, width, height);
+        let activeIdx = clipStartTimes.findIndex((time, i) => {
+          const nextTime = clipStartTimes[i + 1] || targetDuration + 1;
+          return elapsed >= time && elapsed < nextTime;
+        });
+        if (activeIdx === -1) activeIdx = clips.length - 1;
 
-        const scale = Math.max(width / activeVideo.videoWidth, height / activeVideo.videoHeight);
-        const dw = activeVideo.videoWidth * scale;
-        const dh = activeVideo.videoHeight * scale;
-        ctx.drawImage(activeVideo, (width - dw) / 2, (height - dh) / 2, dw, dh);
-      }
+        // Si toca un corte, lo pedimos asíncronamente (NO DETIENE EL DIBUJO)
+        if (activeIdx !== currentClipIdx) {
+          currentClipIdx = activeIdx;
+          loadVideoAsync(currentClipIdx); // <- ¡Este es el secreto sin 'await'!
+        }
 
-      // DIBUJO DE SUBTÍTULOS AJUSTADO
-      if (config.mode === "voice") {
-        const cue = cues.find(c => elapsed >= c.start && elapsed <= c.end);
-        if (cue) {
-          ctx.font = '900 24px "Inter", sans-serif'; 
-          ctx.textAlign = "center"; 
-          ctx.textBaseline = "middle";
-          ctx.lineJoin = "round";
-          
-          ctx.lineWidth = 5; 
-          ctx.strokeStyle = "#000";
-          ctx.fillStyle = "#FFE600";
-          
-          // Usamos el Auto-Ajuste: Max width de 240px (deja un margen de 15px por lado)
-          drawWrappedText(ctx, cue.text, width / 2, height * 0.75, 240);
+        if (activeVideo && activeVideo.readyState >= 2) {
+          ctx.fillStyle = "#000000"; 
+          ctx.fillRect(0, 0, width, height);
+
+          const scale = Math.max(width / activeVideo.videoWidth, height / activeVideo.videoHeight);
+          const dw = activeVideo.videoWidth * scale;
+          const dh = activeVideo.videoHeight * scale;
+          ctx.drawImage(activeVideo, (width - dw) / 2, (height - dh) / 2, dw, dh);
+        }
+
+        if (config.mode === "voice") {
+          const cue = cues.find(c => elapsed >= c.start && elapsed <= c.end);
+          if (cue) {
+            ctx.font = '900 24px "Inter", sans-serif'; 
+            ctx.textAlign = "center"; 
+            ctx.textBaseline = "middle";
+            ctx.lineJoin = "round";
+            
+            ctx.lineWidth = 5; 
+            ctx.strokeStyle = "#000";
+            ctx.fillStyle = "#FFE600";
+            
+            drawWrappedText(ctx, cue.text, width / 2, height * 0.75, 240);
+          }
         }
       }
-
-      setTimeout(drawLoop, frameTime);
     };
     
     drawLoop();
