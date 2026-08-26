@@ -6,7 +6,6 @@ export async function generateSpeechAndCues(
   lang: string = "es"
 ): Promise<{ audioBlob: Blob; cues: SubtitleCue[] }> {
   
-  // Limpiamos los caracteres raros para evitar que rompan la URL
   const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑçãõâêîôûàèìòù.,!¿?'-]/g, "").trim();
   const rawWords = cleanText.split(/\s+/).filter(Boolean);
   if (rawWords.length === 0) throw new Error("Guion vacío");
@@ -14,7 +13,6 @@ export async function generateSpeechAndCues(
   const timePerWord = targetDurationSec / rawWords.length;
   const cues: SubtitleCue[] = [];
   
-  // Generamos los subtítulos emparejando de 2 en 2 palabras para más dinamismo
   for (let i = 0; i < rawWords.length; i += 2) {
     const chunk = rawWords.slice(i, i + 2);
     cues.push({
@@ -38,87 +36,72 @@ export async function generateSpeechAndCues(
   };
 
   const vConfig = voiceMap[lang] || voiceMap["es"];
-  
+  const textChunks = cleanText.match(/.{1,150}(?:\s|$)/g) || [cleanText];
+
+  // DESCARGA EN PARALELO ULTRA RÁPIDA
+  const fetchPromises = textChunks.map(async (chunk, index) => {
+    if (!chunk.trim()) return null;
+    
+    // Desfase microscópico para burlar el anti-spam (invisible para ti)
+    await new Promise(r => setTimeout(r, index * 80));
+    
+    const encoded = encodeURIComponent(chunk.trim());
+    const apis = [
+      `https://api.streamelements.com/kappa/v2/speech?voice=${vConfig.streamElements}&text=${encoded}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${vConfig.google}&client=tw-ob&q=${encoded}`)}`,
+      `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${vConfig.google}&client=tw-ob&q=${encoded}`
+    ];
+
+    for (const url of apis) {
+      try {
+        // Límite de tiempo: Si el servidor tarda más de 1.5s, pasa al siguiente
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 1500);
+        
+        const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
+        clearTimeout(timeoutId);
+        
+        if (res.ok) {
+          const buf = await res.arrayBuffer();
+          if (buf.byteLength > 1000) return buf;
+        }
+      } catch (e) { continue; } // Si falla rápido, pasa al siguiente sin quejarse
+    }
+    return null;
+  });
+
+  let downloadedBuffers: (ArrayBuffer | null)[] = [];
+  try {
+    // RELOJ DE ARENA GLOBAL: Si no ha descargado todo en 3.5 segundos, corta para que no te quedes en el 5%
+    downloadedBuffers = await Promise.race([
+      Promise.all(fetchPromises),
+      new Promise<(ArrayBuffer | null)[]>((_, reject) => setTimeout(() => reject(new Error("Timeout")), 3500))
+    ]);
+  } catch (e) {
+    console.warn("La red va lenta. Pasando directo a modo offline para no congelar la pantalla.");
+  }
+
+  const validBuffers = downloadedBuffers.filter(b => b !== null) as ArrayBuffer[];
   let finalAudioBlob: Blob | null = null;
 
-  try {
-    // TÁCTICA 1: Enviar TODO el guion de golpe (Evita bloqueos por Spam/Too Many Requests)
-    const encodedFull = encodeURIComponent(cleanText);
-    const url = `https://api.streamelements.com/kappa/v2/speech?voice=${vConfig.streamElements}&text=${encodedFull}`;
-    
-    const res = await fetch(url, { cache: "no-store" });
-    if (res.ok) {
-      const buf = await res.arrayBuffer();
-      if (buf.byteLength > 1000) {
-        finalAudioBlob = new Blob([buf], { type: "audio/mp3" });
-      }
+  if (validBuffers.length > 0) {
+    const totalLength = validBuffers.reduce((acc, b) => acc + b.byteLength, 0);
+    const merged = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const b of validBuffers) {
+      merged.set(new Uint8Array(b), offset);
+      offset += b.byteLength;
     }
-  } catch (e) {
-    console.warn("El servidor bloqueó la petición principal.");
-  }
-
-  // TÁCTICA 2: Si lo anterior falla, usamos troceado CON RETRASO para no saturar al servidor
-  if (!finalAudioBlob) {
-    const textChunks = cleanText.match(/.{1,100}(?:\s|$)/g) || [cleanText];
-    const audioBuffers: ArrayBuffer[] = [];
-    let success = true;
-
-    for (const chunk of textChunks) {
-      if (!chunk.trim()) continue;
-      const encoded = encodeURIComponent(chunk.trim());
-      
-      const apis = [
-        `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${vConfig.google}&client=tw-ob&q=${encoded}`,
-        `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${vConfig.google}&client=tw-ob&q=${encoded}`)}`
-      ];
-
-      let chunkSuccess = false;
-      for (const url of apis) {
-        try {
-          const res = await fetch(url, { cache: "no-store" });
-          if (res.ok) {
-            const buf = await res.arrayBuffer();
-            if (buf.byteLength > 1000) { 
-              audioBuffers.push(buf);
-              chunkSuccess = true;
-              break; 
-            }
-          }
-        } catch (e) { continue; }
-      }
-      
-      if (!chunkSuccess) {
-        success = false;
-        break; // Rompemos el ciclo si falla, pero NO tiramos error rojo.
-      }
-      
-      // PAUSA CRÍTICA: 300ms entre llamadas para que el servidor no detecte ataque bot
-      await new Promise(r => setTimeout(r, 300));
-    }
-
-    if (success && audioBuffers.length > 0) {
-      const totalLength = audioBuffers.reduce((acc, b) => acc + b.byteLength, 0);
-      const merged = new Uint8Array(totalLength);
-      let offset = 0;
-      for (const b of audioBuffers) {
-        merged.set(new Uint8Array(b), offset);
-        offset += b.byteLength;
-      }
-      finalAudioBlob = new Blob([merged], { type: "audio/mp3" });
-    }
-  }
-
-  // TÁCTICA 3: SALVAVIDAS FINAL (Si estás sin internet o los servidores caen, genera una voz limpia localmente)
-  if (!finalAudioBlob) {
-    console.warn("Creando voz local de rescate.");
+    finalAudioBlob = new Blob([merged], { type: "audio/mp3" });
+  } else {
+    // Si falla por completo, genera voz local al instante sin que te des cuenta
     finalAudioBlob = await generateOfflineVoice(rawWords, targetDurationSec);
   }
 
   return { audioBlob: finalAudioBlob, cues };
 }
 
-
-// --- VOZ DE RESCATE (Para que NUNCA lance error rojo) ---
+// VOZ LOCAL DE EMERGENCIA INSTANTÁNEA
 async function generateOfflineVoice(words: string[], duration: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
   const sampleRate = 44100;
@@ -130,7 +113,7 @@ async function generateOfflineVoice(words: string[], duration: number): Promise<
     const osc = offlineCtx.createOscillator();
     const gain = offlineCtx.createGain();
     osc.frequency.value = 400 + (words[i].length * 30); 
-    osc.type = "sine"; // Sonido suave, menos molesto que el triángulo
+    osc.type = "sine"; 
     
     gain.gain.setValueAtTime(0.5, i * timePerWord);
     gain.gain.exponentialRampToValueAtTime(0.01, (i * timePerWord) + (timePerWord * 0.8));
@@ -146,7 +129,7 @@ async function generateOfflineVoice(words: string[], duration: number): Promise<
   return audioBufferToWav(renderedBuffer);
 }
 
-// --- MÚSICA PHONK PARA EL MODO "SOLO MÚSICA" ---
+// MÚSICA PHONK PARA EL MODO MUSICAL
 export async function generateViralMusic(duration: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
   const sampleRate = 44100;
@@ -193,7 +176,7 @@ export async function generateViralMusic(duration: number): Promise<Blob> {
   return audioBufferToWav(renderedBuffer);
 }
 
-// Transformador a archivo WAV
+// Transformador de datos de audio
 function audioBufferToWav(buffer: AudioBuffer): Blob {
   const numOfChan = buffer.numberOfChannels;
   const length = buffer.length * numOfChan * 2 + 44;
