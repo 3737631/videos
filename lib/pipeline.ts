@@ -281,7 +281,7 @@ export async function runCreationPipeline(
         const baseSpeed = suggestedSpeechRate(nicheInfo);
         let attemptSpeed = baseSpeed;
         let best: Awaited<ReturnType<typeof synthesizeProsodyWithFallback>> | null = null;
-        // Heartbeat iPhone: si la descarga/síntesis no reporta, la barra avanza de 12→42 sola para no quedarse pillado en 33
+        // Heartbeat iPhone: si la descarga/síntesis no reporta, la barra avanza de 12→42 sola para no quedarse pillado
         let voiceFake = 0;
         let voiceHb: ReturnType<typeof setInterval> | null = setInterval(() => {
           if (voiceFake < 88) {
@@ -290,18 +290,16 @@ export async function runCreationPipeline(
           }
         }, 650);
         try {
-        for (let round = 0; round < 2; round++) {
           const res = await runStage(
             "GENERATING_VOICE",
             async (signal) => {
-              if (round === 0)
-                await ensureVoiceInstalled(chosenId, {
-                  signal,
-                  onProgress: (p) => {
-                    if (p != null) voiceFake = Math.max(voiceFake, (p ?? 0) * 0.7);
-                    tracker.set("GENERATING_VOICE", (p ?? 0) * 0.7);
-                  },
-                });
+              await ensureVoiceInstalled(chosenId, {
+                signal,
+                onProgress: (p) => {
+                  if (p != null) voiceFake = Math.max(voiceFake, (p ?? 0) * 0.7);
+                  tracker.set("GENERATING_VOICE", (p ?? 0) * 0.7);
+                },
+              });
               return await synthesizeProsodyWithFallback(script, chosenId, {
                 signal,
                 speed: attemptSpeed,
@@ -319,13 +317,6 @@ export async function runCreationPipeline(
           voiceDuration = await blobDuration(res.blob);
           chosenId = res.voiceId;
           usedFallback = res.usedFallback;
-          if (!target || round === 1) break;
-          // Solo re-sintetizamos (2ª pasada, dobla el tiempo de voz) si el
-          // desajuste es muy grande. Para lectura simple, casi nunca se hace 2ª pasada.
-          const mul = correctiveSpeed(voiceDuration, target, Math.max(tol, 3.0));
-          if (!mul) break; // ya encaja
-          attemptSpeed = Math.min(1.5, Math.max(0.7, attemptSpeed * mul));
-        }
         if (best) {
           segTimings.push(...best.timings);
           if (

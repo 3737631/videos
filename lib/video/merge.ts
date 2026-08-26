@@ -39,7 +39,8 @@ export async function mergeVideos(
   blobs: Blob[],
   opts: { signal?: AbortSignal; width?: number; height?: number } = {}
 ): Promise<Blob> {
-  if (blobs.length <= 1) return blobs[0];
+  if (blobs.length === 0) throw new Error("No hay vídeos");
+  // Siempre pasamos por canvas para quitar audio original (petición usuario: siempre sin audio)
   const width = opts.width ?? 720;
   const height = opts.height ?? 1280;
   if (typeof document === "undefined") return blobs[0];
@@ -50,24 +51,9 @@ export async function mergeVideos(
   const g = canvas.getContext("2d", { alpha: false });
   if (!g) return blobs[0];
 
-  const AC: typeof AudioContext =
-    (window as unknown as { AudioContext: typeof AudioContext }).AudioContext ||
-    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-  let actx: AudioContext | null = null;
-  let dest: MediaStreamAudioDestinationNode | null = null;
-  if (typeof AC !== "undefined") {
-    try {
-      actx = new AC();
-      await ensureRunning(actx);
-      dest = actx.createMediaStreamDestination();
-    } catch {
-      dest = null;
-    }
-  }
-
+  // Siempre sin audio original (petición usuario: quitar audios de videos subidos)
   const vStream = canvas.captureStream(30);
   const tracks: MediaStreamTrack[] = [...vStream.getVideoTracks()];
-  if (dest) tracks.push(...dest.stream.getAudioTracks());
   const stream = new MediaStream(tracks);
   const { mime, ext } = pickMime();
   const rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 6_000_000 } : undefined);
@@ -78,7 +64,6 @@ export async function mergeVideos(
   const finished = new Promise<Blob>((resolve, reject) => {
     rec.onstop = () => {
       try {
-        dest?.stream.getTracks().forEach((t) => t.stop());
         const blob = new Blob(chunks, { type: mime.split(";")[0] || "video/webm" });
         resolve(blob);
       } catch (e) {
@@ -102,14 +87,6 @@ export async function mergeVideos(
       video.preload = "auto";
       video.style.cssText = "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none;z-index:-1;";
       document.body.appendChild(video);
-
-      let srcNode: MediaElementAudioSourceNode | null = null;
-      if (dest && actx) {
-        try {
-          srcNode = actx.createMediaElementSource(video);
-          srcNode.connect(dest);
-        } catch {}
-      }
 
       await new Promise<void>((res, rej) => {
         const onErr = () => rej(new Error("Vídeo no reproducible"));
@@ -141,7 +118,6 @@ export async function mergeVideos(
       try {
         if (video.parentElement) video.parentElement.removeChild(video);
       } catch {}
-      if (srcNode) try { srcNode.disconnect(); } catch {}
       URL.revokeObjectURL(url);
     }
   } finally {
