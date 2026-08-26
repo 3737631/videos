@@ -17,7 +17,7 @@ export default function App() {
   const [finalVideo, setFinalVideo] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
-  // MANEJO DE SUBIDA DE VÍDEOS (Optimizado para Móviles)
+  // EXTREMA OPTIMIZACIÓN DE RAM PARA MÓVILES
   const handleUpload = async (files: FileList | null) => {
     if (!files || !files.length) return;
     const newClips: VideoClip[] = [];
@@ -25,13 +25,22 @@ export default function App() {
     
     for (const file of Array.from(files)) {
       const url = URL.createObjectURL(file);
+      
+      // Cargamos solo los metadatos y destruimos el elemento para no ocupar RAM
       const videoDur = await new Promise<number>((res) => {
         const v = document.createElement("video");
         v.src = url;
+        v.preload = "metadata"; // Crítico: NO cargar el vídeo entero
         v.playsInline = true;
-        v.onloadedmetadata = () => res(v.duration || 3);
+        v.onloadedmetadata = () => {
+          const d = v.duration || 3;
+          v.removeAttribute('src'); // Destrucción inmediata
+          v.load(); 
+          res(d);
+        };
         v.onerror = () => res(3);
       });
+
       newClips.push({ file, url, duration: videoDur });
       dur += videoDur;
     }
@@ -41,16 +50,14 @@ export default function App() {
     setStep(2);
   };
 
-  // GENERADOR DE GUION LOCAL (Adiós Error 404)
-  // Al estar aquí dentro, funciona 100% offline y en cualquier móvil
   const generateScriptLocal = (info: string, durationSeconds: number) => {
     const duration = Math.max(5, Math.min(60, Number(durationSeconds) || 15));
-    const targetWordCount = Math.round(duration * 3); // 3 palabras por segundo
+    const targetWordCount = Math.round(duration * 3);
 
     const cleanInfo = info
       .replace(/https?:\/\/\S+/gi, "")
       .replace(/(aliexpress|amazon|shein|temu|tienda|comprar|vendedor|descuento)/gi, "")
-      .trim() || "este increíble producto";
+      .trim() || "este producto";
 
     let fullText = `¡Deja de perder el tiempo! Con ${cleanInfo}, todo se hace tres veces más rápido. Solo tienes que aplicarlo y verás cómo elimina cualquier problema sin esfuerzo. ¡Una auténtica locura, pruébalo y notarás la diferencia al instante!`;
     
@@ -65,29 +72,26 @@ export default function App() {
     return words.join(" ");
   };
 
-  // PROCESAMIENTO FINAL
   const processVideo = async () => {
     setStep(4);
     setProgress(5);
-    setStatus("Analizando metadatos y silenciando audios...");
+    setStatus("Analizando clips...");
 
     try {
       let audioBlob = null;
       let cues: any = [];
 
       if (mode === "voice") {
-        setStatus("Generando guion viral sin marcas...");
-        
-        // Usamos la función local en lugar de hacer 'fetch' a una API (Solución al 404)
+        setStatus("Generando guion optimizado...");
         const script = generateScriptLocal(productPrompt, totalDuration);
         
-        setStatus("Sintetizando voz de IA y subtítulos...");
+        setStatus("Sintetizando voz y subtítulos...");
         const tts = await generateSpeechAndCues(script, totalDuration);
         audioBlob = tts.audioBlob;
         cues = tts.cues;
       }
 
-      setStatus("Renderizando píxeles (Anti-bloqueo Móvil)...");
+      setStatus("Renderizando píxeles (Modo Ahorro de Memoria)...");
       const url = await renderFinalVideo({
         clips, audioBlob, cues, mode: mode!, targetDuration: totalDuration,
         onProgress: (p) => setProgress(Math.round(p))
@@ -96,20 +100,20 @@ export default function App() {
       setFinalVideo(url);
       setStep(5);
     } catch (e) {
-      alert("Error en el render. Asegúrate de tener memoria libre en el móvil.");
+      console.error(e);
+      alert("Error en el renderizado. El navegador abortó el proceso para proteger la memoria del sistema.");
       setStep(1);
     }
   };
 
   return (
     <main className="min-h-[100dvh] bg-[#09090b] text-white flex flex-col items-center justify-center p-4 sm:p-6 overflow-x-hidden">
-      
       <div className="w-full max-w-xl text-center mb-6 sm:mb-8 mt-4">
         <div className="inline-block bg-purple-500/10 border border-purple-500/30 text-purple-400 px-3 py-1 rounded-full text-[10px] sm:text-xs font-bold mb-3 sm:mb-4 tracking-widest">
-          TIKTOK AUTOMATOR 4.0 (MOBILE PRO)
+          TIKTOK AUTOMATOR V5 (ULTRA LITE)
         </div>
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent leading-tight">
-          Creador de Vídeos
+          Creador Viral
         </h1>
       </div>
 
@@ -122,7 +126,7 @@ export default function App() {
               <UploadCloud className="w-8 h-8 sm:w-10 sm:h-10 text-purple-400" />
             </div>
             <h2 className="text-lg sm:text-xl font-bold text-center">Toca para subir vídeos</h2>
-            <p className="text-zinc-500 mt-2 text-xs sm:text-sm text-center">Selecciona clips desde tu galería.</p>
+            <p className="text-zinc-500 mt-2 text-xs sm:text-sm text-center">Selecciona clips desde tu móvil.</p>
           </div>
         )}
 
@@ -133,14 +137,14 @@ export default function App() {
               <div className="p-3 sm:p-4 bg-blue-500/10 rounded-full shrink-0"><Music className="text-blue-400 w-6 h-6" /></div>
               <div className="text-left">
                 <h3 className="font-bold text-base sm:text-lg">Modo Musical</h3>
-                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Cortes dinámicos sin voz. Ideal para Lifestyle.</p>
+                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Cortes dinámicos sin voz.</p>
               </div>
             </button>
             <button onClick={() => { setMode("voice"); setStep(3); }} className="w-full p-4 sm:p-6 bg-zinc-950 border border-zinc-800 rounded-2xl flex items-center gap-4 hover:border-purple-500 active:bg-purple-900/20 transition-all touch-manipulation">
               <div className="p-3 sm:p-4 bg-purple-500/10 rounded-full shrink-0"><Mic className="text-purple-400 w-6 h-6" /></div>
               <div className="text-left">
                 <h3 className="font-bold text-base sm:text-lg">Modo Narrador IA</h3>
-                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Guion de producto + Voz + Subtítulos virales.</p>
+                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Voz IA automática + Subtítulos virales.</p>
               </div>
             </button>
           </div>
@@ -151,7 +155,6 @@ export default function App() {
             {mode === "voice" && (
               <>
                 <label className="font-bold text-base sm:text-lg">Describe el producto</label>
-                <p className="text-zinc-500 text-xs sm:text-sm leading-relaxed">Crearemos un guion de {totalDuration}s sin marcas.</p>
                 <textarea 
                   value={productPrompt} onChange={(e) => setProductPrompt(e.target.value)}
                   placeholder="Ej: Aspiradora portátil para el coche..."
@@ -171,7 +174,7 @@ export default function App() {
               <div className="absolute inset-0 border-4 border-zinc-800 border-t-purple-500 rounded-full animate-spin"></div>
               <div className="absolute inset-0 flex items-center justify-center font-bold font-mono text-sm sm:text-base">{progress}%</div>
             </div>
-            <h2 className="text-lg sm:text-xl font-bold text-center">Creando magia...</h2>
+            <h2 className="text-lg sm:text-xl font-bold text-center">Procesando sin colapsar...</h2>
             <p className="text-zinc-500 text-xs sm:text-sm mt-2 text-center px-4">{status}</p>
             <div className="w-full h-2 bg-zinc-800 rounded-full mt-6 overflow-hidden">
               <div className="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all" style={{ width: `${progress}%` }}></div>
@@ -181,7 +184,6 @@ export default function App() {
 
         {step === 5 && finalVideo && (
           <div className="flex flex-col items-center animate-in zoom-in duration-500">
-            {/* Reproductor de móvil optimizado */}
             <div className="w-[240px] h-[426px] sm:w-[280px] sm:h-[498px] bg-black rounded-2xl sm:rounded-[2rem] overflow-hidden border-2 sm:border-4 border-zinc-800 shadow-2xl relative mb-6 sm:mb-8">
               <video src={finalVideo} controls autoPlay loop playsInline className="w-full h-full object-cover" />
             </div>
