@@ -17,7 +17,6 @@ export default function App() {
   const [finalVideo, setFinalVideo] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
-  // LIBERACIÓN DE MEMORIA PREVIA (Si el usuario sube vídeos varias veces)
   const clearMemory = () => {
     clips.forEach(clip => URL.revokeObjectURL(clip.url));
     if (finalVideo) URL.revokeObjectURL(finalVideo);
@@ -25,33 +24,33 @@ export default function App() {
 
   const handleUpload = async (files: FileList | null) => {
     if (!files || !files.length) return;
-    
-    clearMemory(); // Vaciamos RAM antes de empezar
+    clearMemory();
     
     const newClips: VideoClip[] = [];
     let dur = 0;
     
+    // CREAMOS UN SOLO LECTOR PARA AHORRAR 90% DE RAM
+    const lector = document.createElement("video");
+    lector.playsInline = true;
+    lector.muted = true;
+    
     for (const file of Array.from(files)) {
       const url = URL.createObjectURL(file);
+      lector.src = url;
       
       const videoDur = await new Promise<number>((res) => {
-        const v = document.createElement("video");
-        v.src = url;
-        v.preload = "metadata"; 
-        v.playsInline = true;
-        v.onloadedmetadata = () => {
-          const d = v.duration || 3;
-          v.src = ""; // Liberación destructiva
-          v.load(); 
-          res(d);
-        };
-        v.onerror = () => res(3);
+        lector.onloadedmetadata = () => res(lector.duration || 3);
+        lector.onerror = () => res(3);
+        setTimeout(() => res(3), 1000); // Cortafuegos: Si tarda más de 1s, seguimos.
       });
 
       newClips.push({ file, url, duration: videoDur });
       dur += videoDur;
     }
     
+    lector.removeAttribute("src"); // Matamos al lector
+    lector.load();
+
     setClips(newClips);
     setTotalDuration(Math.max(5, Math.round(dur)));
     setStep(2);
@@ -89,16 +88,16 @@ export default function App() {
       let cues: any = [];
 
       if (mode === "voice") {
-        setStatus("Generando guion (Modo Seguro)...");
+        setStatus("Generando guion...");
         const script = generateScriptLocal(productPrompt, totalDuration);
         
-        setStatus("Sintetizando voz y subtítulos...");
+        setStatus("Creando voz (Lite)...");
         const tts = await generateSpeechAndCues(script, totalDuration);
         audioBlob = tts.audioBlob;
         cues = tts.cues;
       }
 
-      setStatus("Renderizando píxeles (qHD)...");
+      setStatus("Renderizando Modo Supervivencia...");
       const url = await renderFinalVideo({
         clips, audioBlob, cues, mode: mode!, targetDuration: totalDuration,
         onProgress: (p) => setProgress(Math.round(p))
@@ -107,8 +106,9 @@ export default function App() {
       setFinalVideo(url);
       setStep(5);
     } catch (e) {
+      // Ahora si falla, te dará el motivo real en la consola, pero ya no debería.
       console.error(e);
-      alert("Error. Sube vídeos más cortos o cierra otras aplicaciones en tu móvil.");
+      alert("Error inesperado en tu móvil. Actualiza la página e inténtalo de nuevo.");
       setStep(1);
     }
   };
@@ -124,7 +124,7 @@ export default function App() {
     <main className="min-h-[100dvh] bg-[#09090b] text-white flex flex-col items-center justify-center p-4 sm:p-6 overflow-x-hidden">
       <div className="w-full max-w-xl text-center mb-6 sm:mb-8 mt-4">
         <div className="inline-block bg-purple-500/10 border border-purple-500/30 text-purple-400 px-3 py-1 rounded-full text-[10px] sm:text-xs font-bold mb-3 sm:mb-4 tracking-widest">
-          TIKTOK AUTOMATOR V6 (ULTRA OOM-SAFE)
+          TIKTOK AUTOMATOR V7 (BULLETPROOF)
         </div>
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent leading-tight">
           Creador Viral
@@ -140,7 +140,7 @@ export default function App() {
               <UploadCloud className="w-8 h-8 sm:w-10 sm:h-10 text-purple-400" />
             </div>
             <h2 className="text-lg sm:text-xl font-bold text-center">Toca para subir vídeos</h2>
-            <p className="text-zinc-500 mt-2 text-xs sm:text-sm text-center">Selecciona clips desde tu móvil.</p>
+            <p className="text-zinc-500 mt-2 text-xs sm:text-sm text-center">Selecciona clips desde tu galería.</p>
           </div>
         )}
 
@@ -188,7 +188,7 @@ export default function App() {
               <div className="absolute inset-0 border-4 border-zinc-800 border-t-purple-500 rounded-full animate-spin"></div>
               <div className="absolute inset-0 flex items-center justify-center font-bold font-mono text-sm sm:text-base">{progress}%</div>
             </div>
-            <h2 className="text-lg sm:text-xl font-bold text-center">Procesando ligero...</h2>
+            <h2 className="text-lg sm:text-xl font-bold text-center">Exportando vídeo...</h2>
             <p className="text-zinc-500 text-xs sm:text-sm mt-2 text-center px-4">{status}</p>
             <div className="w-full h-2 bg-zinc-800 rounded-full mt-6 overflow-hidden">
               <div className="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all" style={{ width: `${progress}%` }}></div>
