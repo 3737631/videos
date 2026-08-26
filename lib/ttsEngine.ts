@@ -27,57 +27,97 @@ export async function generateSpeechAndCues(
     });
   }
 
-  try {
-    // HACK SECRETO: Usamos la API pública de StreamElements (Amazon Polly).
-    // Es 100% gratis, no necesita servidor backend, no da errores 404 y suena MUY real.
-    // Opciones de voz: "Mia" (Mujer neutro/México), "Conchita" (Mujer España), "Enrique" (Hombre España)
-    const voiceName = "Mia"; 
-    
-    // Llamada directa desde el cliente
-    const url = `https://api.streamelements.com/kappa/v2/speech?voice=${voiceName}&text=${encodeURIComponent(cleanText)}`;
-    
-    const res = await fetch(url);
-    
-    if (!res.ok) {
-      throw new Error("El servidor de voz humana está saturado.");
-    }
+  // SOLUCIÓN AL PITIDO: Troceamos el texto para burlar el límite de caracteres de la API
+  // Separa el texto en bloques de máximo 150 letras.
+  const textChunks = cleanText.match(/.{1,150}(?:\s|$)/g) || [cleanText];
+  const audioBuffers: ArrayBuffer[] = [];
 
-    // Obtenemos el MP3 humano
-    const audioBlob = await res.blob();
-    return { audioBlob, cues };
-
-  } catch (error) {
-    // SISTEMA DE SUPERVIVENCIA (FALLBACK)
-    // Si la API falla o no tienes internet, NUNCA dará error en pantalla.
-    // Generará la voz de robot de emergencia matemáticamente para salvar el vídeo.
-    console.warn("Fallo en la voz de internet. Generando voz de emergencia local para que el vídeo no falle.");
-    
-    const AC = window.AudioContext || (window as any).webkitAudioContext;
-    const actx = new AC();
-    const sampleRate = actx.sampleRate;
-    const numSamples = Math.floor(sampleRate * targetDurationSec);
-    const buffer = actx.createBuffer(1, numSamples, sampleRate);
-    const data = buffer.getChannelData(0);
-
-    for (let i = 0; i < rawWords.length; i++) {
-      const wordStartSample = Math.floor(i * timePerWord * sampleRate);
-      const wordEndSample = Math.floor((i + 0.8) * timePerWord * sampleRate); 
-      const freq = 300 + (rawWords[i].length * 50);
-
-      for (let j = wordStartSample; j < wordEndSample && j < numSamples; j++) {
-        const t = (j - wordStartSample) / sampleRate;
-        data[j] = Math.sin(2 * Math.PI * freq * t) * 0.4; 
+  for (const chunk of textChunks) {
+    if (!chunk.trim()) continue;
+    try {
+      // Voz real y humana de Amazon Polly (Mia = Español neutro)
+      const url = `https://api.streamelements.com/kappa/v2/speech?voice=Mia&text=${encodeURIComponent(chunk.trim())}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        audioBuffers.push(await res.arrayBuffer());
       }
+    } catch (e) {
+      console.warn("Fallo al descargar un trozo de voz.");
     }
-
-    const wavBlob = audioBufferToWav(buffer);
-    await actx.close();
-
-    return { audioBlob: wavBlob, cues };
   }
+
+  if (audioBuffers.length === 0) {
+    // Si no hay internet, genera el ritmo musical en vez de pitar
+    return { audioBlob: await generateViralMusic(targetDurationSec), cues };
+  }
+
+  // Unimos todos los trozos humanos en un único audio MP3
+  const totalLength = audioBuffers.reduce((acc, b) => acc + b.byteLength, 0);
+  const merged = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const b of audioBuffers) {
+    merged.set(new Uint8Array(b), offset);
+    offset += b.byteLength;
+  }
+
+  return { audioBlob: new Blob([merged], { type: "audio/mp3" }), cues };
 }
 
-// Convertidor matemático para la voz de emergencia local
+// NUEVO: SINTETIZADOR DE MÚSICA VIRAL
+// Genera una base de música Lo-Fi / Phonk de 120 BPM automáticamente
+export async function generateViralMusic(duration: number): Promise<Blob> {
+  const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+  const sampleRate = 44100;
+  // Añadimos un pequeño margen extra de tiempo
+  const offlineCtx = new AC(1, sampleRate * (duration + 2), sampleRate);
+  
+  const bpm = 120;
+  const beatTime = 60 / bpm; // 0.5 segundos por golpe
+  
+  for (let i = 0; i < duration + 2; i += beatTime) {
+    // BOMBO (Kick)
+    const kick = offlineCtx.createOscillator();
+    const kickGain = offlineCtx.createGain();
+    kick.frequency.setValueAtTime(150, i);
+    kick.frequency.exponentialRampToValueAtTime(0.01, i + 0.5);
+    kickGain.gain.setValueAtTime(1, i);
+    kickGain.gain.exponentialRampToValueAtTime(0.01, i + 0.5);
+    kick.connect(kickGain);
+    kickGain.connect(offlineCtx.destination);
+    kick.start(i);
+    kick.stop(i + 0.5);
+    
+    // CAJA (Hi-Hat) a contratiempo
+    if (i + beatTime / 2 < duration + 2) {
+      const hat = offlineCtx.createOscillator();
+      const hatGain = offlineCtx.createGain();
+      hat.type = "square";
+      hat.frequency.setValueAtTime(8000, i + beatTime / 2);
+      hatGain.gain.setValueAtTime(0.1, i + beatTime / 2);
+      hatGain.gain.exponentialRampToValueAtTime(0.01, i + beatTime / 2 + 0.1);
+      hat.connect(hatGain);
+      hatGain.connect(offlineCtx.destination);
+      hat.start(i + beatTime / 2);
+      hat.stop(i + beatTime / 2 + 0.1);
+    }
+    
+    // BAJO (Bassline) oscuro
+    const bass = offlineCtx.createOscillator();
+    const bassGain = offlineCtx.createGain();
+    bass.type = "triangle";
+    bass.frequency.setValueAtTime(55, i); // Nota La grave
+    bassGain.gain.setValueAtTime(0.6, i);
+    bassGain.gain.exponentialRampToValueAtTime(0.01, i + beatTime);
+    bass.connect(bassGain);
+    bassGain.connect(offlineCtx.destination);
+    bass.start(i);
+    bass.stop(i + beatTime);
+  }
+  
+  const renderedBuffer = await offlineCtx.startRendering();
+  return audioBufferToWav(renderedBuffer);
+}
+
 function audioBufferToWav(buffer: AudioBuffer): Blob {
   const numOfChan = buffer.numberOfChannels;
   const length = buffer.length * numOfChan * 2 + 44;

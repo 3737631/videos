@@ -3,7 +3,7 @@ import { RenderConfig, SubtitleCue } from "@/types";
 const INVISIBLE_CSS = "position:fixed;top:0;left:-9999px;width:270px;height:480px;z-index:-100;pointer-events:none;";
 
 export async function renderFinalVideo(config: RenderConfig): Promise<string> {
-  const { clips, audioBlob, cues, targetDuration, onProgress } = config;
+  const { clips, audioBlob, cues, targetDuration, onProgress, mode } = config;
   
   const width = 270;
   const height = 480;
@@ -45,11 +45,16 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         const source = audioCtx.createBufferSource();
         source.buffer = decoded;
         
-        // HACK VIRAL TIKTOK: ACELERACIÓN DE VOZ
-        // Calculamos cuánto tarda la voz originalmente vs cuánto dura tu vídeo.
-        // Aceleramos la voz automáticamente para que suene dinámica y encaje perfecta.
-        const speedRatio = decoded.duration / targetDuration;
-        source.playbackRate.value = speedRatio; // Fuerza la velocidad
+        // HACK VIRAL: Acelera la voz de la IA para que coincida con tu vídeo exacto
+        if (mode === "voice") {
+          let speedRatio = decoded.duration / targetDuration;
+          // Limitamos para que no suene a ardilla (Max 2x velocidad) ni en cámara lenta
+          speedRatio = Math.max(0.8, Math.min(speedRatio, 1.8)); 
+          source.playbackRate.value = speedRatio;
+        } else {
+          // En modo música, dejamos que el ritmo suene a velocidad normal y se repita
+          source.loop = true;
+        }
 
         source.connect(dest);
         source.start(0);
@@ -195,20 +200,22 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         ctx.drawImage(activeVideo, (width - dw) / 2, (height - dh) / 2, dw, dh);
       }
 
-      const cue = cues.find(c => elapsed >= c.start && elapsed <= c.end);
-      if (cue) {
-        ctx.font = '900 22px "Inter", sans-serif'; 
-        ctx.textAlign = "center"; 
-        ctx.textBaseline = "middle";
-        ctx.lineJoin = "round";
-        const txt = cue.text;
-        const y = height * 0.75;
-        
-        ctx.lineWidth = 4; 
-        ctx.strokeStyle = "#000";
-        ctx.strokeText(txt, width / 2, y);
-        ctx.fillStyle = "#FFE600";
-        ctx.fillText(txt, width / 2, y);
+      if (config.mode === "voice") {
+        const cue = cues.find(c => elapsed >= c.start && elapsed <= c.end);
+        if (cue) {
+          ctx.font = '900 22px "Inter", sans-serif'; 
+          ctx.textAlign = "center"; 
+          ctx.textBaseline = "middle";
+          ctx.lineJoin = "round";
+          const txt = cue.text;
+          const y = height * 0.75;
+          
+          ctx.lineWidth = 4; 
+          ctx.strokeStyle = "#000";
+          ctx.strokeText(txt, width / 2, y);
+          ctx.fillStyle = "#FFE600";
+          ctx.fillText(txt, width / 2, y);
+        }
       }
 
       setTimeout(drawLoop, frameTime);

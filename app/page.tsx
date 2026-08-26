@@ -4,7 +4,7 @@ import { useState, useRef } from "react";
 import { UploadCloud, Music, Mic, Wand2, Download, RefreshCcw } from "lucide-react";
 import { VideoClip, AppMode } from "@/types";
 import { renderFinalVideo } from "@/lib/videoEngine";
-import { generateSpeechAndCues } from "@/lib/ttsEngine";
+import { generateSpeechAndCues, generateViralMusic } from "@/lib/ttsEngine";
 
 export default function App() {
   const [step, setStep] = useState(1);
@@ -18,7 +18,6 @@ export default function App() {
   const fileInput = useRef<HTMLInputElement>(null);
 
   const clearMemory = () => {
-    // Evitar borrar el mismo objeto varias veces
     const uniqueUrls = new Set(clips.map(c => c.url));
     uniqueUrls.forEach(url => URL.revokeObjectURL(url));
     if (finalVideo) URL.revokeObjectURL(finalVideo);
@@ -28,7 +27,6 @@ export default function App() {
     if (!files || !files.length) return;
     clearMemory();
     
-    // 1. LEER LOS VÍDEOS EN BRUTO
     const rawVideos: {file: File, url: string, dur: number}[] = [];
     const lector = document.createElement("video");
     lector.playsInline = true;
@@ -47,23 +45,19 @@ export default function App() {
     lector.removeAttribute("src"); 
     lector.load();
 
-    // 2. EL ALGORITMO VIRAL: Trocear en pedazos dinámicos
     let viralCuts: VideoClip[] = [];
-    const cutLength = 2.5; // Ritmo TikTok: Cambios de plano cada 2.5 seg
+    const cutLength = 2.5;
 
     rawVideos.forEach(raw => {
       const numCuts = Math.floor(raw.dur / cutLength);
-      
       if (numCuts <= 1) {
         viralCuts.push({ file: raw.file, url: raw.url, startOffset: 0, playDuration: raw.dur });
       } else {
-        // Extraemos varios "highlights" saltándonos trozos aburridos
         for (let i = 0; i < Math.min(numCuts, 6); i++) {
           let offset = (raw.dur / numCuts) * i;
           viralCuts.push({
             file: raw.file,
             url: raw.url,
-            // Sumamos 0.5s para saltarnos siempre los "tiempos muertos" de inicio de grabación
             startOffset: Math.min(offset + 0.5, raw.dur - cutLength),
             playDuration: cutLength
           });
@@ -71,16 +65,14 @@ export default function App() {
       }
     });
 
-    // Si hay más de 1 vídeo original, entrelazamos los trozos al azar para que sea muy dinámico
     if (rawVideos.length > 1) {
       viralCuts = viralCuts.sort(() => Math.random() - 0.5);
     }
 
-    // 3. LIMITAR A 15-20 SEGUNDOS (La duración perfecta para retención de audiencia)
     let finalPlaylist: VideoClip[] = [];
     let accDur = 0;
     for (const cut of viralCuts) {
-      if (accDur >= 18) break; // Máximo ~18 segundos
+      if (accDur >= 18) break; 
       finalPlaylist.push(cut);
       accDur += cut.playDuration;
     }
@@ -115,20 +107,22 @@ export default function App() {
   const processVideo = async () => {
     setStep(4);
     setProgress(5);
-    setStatus("Analizando clips virales...");
+    setStatus("Preparando motores...");
 
     try {
       let audioBlob = null;
       let cues: any = [];
 
       if (mode === "voice") {
-        setStatus("Generando guion persuasivo...");
+        setStatus("Descargando Voz Humana Real...");
         const script = generateScriptLocal(productPrompt, totalDuration);
-        
-        setStatus("Creando Voz Inteligente...");
         const tts = await generateSpeechAndCues(script, totalDuration);
         audioBlob = tts.audioBlob;
         cues = tts.cues;
+      } else {
+        // MODO MÚSICA SOLUCIONADO
+        setStatus("Generando base musical Lo-Fi / Phonk...");
+        audioBlob = await generateViralMusic(totalDuration);
       }
 
       setStatus("Renderizando a máxima velocidad...");
@@ -157,7 +151,7 @@ export default function App() {
     <main className="min-h-[100dvh] bg-[#09090b] text-white flex flex-col items-center justify-center p-4 sm:p-6 overflow-x-hidden">
       <div className="w-full max-w-xl text-center mb-6 sm:mb-8 mt-4">
         <div className="inline-block bg-purple-500/10 border border-purple-500/30 text-purple-400 px-3 py-1 rounded-full text-[10px] sm:text-xs font-bold mb-3 sm:mb-4 tracking-widest">
-          TIKTOK AUTOMATOR V9 (VIRAL CUTS)
+          TIKTOK AUTOMATOR FINAL (VOZ REAL + MÚSICA)
         </div>
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent leading-tight">
           Creador Viral
@@ -173,7 +167,7 @@ export default function App() {
               <UploadCloud className="w-8 h-8 sm:w-10 sm:h-10 text-purple-400" />
             </div>
             <h2 className="text-lg sm:text-xl font-bold text-center">Toca para subir vídeos</h2>
-            <p className="text-zinc-500 mt-2 text-xs sm:text-sm text-center">Te generamos los cortes virales al instante.</p>
+            <p className="text-zinc-500 mt-2 text-xs sm:text-sm text-center">Cortes virales automáticos.</p>
           </div>
         )}
 
@@ -184,14 +178,14 @@ export default function App() {
               <div className="p-3 sm:p-4 bg-blue-500/10 rounded-full shrink-0"><Music className="text-blue-400 w-6 h-6" /></div>
               <div className="text-left">
                 <h3 className="font-bold text-base sm:text-lg">Modo Musical</h3>
-                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Cortes muy rápidos y dinámicos.</p>
+                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Cortes dinámicos y base Lo-Fi generada.</p>
               </div>
             </button>
             <button onClick={() => { setMode("voice"); setStep(3); }} className="w-full p-4 sm:p-6 bg-zinc-950 border border-zinc-800 rounded-2xl flex items-center gap-4 hover:border-purple-500 active:bg-purple-900/20 transition-all touch-manipulation">
               <div className="p-3 sm:p-4 bg-purple-500/10 rounded-full shrink-0"><Mic className="text-purple-400 w-6 h-6" /></div>
               <div className="text-left">
                 <h3 className="font-bold text-base sm:text-lg">Modo Narrador IA</h3>
-                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Guion, voz IA y subtítulos virales.</p>
+                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Voz humana real (Mia) + Subtítulos.</p>
               </div>
             </button>
           </div>
@@ -210,7 +204,7 @@ export default function App() {
               </>
             )}
             <button onClick={processVideo} disabled={mode === "voice" && productPrompt.length < 5} className="w-full py-3 sm:py-4 bg-white text-black rounded-xl font-bold text-base sm:text-lg flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50 touch-manipulation transition-transform">
-              <Wand2 className="w-5 h-5" /> Generar Vídeo
+              <Wand2 className="w-5 h-5" /> Generar Vídeo Definitivo
             </button>
           </div>
         )}
@@ -221,7 +215,7 @@ export default function App() {
               <div className="absolute inset-0 border-4 border-zinc-800 border-t-purple-500 rounded-full animate-spin"></div>
               <div className="absolute inset-0 flex items-center justify-center font-bold font-mono text-sm sm:text-base">{progress}%</div>
             </div>
-            <h2 className="text-lg sm:text-xl font-bold text-center">Ensamblando cortes...</h2>
+            <h2 className="text-lg sm:text-xl font-bold text-center">Exportando vídeo...</h2>
             <p className="text-zinc-500 text-xs sm:text-sm mt-2 text-center px-4">{status}</p>
           </div>
         )}
