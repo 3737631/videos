@@ -1,13 +1,14 @@
 import { RenderConfig, SubtitleCue } from "@/types";
 
-const INVISIBLE_CSS = "position:fixed;top:0;left:0;width:1px;height:1px;z-index:-100;pointer-events:none;";
+// CSS corregido: Oculto fuera de pantalla, pero con tamaño real para que la gráfica no lo descarte.
+const INVISIBLE_CSS = "position:fixed;top:0;left:-9999px;width:270px;height:480px;z-index:-100;pointer-events:none;";
 
 export async function renderFinalVideo(config: RenderConfig): Promise<string> {
   const { clips, audioBlob, cues, targetDuration, onProgress } = config;
   
   const width = 270;
   const height = 480;
-  const FPS = 12; 
+  const FPS = 15; // Ligeramente subido para mayor fluidez, pero sigue siendo ultra ligero
   const frameTime = 1000 / FPS;
 
   const canvas = document.createElement("canvas");
@@ -19,18 +20,32 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
   const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
   if (!ctx) throw new Error("Tu navegador no permite gráficos 2D.");
 
-  // Forzamos pintar un frame negro de inicio para que captureStream detecte actividad
+  // Forzamos un fotograma inicial para que el grabador de vídeo se "despierte"
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, width, height);
 
-  let dest = null;
-  let audioCtx = null;
+  let dest: MediaStreamAudioDestinationNode | null = null;
+  let audioCtx: AudioContext | null = null;
+  let isAudioAlive = false;
+
   try {
     const AC = window.AudioContext || (window as any).webkitAudioContext;
     if (AC) {
       audioCtx = new AC();
       dest = audioCtx.createMediaStreamDestination();
-      if (audioCtx.state === "suspended") await audioCtx.resume();
+      
+      if (audioCtx.state === "suspended") {
+        await audioCtx.resume();
+      }
+
+      // EL "MARCAPASOS" DE AUDIO: Mantiene el canal activo reproduciendo silencio absoluto.
+      // Evita que el MediaRecorder se quede esperando sonido y devuelva 0 fotogramas.
+      const osc = audioCtx.createOscillator();
+      const silentGain = audioCtx.createGain();
+      silentGain.gain.value = 0; // Silencio total
+      osc.connect(silentGain);
+      silentGain.connect(dest);
+      osc.start();
 
       if (audioBlob) {
         const ab = await audioBlob.arrayBuffer();
@@ -40,46 +55,52 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         src.connect(dest);
         src.start(0);
       }
+      
+      // Solo consideramos el audio vivo si el estado es realmente "running"
+      if (audioCtx.state === "running") {
+        isAudioAlive = true;
+      }
     }
   } catch (e) {
-    console.warn("Módulo de Audio bloqueado, continuando sin él.");
+    console.warn("Módulo de Audio bloqueado o sin permisos. El vídeo se generará sin la pista de audio para evitar cuelgues.");
   }
 
-  // Capturador blindado
   const captureStreamFunc = canvas.captureStream || (canvas as any).mozCaptureStream || (canvas as any).webkitCaptureStream;
-  if (!captureStreamFunc) throw new Error("Tu navegador no soporta grabación de Canvas (Prueba en Chrome o Safari modernos).");
+  if (!captureStreamFunc) throw new Error("Tu navegador no soporta captura de Canvas.");
   
   const canvasStream = captureStreamFunc.call(canvas, FPS);
   const tracks = [...canvasStream.getVideoTracks()];
-  if (dest) tracks.push(...dest.stream.getAudioTracks());
+  
+  // INYECCIÓN CONDICIONAL: Solo añadimos el audio si estamos 100% seguros de que está enviando señal.
+  if (dest && isAudioAlive) {
+    tracks.push(...dest.stream.getAudioTracks());
+  }
+  
   const combinedStream = new MediaStream(tracks);
   
-  // VERIFICADOR DE FORMATOS DEFENSIVO
   const isApple = /iPhone|iPad|iPod|Safari/i.test(navigator.userAgent) && !/Chrome/i.test(navigator.userAgent);
   const checkMime = (t: string) => { try { return MediaRecorder.isTypeSupported?.(t); } catch { return false; } };
   
   let mime = "";
   if (isApple && checkMime("video/mp4")) mime = "video/mp4";
+  else if (checkMime("video/webm;codecs=vp8,opus")) mime = "video/webm;codecs=vp8,opus";
   else if (checkMime("video/webm;codecs=vp8")) mime = "video/webm;codecs=vp8";
   else if (checkMime("video/webm")) mime = "video/webm";
 
   let recorder: MediaRecorder;
   try {
-    // Intento 1: Con compresión ajustada
     recorder = mime 
-      ? new MediaRecorder(combinedStream, { mimeType: mime, videoBitsPerSecond: 500000 }) 
-      : new MediaRecorder(combinedStream, { videoBitsPerSecond: 500000 });
-  } catch (err1) {
-    try {
-      // Intento 2: Fallback genérico sin ajustar compresión (Salva crasheos en ordenadores viejos)
-      recorder = new MediaRecorder(combinedStream);
-    } catch (err2) {
-      throw new Error("Tu navegador actual bloquea la grabación de vídeo. Intenta usar Google Chrome.");
-    }
+      ? new MediaRecorder(combinedStream, { mimeType: mime, videoBitsPerSecond: 800000 }) 
+      : new MediaRecorder(combinedStream);
+  } catch (err) {
+    recorder = new MediaRecorder(combinedStream);
   }
   
   const chunks: BlobPart[] = [];
-  recorder.ondataavailable = e => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+  // Recogemos los pedazos con comprobación de que realmente traen datos
+  recorder.ondataavailable = e => { 
+    if (e.data && e.data.size > 0) chunks.push(e.data); 
+  };
 
   return new Promise<string>(async (resolve, reject) => {
     let isFinished = false;
@@ -101,7 +122,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       try { audioCtx?.close(); } catch(e){}
 
       if (chunks.length === 0) {
-        reject(new Error("No se procesó ningún fotograma de vídeo."));
+        reject(new Error("No se procesó ningún fotograma de vídeo (A/V Sync Crash). Tu navegador bloqueó la captura de imágenes."));
       } else {
         resolve(URL.createObjectURL(new Blob(chunks, { type: mime || "video/mp4" })));
       }
@@ -113,12 +134,12 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       
       try {
         if (recorder.state !== "inactive") {
-          try { recorder.requestData(); } catch(e){} // Protegido contra bloqueos de estado
+          try { recorder.requestData(); } catch(e){} 
           try { recorder.stop(); } catch(e){}
         }
       } catch(e){}
       
-      setTimeout(finalize, 1000);
+      setTimeout(finalize, 1000); // Failsafe para dar tiempo a recoger el último trozo
     };
 
     const loadVideo = async (index: number) => {
@@ -133,7 +154,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
 
       activeVideo = document.createElement("video");
       activeVideo.src = clips[index].url;
-      activeVideo.muted = true;
+      activeVideo.muted = true; // El vídeo entra mudo
       activeVideo.playsInline = true;
       activeVideo.style.cssText = INVISIBLE_CSS;
       document.body.appendChild(activeVideo);
@@ -149,7 +170,8 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
     recorder.onstop = finalize;
     recorder.onerror = () => reject(new Error("La grabación colapsó internamente."));
 
-    recorder.start(1000); 
+    // Reducimos el tiempo de captura a 250ms para asegurar que nos entrega fotogramas rápido
+    recorder.start(250); 
     const start = performance.now();
     await loadVideo(0);
     currentClipIdx = 0;
@@ -183,14 +205,14 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
 
       const cue = cues.find(c => elapsed >= c.start && elapsed <= c.end);
       if (cue) {
-        ctx.font = '900 20px "Inter", sans-serif'; 
+        ctx.font = '900 22px "Inter", sans-serif'; 
         ctx.textAlign = "center"; 
         ctx.textBaseline = "middle";
         ctx.lineJoin = "round";
         const txt = cue.text;
         const y = height * 0.75;
         
-        ctx.lineWidth = 3; 
+        ctx.lineWidth = 4; 
         ctx.strokeStyle = "#000";
         ctx.strokeText(txt, width / 2, y);
         ctx.fillStyle = "#FFE600";
@@ -201,6 +223,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
     };
     
     drawLoop();
+    
     setTimeout(stopRecording, (targetDuration + 2) * 1000);
   });
 }
