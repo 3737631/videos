@@ -9,7 +9,8 @@ export interface SubtitleCue {
 export interface VideoClip {
   file: File;
   url: string;
-  duration: number;
+  startOffset: number;  // NUEVO: En qué segundo exacto empieza el corte
+  playDuration: number; // NUEVO: Cuánto dura este corte rápido (Ej: 2.5 seg)
 }
 
 export type AppMode = "music" | "voice";

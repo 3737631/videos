@@ -23,19 +23,18 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
 
   let dest: MediaStreamAudioDestinationNode | null = null;
   let audioCtx: AudioContext | null = null;
+  let isAudioAlive = false;
 
   try {
     const AC = window.AudioContext || (window as any).webkitAudioContext;
     if (AC) {
       audioCtx = new AC();
       dest = audioCtx.createMediaStreamDestination();
-      
       if (audioCtx.state === "suspended") await audioCtx.resume();
 
-      // Inyectamos un sonido "fantasma" mínimo para asegurar que la pista graba
       const osc = audioCtx.createOscillator();
       const silentGain = audioCtx.createGain();
-      silentGain.gain.value = 0.01; 
+      silentGain.gain.value = 0; 
       osc.connect(silentGain);
       silentGain.connect(dest);
       osc.start();
@@ -43,25 +42,21 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       if (audioBlob) {
         const ab = await audioBlob.arrayBuffer();
         const decoded = await audioCtx.decodeAudioData(ab);
-        const source = audioCtx.createBufferSource();
-        source.buffer = decoded;
-        source.connect(dest);
-        source.start(0);
+        const src = audioCtx.createBufferSource();
+        src.buffer = decoded;
+        src.connect(dest);
+        src.start(0);
       }
+      if (audioCtx.state === "running") isAudioAlive = true;
     }
   } catch (e) {
-    console.warn("Error inicializando AudioContext:", e);
+    console.warn("Audio desactivado.");
   }
 
   const captureStreamFunc = canvas.captureStream || (canvas as any).mozCaptureStream || (canvas as any).webkitCaptureStream;
   const canvasStream = captureStreamFunc.call(canvas, FPS);
   const tracks = [...canvasStream.getVideoTracks()];
-  
-  // OBLIGAMOS a añadir el audio siempre (hemos quitado la restricción que lo borraba)
-  if (dest) {
-    tracks.push(...dest.stream.getAudioTracks());
-  }
-  
+  if (dest && isAudioAlive) tracks.push(...dest.stream.getAudioTracks());
   const combinedStream = new MediaStream(tracks);
   
   const isApple = /iPhone|iPad|iPod|Safari/i.test(navigator.userAgent) && !/Chrome/i.test(navigator.userAgent);
@@ -83,21 +78,25 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
   }
   
   const chunks: BlobPart[] = [];
-  recorder.ondataavailable = e => { 
-    if (e.data && e.data.size > 0) chunks.push(e.data); 
-  };
+  recorder.ondataavailable = e => { if (e.data && e.data.size > 0) chunks.push(e.data); };
 
   return new Promise<string>(async (resolve, reject) => {
     let isFinished = false;
     let isResolved = false; 
     let currentClipIdx = -1;
     let activeVideo: HTMLVideoElement | null = null;
-    const clipDur = targetDuration / clips.length;
+    
+    // CALCULAR TIEMPOS DE INICIO PARA CADA CORTE
+    const clipStartTimes: number[] = [];
+    let acc = 0;
+    for (const c of clips) {
+      clipStartTimes.push(acc);
+      acc += c.playDuration;
+    }
 
     const finalize = () => {
       if (isResolved) return;
       isResolved = true; 
-
       tracks.forEach(t => t.stop());
       if (activeVideo) {
         activeVideo.removeAttribute("src");
@@ -106,11 +105,8 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       setTimeout(() => { canvas.width = 0; canvas.remove(); }, 200);
       try { audioCtx?.close(); } catch(e){}
 
-      if (chunks.length === 0) {
-        reject(new Error("No se procesó ningún fotograma de vídeo."));
-      } else {
-        resolve(URL.createObjectURL(new Blob(chunks, { type: mime || "video/mp4" })));
-      }
+      if (chunks.length === 0) reject(new Error("No se procesó vídeo."));
+      else resolve(URL.createObjectURL(new Blob(chunks, { type: mime || "video/mp4" })));
     };
 
     const stopRecording = () => {
@@ -137,7 +133,8 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
 
       activeVideo = document.createElement("video");
       activeVideo.src = clips[index].url;
-      activeVideo.muted = true; // El vídeo entra mudo
+      activeVideo.currentTime = clips[index].startOffset; // MAGIA: EMPIEZA EN EL MOMENTO VIRAL
+      activeVideo.muted = true;
       activeVideo.playsInline = true;
       activeVideo.style.cssText = INVISIBLE_CSS;
       document.body.appendChild(activeVideo);
@@ -147,11 +144,14 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         activeVideo.oncanplay = () => res(); 
         setTimeout(res, 500); 
       });
-      activeVideo.play().catch(()=>{});
+      
+      // Asegurarse de que el tiempo se aplicó correctamente tras la carga
+      if (activeVideo) activeVideo.currentTime = clips[index].startOffset;
+      activeVideo?.play().catch(()=>{});
     };
 
     recorder.onstop = finalize;
-    recorder.onerror = () => reject(new Error("La grabación colapsó internamente."));
+    recorder.onerror = () => reject(new Error("Error interno al grabar."));
 
     recorder.start(250); 
     const start = performance.now();
@@ -169,7 +169,13 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         return;
       }
 
-      const activeIdx = Math.min(clips.length - 1, Math.floor(elapsed / clipDur));
+      // Averiguar qué corte toca reproducir ahora
+      let activeIdx = clipStartTimes.findIndex((time, i) => {
+        const nextTime = clipStartTimes[i + 1] || targetDuration + 1;
+        return elapsed >= time && elapsed < nextTime;
+      });
+      if (activeIdx === -1) activeIdx = clips.length - 1;
+
       if (activeIdx !== currentClipIdx) {
         currentClipIdx = activeIdx;
         await loadVideo(currentClipIdx);
