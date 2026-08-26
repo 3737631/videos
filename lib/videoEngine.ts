@@ -9,31 +9,18 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
   const { clips, audioBlob, cues, targetDuration, onProgress } = config;
   const width = 720, height = 1280;
 
+  // 1. Crear Canvas
   const canvas = document.createElement("canvas");
   canvas.width = width; canvas.height = height;
   canvas.style.cssText = INVISIBLE_CSS;
   document.body.appendChild(canvas);
-  
   const ctx = canvas.getContext("2d", { alpha: false })!;
 
-  const videoEls: HTMLVideoElement[] = [];
-  for (const clip of clips) {
-    const v = document.createElement("video");
-    v.src = clip.url;
-    v.muted = true; // AUDIO ORIGINAL BORRADO
-    v.playsInline = true;
-    v.crossOrigin = "anonymous";
-    v.style.cssText = INVISIBLE_CSS;
-    document.body.appendChild(v);
-    await new Promise<void>(res => { v.oncanplay = () => res(); setTimeout(res, 3000); });
-    videoEls.push(v);
-  }
-
+  // 2. Audio Context (Despertar en Safari)
   const AC = window.AudioContext || (window as any).webkitAudioContext;
   let audioCtx = new AC();
   let dest = audioCtx.createMediaStreamDestination();
 
-  // Despertar Web Audio en Safari
   if (audioCtx.state === "suspended") {
     const buf = audioCtx.createBuffer(1, 1, 22050);
     const src = audioCtx.createBufferSource();
@@ -50,30 +37,78 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
     source.start(0);
   }
 
+  // 3. Configurar Grabador (Compresión en tiempo real para no saturar memoria)
   const canvasStream = canvas.captureStream(30);
   const tracks = [...canvasStream.getVideoTracks(), ...dest.stream.getAudioTracks()];
   const combinedStream = new MediaStream(tracks);
   
   const mime = IS_APPLE ? "video/mp4" : "video/webm";
-  const recorder = new MediaRecorder(combinedStream, { mimeType: mime });
+  // Bajamos el bitrate a 2.5 Mbps para comprimir al vuelo y evitar bloqueos
+  const recorder = new MediaRecorder(combinedStream, { 
+    mimeType: mime,
+    videoBitsPerSecond: 2500000 
+  });
+  
   const chunks: BlobPart[] = [];
   recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
 
-  return new Promise<string>((resolve) => {
-    let frameId = 0, isFinished = false, currentClip = 0;
+  return new Promise<string>(async (resolve, reject) => {
+    let frameId = 0;
+    let isFinished = false;
+    let currentClipIdx = -1;
+    let activeVideoEl: HTMLVideoElement | null = null;
     const clipDur = targetDuration / clips.length;
-    const start = performance.now();
+
+    // SISTEMA ANTI-COLAPSO (Carga Secuencial)
+    // Carga un vídeo nuevo y DESTRUYE el anterior de la memoria RAM
+    const loadVideo = async (index: number) => {
+      if (activeVideoEl) {
+        activeVideoEl.pause();
+        activeVideoEl.removeAttribute('src');
+        activeVideoEl.load(); // Fuerza vaciado de RAM
+        activeVideoEl.remove();
+        activeVideoEl = null;
+      }
+
+      if (index >= clips.length) return null;
+
+      const v = document.createElement("video");
+      v.src = clips[index].url;
+      v.muted = true;
+      v.playsInline = true;
+      v.crossOrigin = "anonymous";
+      v.style.cssText = INVISIBLE_CSS;
+      document.body.appendChild(v);
+      
+      await new Promise<void>(res => { 
+        v.oncanplay = () => res(); 
+        setTimeout(res, 3000); // Timeout por si el vídeo pesa demasiado
+      });
+      
+      v.play().catch(()=>{});
+      activeVideoEl = v;
+      return v;
+    };
 
     recorder.onstop = () => {
       cancelAnimationFrame(frameId);
       tracks.forEach(t => t.stop());
-      videoEls.forEach(v => v.remove());
+      if (activeVideoEl) {
+        activeVideoEl.removeAttribute('src');
+        activeVideoEl.remove();
+      }
       canvas.remove();
+      if (chunks.length === 0) reject(new Error("No se pudo renderizar."));
       resolve(URL.createObjectURL(new Blob(chunks, { type: mime })));
     };
 
+    // Iniciar Grabación
     recorder.start(100);
-    videoEls[0]?.play().catch(()=>{});
+    const start = performance.now();
+    
+    // Cargar el primer vídeo a RAM
+    await loadVideo(0);
+    currentClipIdx = 0;
 
     const draw = () => {
       if (isFinished) return;
@@ -87,20 +122,21 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       }
 
       const activeIdx = Math.min(clips.length - 1, Math.floor(elapsed / clipDur));
-      if (activeIdx !== currentClip) {
-        videoEls[currentClip]?.pause();
-        currentClip = activeIdx;
-        videoEls[currentClip].currentTime = 0;
-        videoEls[currentClip].play().catch(()=>{});
+      
+      // Si toca cambiar de vídeo, lo cargamos dinámicamente
+      if (activeIdx !== currentClipIdx) {
+        currentClipIdx = activeIdx;
+        loadVideo(currentClipIdx);
       }
 
-      const v = videoEls[currentClip];
-      ctx.fillStyle = "#09090b"; ctx.fillRect(0, 0, width, height);
+      ctx.fillStyle = "#09090b"; 
+      ctx.fillRect(0, 0, width, height);
       
-      if (v && v.readyState >= 2) {
-        const scale = Math.max(width / v.videoWidth, height / v.videoHeight);
-        const dw = v.videoWidth * scale, dh = v.videoHeight * scale;
-        ctx.drawImage(v, (width - dw) / 2, (height - dh) / 2, dw, dh);
+      if (activeVideoEl && activeVideoEl.readyState >= 2) {
+        const scale = Math.max(width / activeVideoEl.videoWidth, height / activeVideoEl.videoHeight);
+        const dw = activeVideoEl.videoWidth * scale;
+        const dh = activeVideoEl.videoHeight * scale;
+        ctx.drawImage(activeVideoEl, (width - dw) / 2, (height - dh) / 2, dw, dh);
       }
 
       // Dibujar subtítulos
@@ -120,6 +156,15 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
 
       frameId = requestAnimationFrame(draw);
     };
+    
     frameId = requestAnimationFrame(draw);
+    
+    // Watchdog salvavidas: si por lo que sea se bloquea, detiene y guarda lo hecho a los pocos segundos
+    setTimeout(() => {
+      if (!isFinished) {
+        isFinished = true;
+        recorder.stop();
+      }
+    }, (targetDuration + 5) * 1000);
   });
 }
