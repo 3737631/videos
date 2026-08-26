@@ -126,7 +126,10 @@ export default function CrearPage() {
     setFiles(list);
     setThumbs([]);
     setMergedBlob(null);
-    setBusyMerge(list.length > 1);
+    setVideoDuration(0);
+    setScript("");
+    setScriptEdited(false);
+    setBusyMerge(true);
 
     const tUrls: string[] = [];
     const tImages: string[] = [];
@@ -174,7 +177,7 @@ export default function CrearPage() {
     // Móvil: s.click/a.aliexpress y links sin ID numérico - lectura instantánea 0s
     const isAliHost = /aliexpress|ali\.express/i.test(raw);
     if (!parsed && !slug && !isAliHost) {
-      setProductNote("Pega un enlace válido de AliExpress.");
+      setProductNote("Pega un enlace válido del producto.");
       return;
     }
     // Lectura instantánea en móvil: muestra nombre del slug o genérico sin esperar red (0s vs 5s)
@@ -270,8 +273,9 @@ export default function CrearPage() {
   const productTitle = manualName.trim() || product?.title || null;
 
   const buildScript = useCallback(() => {
+    if (!videoDuration) return;
     const target = pickTargetDuration(videoDuration, false);
-    // Guion 100% ligado a producto + duración: pasa título, precio, moneda, features y vendedor
+    // Guion 100% ligado a producto + duración REAL del vídeo (ideal TikTok), nunca menciona AliExpress
     const g = generateScript({
       durationSec: target,
       lang,
@@ -283,20 +287,23 @@ export default function CrearPage() {
         seller: product?.seller ?? null,
       },
     });
-    setScript(g.text);
+    // Sanitiza por si el título traía marca de tienda
+    const clean = g.text.replace(/aliexpress/gi, "").replace(/\s{2,}/g, " ").trim();
+    setScript(clean);
     setScriptEdited(false);
     // Tono publicitario por defecto para producto (viral/urgente), no storytelling lento
-    const rec = recommendStyle({ scriptText: g.text, isDropshipping: true, durationSec: target });
+    const rec = recommendStyle({ scriptText: clean, isDropshipping: true, durationSec: target });
     const adStyle: string = productTitle ? (target <= 16 ? "viral" : "energetico") : rec;
     setStyleId(adStyle);
     setRecommended(adStyle);
   }, [videoDuration, lang, productTitle, product]);
 
-  // Auto-guion: espera a tener producto Y duración real del vídeo para crear guion justo (ideal TikTok) sin mencionar AliExpress
+  // Auto-guion: BLOQUEADO hasta tener vídeo analizado (duración real + audio muteado) y producto.
+  // Solo entonces se crea el guion a medida de la duración ideal TikTok (pickTargetDuration), sin mencionar marketplace.
   useEffect(() => {
     if (!productTitle || !videoDuration || phase !== "setup" || mode === "music") return;
     if (scriptEdited) return;
-    const isGeneric = /Producto AliExpress|este producto/i.test(script);
+    const isGeneric = /este producto/i.test(script);
     const isNewRealProduct = productTitle && !script.includes(productTitle.slice(0, 8)) && isGeneric;
     if (!script.trim() || isNewRealProduct) {
       buildScript();
@@ -484,15 +491,18 @@ export default function CrearPage() {
             <section className="cc-card p-4">
               <div className="flex items-center justify-between">
                 <div className="text-xs font-semibold text-gray-200">
-                  Producto de AliExpress{" "}
+                  Producto{" "}
                   {mode === "music" ? (
                     <span className="text-gray-400">(opcional)</span>
                   ) : (
                     <span className="text-rose-300">* obligatorio</span>
                   )}
                 </div>
-                {productTitle && (
+                {productTitle && videoDuration > 0 && (
                   <div className="text-xs font-medium text-emerald-300">Analizado</div>
+                )}
+                {productTitle && !videoDuration && (
+                  <div className="text-xs font-medium text-amber-300">Esperando vídeo…</div>
                 )}
               </div>
               <div className="mt-3 flex gap-2">
@@ -526,24 +536,26 @@ export default function CrearPage() {
 
             {product && (
               <section className="cc-card p-4">
-                <div className="text-xs font-semibold text-gray-200">Guion personalizado</div>
-                {script ? (
+                <div className="text-xs font-semibold text-gray-200">Guion personalizado — solo del producto (lo que hace y beneficios)</div>
+                {!videoDuration ? (
+                  <div className="mt-2 text-xs text-amber-300">Analizando vídeo (quitando audio original y detectando mejores momentos para el TikTok ideal)… el guion se creará en cuanto tengamos la duración real.</div>
+                ) : script ? (
                   <>
                     <div className="mt-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-sm text-gray-100 whitespace-pre-wrap leading-relaxed">{script}</div>
                     <textarea
                       value={script}
-                      onChange={(e) => { setScript(e.target.value); setScriptEdited(true); }}
+                      onChange={(e) => { setScript(e.target.value.replace(/aliexpress/gi, "")); setScriptEdited(true); }}
                       rows={4}
                       className="mt-2 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm outline-none focus:border-violet-400/60"
-                      placeholder="Guion generado automáticamente..."
+                      placeholder="Guion generado automáticamente según producto y duración ideal TikTok..."
                     />
                     <div className="mt-1 flex gap-2">
                       <button onClick={buildScript} className="text-xs text-violet-300 hover:text-violet-200">⟳ Regenerar</button>
-                      <span className="text-xs text-gray-500">Se lee en alto con voz + subtítulos</span>
+                      <span className="text-xs text-gray-500">Se lee en alto con voz + subtítulos sobre los momentos virales (audio original siempre muteado)</span>
                     </div>
                   </>
                 ) : (
-                  <div className="mt-2 text-xs text-gray-500">Creando guion para {(product.title ?? "producto").slice(0, 40)}…</div>
+                  <div className="mt-2 text-xs text-gray-500">Creando guion para {(product.title ?? "producto").slice(0, 40)} a duración ideal TikTok ({pickTargetDuration(videoDuration, false)}s)…</div>
                 )}
               </section>
             )}

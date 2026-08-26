@@ -98,11 +98,33 @@ const T = {
 type Tpl<T> = Array<(p: ProductSeed) => T>;
 const es_ = T.es;
 
+function sanitizeTitle(title: string): string {
+  // Nunca mencionar AliExpress/marketplace: centrarse solo en el producto y lo que hace
+  return title
+    .replace(/aliexpress/gi, "")
+    .replace(/ali\s*express/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function short(title: string | null | undefined): string {
-  if (!title) return "esto";
-  const clean = title.replace(/\s+/g, " ").trim();
+  if (!title) return "este producto";
+  let clean = sanitizeTitle(title.replace(/\s+/g, " ").trim());
+  // Si es un limpiador, aerógrafo, etc. nos quedamos con el concepto clave
   const cut = clean.split(/[,(|]/)[0].trim();
-  return cut.length > 60 ? cut.slice(0, 57) + "…" : cut || "esto";
+  const out = cut.length > 60 ? cut.slice(0, 57) + "…" : cut || "este producto";
+  return out || "este producto";
+}
+
+function sanitizeScript(text: string): string {
+  // Garantiza que el guion nunca mencione AliExpress/marketplace: solo producto
+  return text
+    .replace(/ali\s*express/gi, "")
+    .replace(/aliexpress/gi, "")
+    .replace(/en aliexpress/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([.,!?:;])/g, "$1")
+    .trim();
 }
 
 export interface GeneratedScript {
@@ -137,11 +159,21 @@ export function generateScript(opts: {
       it: `Guarda questo… ${short(opts.product?.title)} cambia tutto. Guarda come funziona, semplicissimo. Migliaia lo hanno già. Tocca il link adesso!`,
       pt: `Olha isso… ${short(opts.product?.title)} muda tudo. Vê como é simples. Milhares já têm. Toca no link agora!`,
     };
-    const text = base[lang as Exclude<GenLang, "es">];
+    const text = sanitizeScript(base[lang as Exclude<GenLang, "es">]);
     return { text, words: countWords(text), targetWords };
   }
 
   const P = opts.product ?? {};
+  // Si el producto es un limpiador, aerógrafo, etc. inyectamos su función real en el guion
+  // usando features del producto (lo que hace), nunca inventamos.
+  const hasFeatures = (P.features?.length ?? 0) > 0;
+  if (hasFeatures) {
+    // Primera feature describe qué hace el producto -> la metemos como beneficio tangible
+    const feat = sanitizeTitle(P.features![0]).slice(0, 90);
+    const featText = `${feat.charAt(0).toUpperCase() + feat.slice(1)}.`;
+    // Sobrescribe beneficio con feature real si existe
+    (es_.beneficio as unknown as Array<(p: ProductSeed) => string>).unshift(() => featText);
+  }
   const sections: Array<{ key: keyof typeof es_; weight: number }> = [
     { key: "hook", weight: 0.16 },
     { key: "problema", weight: 0.16 },
@@ -185,7 +217,8 @@ export function generateScript(opts: {
     chosen.splice(worstIdx, 1);
   }
 
-  const text = chosen.join(" ");
+  const raw = chosen.join(" ");
+  const text = sanitizeScript(raw);
   return { text, words: countWords(text), targetWords };
 }
 
