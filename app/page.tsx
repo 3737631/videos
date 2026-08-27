@@ -84,7 +84,7 @@ export default function App() {
       es: {
         hooks: [`¿Cansado de los mismos problemas? Necesitas ${cleanInfo}.`, `El secreto que nadie te quiere contar sobre ${cleanInfo}.`, `Mira cómo ${cleanInfo} me salvó la vida.`],
         benefits: ["Te ahorra horas de esfuerzo y es súper fácil.", "La calidad te dejará con la boca abierta.", "Es el mejor invento y funciona perfecto."],
-        calls: ["Consíguelo hoy y cambia tu rutina.", "Pruébalo ahora, no te arrepentirás.", "Empieza a usarlo ya."]
+        calls: ["Consíguelo hoy y cambia tu rutina.", "Pruébalo ahora. Te encantará.", "Empieza a usarlo ya. No te arrepentirás."]
       },
       en: {
         hooks: [`Tired of the same problems? You need ${cleanInfo}.`, `The secret nobody tells you about ${cleanInfo}.`, `Look how ${cleanInfo} totally saved my day.`],

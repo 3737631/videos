@@ -65,11 +65,11 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     source.buffer = audioBuffer;
     if (mode === "voice") {
       if (isFallback) {
-        const rate = 1.28;
+        const rate = 1.38;
         source.playbackRate.value = rate;
         voiceDuration = actualDuration / rate;
       } else {
-        const rate = 1.35;
+        const rate = 1.45;
         source.playbackRate.value = rate;
         voiceDuration = actualDuration / rate;
       }
