@@ -10,7 +10,7 @@ export async function generateSpeechAndCues(
     rawWords.push("¡INCREÍBLE!", "DESCÚBRELO", "AHORA");
   }
 
-  // Subtítulos ultra dinámicos en mayúsculas (de 1 a 2 palabras para estilo TikTok)
+  // Subtítulos ultra dinámicos en mayúsculas (de 1 a 2 palabras para estilo TikTok profesional)
   const wordChunks: string[] = [];
   for (let i = 0; i < rawWords.length; i += 2) {
     wordChunks.push(rawWords.slice(i, i + 2).join(" ").toUpperCase());
@@ -25,33 +25,22 @@ export async function generateSpeechAndCues(
   const v = voiceMap[lang] || voiceMap["es"];
   const encoded = encodeURIComponent(cleanText);
 
-  // SISTEMA DE CAPAS INMUNE A ADBLOCKERS
+  // APIs directas de voz humana (las que funcionaban perfectamente al principio)
   const apis = [
-    '/api/tts', // Servidor interno Next.js (imposible de bloquear por adblockers de cliente)
     `https://api.streamelements.com/kappa/v2/speech?voice=${v.streamElements}&text=${encoded}`,
-    `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`,
-    `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`
+    `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`)}`
   ];
 
   let audioBlob: Blob | null = null;
 
   for (const url of apis) {
     try {
-      let res;
-      if (url === '/api/tts') {
-        res = await fetch('/api/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: cleanText, lang })
-        });
-      } else {
-        res = await fetch(url, { cache: "no-store" });
-      }
-
+      const res = await fetch(url, { cache: "no-store" });
       if (res.ok) {
-        const blob = await res.blob();
-        if (blob.size > 500) {
-          audioBlob = blob;
+        const buf = await res.arrayBuffer();
+        if (buf.byteLength > 1000) {
+          audioBlob = new Blob([buf], { type: "audio/mp3" });
           break; 
         }
       }
@@ -60,55 +49,71 @@ export async function generateSpeechAndCues(
     }
   }
 
-  // Respaldo armónico si fallaran las redes
+  // Respaldo de voz neutral (CERO MÚSICA, solo tono de voz claro) si la red falla totalmente
   if (!audioBlob) {
-    audioBlob = await generateHarmonicSynth(Math.max(8, targetDurationSec));
+    audioBlob = await generateSpeechHumFallback(rawWords.length, Math.max(8, targetDurationSec));
   }
 
   return { audioBlob, wordChunks };
 }
 
-async function generateHarmonicSynth(durationSec: number): Promise<Blob> {
-  const AC = window.AudioContext || (window as any).webkitAudioContext;
-  const offlineCtx = new (window.OfflineAudioContext || (window as any).webkitOfflineAudioContext)(1, 44100 * durationSec, 44100);
-  
-  const notes = [261.63, 329.63, 392.00, 523.25];
-  const beat = 0.5;
-  for (let t = 0; t < durationSec; t += beat) {
+async function generateSpeechHumFallback(wordCount: number, durationSec: number): Promise<Blob> {
+  const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+  const sampleRate = 44100;
+  const offlineCtx = new AC(1, sampleRate * durationSec, sampleRate);
+  const timePerWord = durationSec / Math.max(1, wordCount);
+
+  for (let i = 0; i < wordCount; i++) {
     const osc = offlineCtx.createOscillator();
     const gain = offlineCtx.createGain();
-    osc.type = "triangle";
-    osc.frequency.value = notes[Math.floor(Math.random() * notes.length)];
+    osc.type = "sine";
+    osc.frequency.value = 240 + (i % 4) * 20; // Tono vocal estable, nunca música
     
-    gain.gain.setValueAtTime(0.15, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + beat * 0.9);
-    
+    const start = i * timePerWord;
+    gain.gain.setValueAtTime(0.2, start);
+    gain.gain.exponentialRampToValueAtTime(0.001, start + timePerWord * 0.85);
+
     osc.connect(gain);
     gain.connect(offlineCtx.destination);
-    osc.start(t);
-    osc.stop(t + beat);
+    osc.start(start);
+    osc.stop(start + timePerWord);
   }
-  
+
   const buffer = await offlineCtx.startRendering();
   return audioBufferToWav(buffer);
 }
 
 export async function generateViralMusic(duration: number): Promise<Blob> {
-  const offlineCtx = new (window.OfflineAudioContext || (window as any).webkitOfflineAudioContext)(1, 44100 * (duration + 2), 44100);
+  const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+  const sampleRate = 44100;
+  const offlineCtx = new AC(1, sampleRate * (duration + 2), sampleRate);
   const bpm = 120;
   const beatTime = 60 / bpm; 
   
   for (let i = 0; i < duration + 2; i += beatTime) {
     const kick = offlineCtx.createOscillator();
     const kickGain = offlineCtx.createGain();
-    kick.frequency.setValueAtTime(120, i);
-    kick.frequency.exponentialRampToValueAtTime(0.01, i + 0.3);
-    kickGain.gain.setValueAtTime(0.8, i);
-    kickGain.gain.exponentialRampToValueAtTime(0.01, i + 0.3);
+    kick.frequency.setValueAtTime(150, i);
+    kick.frequency.exponentialRampToValueAtTime(0.01, i + 0.5);
+    kickGain.gain.setValueAtTime(1, i);
+    kickGain.gain.exponentialRampToValueAtTime(0.01, i + 0.5);
     kick.connect(kickGain);
     kickGain.connect(offlineCtx.destination);
     kick.start(i);
-    kick.stop(i + 0.3);
+    kick.stop(i + 0.5);
+    
+    if (i + beatTime / 2 < duration + 2) {
+      const hat = offlineCtx.createOscillator();
+      const hatGain = offlineCtx.createGain();
+      hat.type = "square";
+      hat.frequency.setValueAtTime(8000, i + beatTime / 2);
+      hatGain.gain.setValueAtTime(0.1, i + beatTime / 2);
+      hatGain.gain.exponentialRampToValueAtTime(0.01, i + beatTime / 2 + 0.1);
+      hat.connect(hatGain);
+      hatGain.connect(offlineCtx.destination);
+      hat.start(i + beatTime / 2);
+      hat.stop(i + beatTime / 2 + 0.1);
+    }
   }
   const buffer = await offlineCtx.startRendering();
   return audioBufferToWav(buffer);
