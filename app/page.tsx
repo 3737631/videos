@@ -12,7 +12,6 @@ export default function App() {
   const [mode, setMode] = useState<AppMode | null>(null);
   const [productPrompt, setProductPrompt] = useState("");
   const [language, setLanguage] = useState("es"); 
-  const [totalDuration, setTotalDuration] = useState(0);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
   const [finalVideo, setFinalVideo] = useState<string | null>(null);
@@ -32,7 +31,6 @@ export default function App() {
     lector.playsInline = true;
     lector.muted = true;
     
-    let accDur = 0;
     for (const file of Array.from(files)) {
       const url = URL.createObjectURL(file);
       lector.src = url;
@@ -42,24 +40,24 @@ export default function App() {
         setTimeout(() => res(3), 1000); 
       });
       validClips.push({ file, url, startOffset: 0, playDuration: dur });
-      accDur += dur;
     }
     lector.removeAttribute("src"); 
     lector.load();
 
     setClips(validClips.sort(() => Math.random() - 0.5));
-    // Tiempo estimado seguro (entre 5 y 15 segundos)
-    setTotalDuration(Math.min(15, Math.max(5, Math.round(accDur))));
     setStep(2);
   };
 
   const generateScriptLocal = (info: string, lang: string) => {
-    const cleanInfo = info.replace(/https?:\/\/\S+/gi, "").trim() || "este producto";
+    const cleanInfo = info
+      .replace(/https?:\/\/\S+/gi, "")
+      .replace(/(aliexpress|amazon|shein|temu|tienda|comprar|vendedor|descuento|link|bio)/gi, "")
+      .trim() || "este producto";
 
     const data: Record<string, { hooks: string[], benefits: string[], calls: string[] }> = {
       es: {
-        hooks: [`¿Cansado de los mismos problemas? Necesitas ${cleanInfo}.`, `El secreto que nadie te quiere contar sobre ${cleanInfo}.`, `Mira cómo ${cleanInfo} me salvó el día.`],
-        benefits: ["Te ahorra horas de esfuerzo y es súper fácil.", "La calidad te dejará con la boca abierta.", "Es el mejor invento y funciona perfecto."],
+        hooks: [`¿Cansado de los mismos problemas? Necesitas ${cleanInfo}.`, `El secreto que nadie te quiere contar sobre ${cleanInfo}.`, `Mira cómo ${cleanInfo} me salvó la vida.`],
+        benefits: ["Te ahorra horas de esfuerzo y es súper fácil.", "La calidad te dejará con la boca abierta.", "Es el mejor invento y funciona a la perfección."],
         calls: ["Consíguelo hoy y cambia tu rutina.", "Pruébalo ahora, no te arrepentirás.", "Empieza a usarlo ya."]
       },
       en: {
@@ -94,29 +92,31 @@ export default function App() {
 
     try {
       let audioBlob = null;
-      let cues: any = [];
+      let wordChunks: string[] = [];
+      let targetDuration = 10;
 
       if (mode === "voice") {
         setStatus(`Generando voz en ${language.toUpperCase()}...`);
         const script = generateScriptLocal(productPrompt, language);
         
-        const tts = await generateSpeechAndCues(script, totalDuration, language);
+        const tts = await generateSpeechAndCues(script, language);
         audioBlob = tts.audioBlob;
-        cues = tts.cues;
+        wordChunks = tts.wordChunks;
       } else {
         setStatus("Generando base musical...");
-        audioBlob = await generateViralMusic(totalDuration);
+        audioBlob = await generateViralMusic(targetDuration);
       }
 
       setStatus("Renderizando vídeo final...");
       const url = await renderFinalVideo({
         clips, 
         audioBlob, 
-        cues, 
+        wordChunks, 
+        cues: [], // Compatible con la interfaz
         mode: mode!, 
-        targetDuration: totalDuration, 
-        onProgress: (p) => setProgress(Math.round(p))
-      });
+        targetDuration, 
+        onProgress: (p: number) => setProgress(Math.round(p))
+      } as any);
 
       setFinalVideo(url);
       setStep(5);
@@ -137,7 +137,7 @@ export default function App() {
     <main className="min-h-[100dvh] bg-[#09090b] text-white flex flex-col items-center justify-center p-4 sm:p-6 overflow-x-hidden">
       <div className="w-full max-w-xl text-center mb-6 sm:mb-8 mt-4">
         <div className="inline-block bg-purple-500/10 border border-purple-500/30 text-purple-400 px-3 py-1 rounded-full text-[10px] sm:text-xs font-bold mb-3 sm:mb-4 tracking-widest">
-          TIKTOK AUTOMATOR (VERSIÓN ESTABLE 30FPS)
+          TIKTOK AUTOMATOR (VERSIÓN DEFINITIVA)
         </div>
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent leading-tight">
           Creador Viral
@@ -170,7 +170,7 @@ export default function App() {
               <div className="p-3 sm:p-4 bg-purple-500/10 rounded-full shrink-0"><Mic className="text-purple-400 w-6 h-6" /></div>
               <div className="text-left">
                 <h3 className="font-bold text-base sm:text-lg">Modo Narrador IA</h3>
-                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Guion, voz humana y subtítulos.</p>
+                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Guion, voz humana rápida y subtítulos.</p>
               </div>
             </button>
           </div>

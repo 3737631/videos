@@ -1,4 +1,4 @@
-import { RenderConfig, SubtitleCue } from "@/types";
+import { RenderConfig } from "@/types";
 
 const INVISIBLE_CSS = "position:fixed;top:0;left:-9999px;width:270px;height:480px;z-index:-100;pointer-events:none;";
 
@@ -32,8 +32,16 @@ function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number,
   }
 }
 
-export async function renderFinalVideo(config: RenderConfig): Promise<string> {
-  const { clips, audioBlob, cues, targetDuration, onProgress, mode } = config;
+export async function renderFinalVideo(config: RenderConfig & { wordChunks?: string[] }): Promise<string> {
+  const { clips, audioBlob, targetDuration, onProgress, mode } = config;
+  let cues = (config as any).cues as any[] | undefined;
+  const wordChunks = (config as any).wordChunks as string[] | undefined;
+  // Compat: if wordChunks passed (new API), generate cues from it timed to targetDuration
+  if ((!cues || cues.length === 0) && wordChunks && wordChunks.length) {
+    const tPer = targetDuration / wordChunks.length;
+    cues = wordChunks.map((txt, i) => ({ text: txt, start: i * tPer, end: (i + 1) * tPer })) as any;
+  }
+  cues = cues || [];
   
   const width = 270;
   const height = 480;
@@ -237,7 +245,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         }
 
         // DIBUJADO DE SUBTÍTULOS PERFECTAMENTE CENTRADO
-        if (config.mode === "voice" && cues) {
+        if (config.mode === "voice") {
           const cue = cues.find(c => elapsed >= c.start && elapsed <= c.end);
           if (cue) {
             ctx.font = '900 28px "Inter", sans-serif'; 
