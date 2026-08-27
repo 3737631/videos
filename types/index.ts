@@ -21,4 +21,5 @@ export interface RenderConfig {
   mode: AppMode;
   targetDuration: number;
   onProgress: (progress: number) => void;
+  isFallback?: boolean;
 }

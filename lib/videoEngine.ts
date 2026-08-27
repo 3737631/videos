@@ -36,7 +36,7 @@ function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number,
 }
 
 export async function renderFinalVideo(config: RenderConfig): Promise<{ url: string, mimeType: string }> {
-  const { clips, audioBuffer, audioContext, mode, wordChunks, onProgress } = config;
+  const { clips, audioBuffer, audioContext, mode, wordChunks, onProgress, isFallback } = config;
   
   const width = 270;
   const height = 480;
@@ -73,8 +73,13 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     source.buffer = audioBuffer;
     
     if (mode === "voice") {
-      source.playbackRate.value = 1.15;
-      actualDuration = actualDuration / 1.15;
+      // No acelerar si es fallback Animalese (ya es rápido), y bajar de 1.15 a 1.02 para voz humana
+      if (isFallback) {
+        source.playbackRate.value = 1.0;
+      } else {
+        source.playbackRate.value = 1.02;
+        actualDuration = actualDuration / 1.02;
+      }
     } else {
       source.loop = true;
     }
@@ -177,23 +182,47 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     const loadVideoAsync = async (index: number) => {
       if (index >= clips.length) return;
 
+      const clip = clips[index];
+      const safePlayDuration = Number.isFinite(clip.playDuration) && clip.playDuration > 0.5 ? clip.playDuration : 5;
+      const maxOffset = Math.max(0, safePlayDuration - clipDur - 0.15);
+      const randomOffset = maxOffset > 0.1 ? Math.random() * maxOffset : 0;
+
       const newVideo = document.createElement("video");
-      newVideo.src = clips[index].url;
-      newVideo.currentTime = Math.random() * Math.max(0, clips[index].playDuration - clipDur);
+      newVideo.src = clip.url;
       newVideo.muted = true;
       newVideo.playsInline = true;
+      newVideo.preload = "auto";
+      newVideo.crossOrigin = "anonymous";
       newVideo.style.cssText = CANVAS_CSS;
       document.body.appendChild(newVideo);
       
+      // Esperar metadata antes de buscar
       await new Promise<void>(res => { 
         let resolved = false;
         const done = () => { if (!resolved) { resolved = true; res(); } };
-        newVideo.oncanplay = done;
-        newVideo.onloadeddata = done;
-        setTimeout(done, 1200);
+        if (newVideo.readyState >= 1) {
+          done();
+        } else {
+          newVideo.onloadedmetadata = done;
+          newVideo.onerror = done;
+          setTimeout(done, 1500);
+        }
+      });
+      try {
+        if (Number.isFinite(randomOffset) && randomOffset >= 0) newVideo.currentTime = randomOffset;
+      } catch {}
+      await new Promise<void>(res => { 
+        let resolved = false;
+        const done = () => { if (!resolved) { resolved = true; res(); } };
+        if (newVideo.readyState >= 2) done();
+        else {
+          newVideo.oncanplay = done;
+          newVideo.onloadeddata = done;
+          setTimeout(done, 800);
+        }
       });
       
-      newVideo.play().catch(()=>{});
+      try { await newVideo.play(); } catch {}
 
       const oldVideo = activeVideo;
       activeVideo = newVideo;
@@ -237,11 +266,16 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
           ctx.fillStyle = "#000000"; 
           ctx.fillRect(0, 0, width, height);
 
-          if (activeVideo && activeVideo.readyState >= 2) {
+          if (activeVideo && activeVideo.readyState >= 2 && activeVideo.videoWidth > 0 && activeVideo.videoHeight > 0) {
             const scale = Math.max(width / activeVideo.videoWidth, height / activeVideo.videoHeight);
             const dw = activeVideo.videoWidth * scale;
             const dh = activeVideo.videoHeight * scale;
-            ctx.drawImage(activeVideo, (width - dw) / 2, (height - dh) / 2, dw, dh);
+            const dx = (width - dw) / 2;
+            const dy = (height - dh) / 2;
+            try { ctx.drawImage(activeVideo, dx, dy, dw, dh); } catch {}
+          } else if (activeVideo && activeVideo.readyState >= 1) {
+            // Intentar pintar aunque no esté fully ready, evita negro absoluto
+            try { ctx.drawImage(activeVideo, 0, 0, width, height); } catch {}
           }
 
           if (mode === "voice" && dynamicCues.length > 0) {

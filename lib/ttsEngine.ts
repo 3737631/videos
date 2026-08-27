@@ -1,6 +1,7 @@
 export interface SpeechResult {
   audioBuffer: AudioBuffer;
   wordChunks: string[];
+  isFallback: boolean;
 }
 
 function cleanScript(text: string): string {
@@ -49,12 +50,12 @@ function base64ToBlob(dataURI: string): Blob {
   return new Blob([ab], { type: mimeString });
 }
 
-// Fallback robusto offline
+// Fallback suave offline - sin pitido, voz grave y lenta
 async function generateAnimaleseVoice(text: string, ctx: AudioContext): Promise<AudioBuffer> {
   try {
     const chars = text.split('');
-    const charDuration = 0.06;
-    const totalDuration = chars.length * charDuration + 0.5;
+    const charDuration = 0.09; // más lento, menos pitido
+    const totalDuration = chars.length * charDuration + 0.8;
 
     const OfflineAudioContextClass = window.OfflineAudioContext || (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext }).webkitOfflineAudioContext;
     if (!OfflineAudioContextClass) throw new Error("Audio Offline no soportado");
@@ -64,30 +65,30 @@ async function generateAnimaleseVoice(text: string, ctx: AudioContext): Promise<
 
     for (const char of chars) {
       if (char === ' ') {
-        currentTime += charDuration * 1.5;
+        currentTime += charDuration * 0.8;
         continue;
       }
       const osc = offlineCtx.createOscillator();
       const gain = offlineCtx.createGain();
       const filter = offlineCtx.createBiquadFilter();
 
-      osc.type = "square";
+      osc.type = "triangle"; // suave, sin pitido square
       const charCode = char.toLowerCase().charCodeAt(0) || 97;
       const isVowel = ['a','e','i','o','u'].includes(char.toLowerCase());
       
-      let baseFreq = 300 + ((charCode % 26) * 15);
-      if (isVowel) baseFreq += 150;
+      let baseFreq = 160 + ((charCode % 14) * 8); // rango grave 160-272 Hz
+      if (isVowel) baseFreq += 18;
 
       osc.frequency.setValueAtTime(baseFreq, currentTime);
-      osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.5, currentTime + charDuration);
 
-      filter.type = "bandpass";
-      filter.frequency.value = 1500;
-      filter.Q.value = 1.5;
+      filter.type = "lowpass";
+      filter.frequency.value = 1100;
+      filter.Q.value = 0.7;
 
       gain.gain.setValueAtTime(0, currentTime);
-      gain.gain.linearRampToValueAtTime(0.15, currentTime + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.001, currentTime + charDuration);
+      gain.gain.linearRampToValueAtTime(0.07, currentTime + 0.015);
+      gain.gain.linearRampToValueAtTime(0.07, currentTime + charDuration * 0.7);
+      gain.gain.linearRampToValueAtTime(0, currentTime + charDuration);
 
       osc.connect(filter);
       filter.connect(gain);
@@ -95,7 +96,7 @@ async function generateAnimaleseVoice(text: string, ctx: AudioContext): Promise<
 
       osc.start(currentTime);
       osc.stop(currentTime + charDuration);
-      currentTime += charDuration;
+      currentTime += charDuration * 0.95;
     }
     return await offlineCtx.startRendering();
   } catch (error: unknown) {
@@ -183,19 +184,30 @@ export async function generateSpeechAndCues(
   let totalDuration = 0;
   const decodedBuffers: AudioBuffer[] = [];
 
+  let usedFallback = false;
   try {
     for (const [index, tChunk] of textChunks.entries()) {
       if (onStatus) onStatus(`Descargando bloque de voz ${index + 1}/${textChunks.length}...`);
-      const buffer = await fetchTTSBuffer(tChunk, lang, sharedCtx, onStatus);
-      decodedBuffers.push(buffer);
-      totalDuration += buffer.duration;
+      try {
+        const buffer = await fetchTTSBuffer(tChunk, lang, sharedCtx, onStatus);
+        decodedBuffers.push(buffer);
+        totalDuration += buffer.duration;
+      } catch (chunkError) {
+        console.warn(`[TTS] Bloque ${index+1} falló, usando voz local para ese bloque`, chunkError);
+        const fallbackChunk = await generateAnimaleseVoice(tChunk, sharedCtx);
+        decodedBuffers.push(fallbackChunk);
+        totalDuration += fallbackChunk.duration;
+        usedFallback = true;
+      }
     }
+    if (decodedBuffers.length === 0) throw new Error("Sin buffers");
   } catch (error) {
     if (onStatus) onStatus(`Red bloqueada. Activando voz local de emergencia...`);
-    console.warn("Iniciando fallback Animalese:", error);
+    console.warn("Iniciando fallback Animalese total:", error);
     const fallbackBuffer = await generateAnimaleseVoice(limitedText, sharedCtx);
-    return { audioBuffer: fallbackBuffer, wordChunks };
+    return { audioBuffer: fallbackBuffer, wordChunks, isFallback: true };
   }
+  if (usedFallback && onStatus) onStatus("Voz mixta: parte local, parte humana");
 
   if (onStatus) onStatus("Ensamblando audio final...");
   const OfflineAudioContextClass = window.OfflineAudioContext || (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext }).webkitOfflineAudioContext;
@@ -212,7 +224,7 @@ export async function generateSpeechAndCues(
   }
 
   const finalBuffer = await offlineCtx.startRendering();
-  return { audioBuffer: finalBuffer, wordChunks };
+  return { audioBuffer: finalBuffer, wordChunks, isFallback: usedFallback };
 }
 
 export async function generateViralMusic(duration: number): Promise<AudioBuffer> {

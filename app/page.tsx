@@ -113,6 +113,7 @@ export default function App() {
 
       let audioBuffer: AudioBuffer | null = null;
       let wordChunks: string[] = [];
+      let isFallback = false;
 
       setProgress(15);
 
@@ -124,6 +125,8 @@ export default function App() {
         const tts = await generateSpeechAndCues(script, language, ctx, (msg) => setStatus(msg));
         audioBuffer = tts.audioBuffer;
         wordChunks = tts.wordChunks;
+        isFallback = tts.isFallback;
+        if (isFallback) setStatus("Voz local activada (sin pitido)...");
       } else {
         setStatus("Generando base musical...");
         audioBuffer = await generateViralMusic(totalDuration);
@@ -139,7 +142,8 @@ export default function App() {
         wordChunks, 
         mode: mode!, 
         targetDuration: totalDuration, 
-        onProgress: (p) => setProgress(30 + Math.round(p * 0.7)) // Escala el 70% restante
+        onProgress: (p) => setProgress(30 + Math.round(p * 0.7)), // Escala el 70% restante
+        isFallback,
       });
 
       setVideoMimeType(mimeType);
