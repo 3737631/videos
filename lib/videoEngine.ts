@@ -79,8 +79,9 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
           source.buffer = decoded;
           
           if (mode === "voice") {
-            source.playbackRate.value = 1.15;
-            actualDuration = actualDuration / 1.15;
+            // VELOCIDAD VIRAL ÁGIL (1.30x): Ritmo dinámico perfecto para TikTok
+            source.playbackRate.value = 1.30; 
+            actualDuration = actualDuration / 1.30;
           } else {
             source.loop = true;
           }
@@ -90,7 +91,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         }
       }
 
-      dynamicCues = (wordChunks && wordChunks.length > 0) ? wordChunks.map((w: string) => w.toUpperCase()) : ["¡MIRA ESTO!", "DESCÚBRELO", "AHORA"];
+      dynamicCues = (wordChunks && wordChunks.length > 0) ? wordChunks : ["¡MIRA ESTO!", "DESCÚBRELO", "AHORA"];
     }
   } catch (e) {
     console.warn("Aviso de audio:", e);
@@ -257,7 +258,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
           ctx.drawImage(activeVideo, (width - dw) / 2, (height - dh) / 2, dw, dh);
         }
 
-        // SUBTÍTULOS DINÁMICOS POR ÍNDICE EXACTO (Vertical 270x480, ancho máximo 200px para que nunca salgan)
+        // SUBTÍTULOS DINÁMICOS VERTICALES (Ancho máximo exacto de 200px para lienzo vertical de 270px)
         if (mode === "voice" && dynamicCues.length > 0) {
           const progressRatio = Math.min(0.9999, elapsed / actualDuration);
           const cueIndex = Math.floor(progressRatio * dynamicCues.length);
@@ -269,7 +270,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
             ctx.textBaseline = "middle";
             ctx.lineJoin = "round";
             
-            ctx.lineWidth = 4; 
+            ctx.lineWidth = 5; 
             ctx.strokeStyle = "#000";
             ctx.fillStyle = "#FFE600";
             

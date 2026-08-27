@@ -7,13 +7,13 @@ export async function generateSpeechAndCues(
   const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑçãõâêîôûàèìòù.,!¿?'-]/g, "").trim();
   const rawWords = cleanText.split(/\s+/).filter(Boolean);
   if (rawWords.length === 0) {
-    rawWords.push("¡Increíble!", "Descúbrelo", "ahora");
+    rawWords.push("¡INCREÍBLE!", "DESCÚBRELO", "AHORA");
   }
 
-  // Subtítulos ultra dinámicos: estrictamente de 1 a 2 palabras para estilo TikTok
+  // Subtítulos ultra dinámicos en mayúsculas (de 1 a 2 palabras para estilo TikTok)
   const wordChunks: string[] = [];
   for (let i = 0; i < rawWords.length; i += 2) {
-    wordChunks.push(rawWords.slice(i, i + 2).join(" "));
+    wordChunks.push(rawWords.slice(i, i + 2).join(" ").toUpperCase());
   }
 
   const voiceMap: Record<string, { streamElements: string, google: string }> = {
@@ -25,14 +25,12 @@ export async function generateSpeechAndCues(
   const v = voiceMap[lang] || voiceMap["es"];
   const encoded = encodeURIComponent(cleanText);
 
-  // EL LEGENDARIO SISTEMA DE 6 CAPAS EN CASCADA CONTRA ADBLOCKERS
+  // SISTEMA DE CAPAS INMUNE A ADBLOCKERS
   const apis = [
-    '/api/tts', // Capa 1: Servidor interno (inmune a adblockers de cliente)
-    `https://api.streamelements.com/kappa/v2/speech?voice=${v.streamElements}&text=${encoded}`, // Capa 2
-    `https://texttospeech.responsivevoice.org/v1/text:synthesize?text=${encoded}&lang=${lang}&engine=g3`, // Capa 3
-    `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`, // Capa 4
-    `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`, // Capa 5
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`)}` // Capa 6
+    '/api/tts', // Servidor interno Next.js (imposible de bloquear por adblockers de cliente)
+    `https://api.streamelements.com/kappa/v2/speech?voice=${v.streamElements}&text=${encoded}`,
+    `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`,
+    `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`
   ];
 
   let audioBlob: Blob | null = null;
@@ -54,15 +52,15 @@ export async function generateSpeechAndCues(
         const blob = await res.blob();
         if (blob.size > 500) {
           audioBlob = blob;
-          break; // ¡Éxito! Encontramos una capa libre
+          break; 
         }
       }
     } catch (e) {
-      continue; // Si una capa falla o está bloqueada, probamos la siguiente de inmediato
+      continue; 
     }
   }
 
-  // Si todas las capas fallaran (ej. sin internet total), generamos notas rítmicas suaves (cero pitidos planos)
+  // Respaldo armónico si fallaran las redes
   if (!audioBlob) {
     audioBlob = await generateHarmonicSynth(Math.max(8, targetDurationSec));
   }
@@ -71,10 +69,10 @@ export async function generateSpeechAndCues(
 }
 
 async function generateHarmonicSynth(durationSec: number): Promise<Blob> {
-  const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+  const AC = window.AudioContext || (window as any).webkitAudioContext;
   const offlineCtx = new (window.OfflineAudioContext || (window as any).webkitOfflineAudioContext)(1, 44100 * durationSec, 44100);
   
-  const notes = [261.63, 329.63, 392.00, 523.25]; // Acordes armónicos agradables
+  const notes = [261.63, 329.63, 392.00, 523.25];
   const beat = 0.5;
   for (let t = 0; t < durationSec; t += beat) {
     const osc = offlineCtx.createOscillator();
