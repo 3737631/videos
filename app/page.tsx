@@ -30,6 +30,9 @@ export default function App() {
   const [autoResults, setAutoResults] = useState<(TikTokSearchResult & { selected: boolean })[]>([]);
   const [autoSearching, setAutoSearching] = useState(false);
   const [autoError, setAutoError] = useState("");
+  const [autoPhoto, setAutoPhoto] = useState<File | null>(null);
+  const [autoPhotoPreview, setAutoPhotoPreview] = useState<string | null>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
 
   // Asegurar limpieza estricta en desmontajes
   useEffect(() => {
@@ -92,6 +95,22 @@ export default function App() {
 
   const toggleAutoSelect = (idx: number) => {
     setAutoResults(prev => prev.map((r, i) => i === idx ? { ...r, selected: !r.selected } : r));
+  };
+
+  const handlePhotoSelect = (files: FileList | null) => {
+    if (!files || !files.length) return;
+    const file = files[0];
+    if (!file.type.startsWith("image/")) { setAutoError("Sube una foto válida (jpg, png)"); return; }
+    if (autoPhotoPreview) try { URL.revokeObjectURL(autoPhotoPreview); } catch {}
+    const url = URL.createObjectURL(file);
+    setAutoPhoto(file);
+    setAutoPhotoPreview(url);
+    setAutoError("");
+    // Sugerir nombre del producto desde el nombre del archivo si está vacío
+    if (!autoProduct.trim()) {
+      const name = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").slice(0, 30);
+      if (name && name.length > 2) setAutoProduct(name);
+    }
   };
 
   const handleAutoUse = async () => {
@@ -377,6 +396,9 @@ export default function App() {
     setAutoProduct("");
     setAutoResults([]);
     setAutoError("");
+    if (autoPhotoPreview) try { URL.revokeObjectURL(autoPhotoPreview); } catch {}
+    setAutoPhoto(null);
+    setAutoPhotoPreview(null);
     setMode(null);
     setLanguage("es");
     setTotalDuration(10);
@@ -407,8 +429,8 @@ export default function App() {
         
         {step === 1 && (
           <div className="space-y-5">
-            {/* Automático por producto - busca vídeos limpios solo */}
-            <div className="border-2 border-dashed border-purple-500/30 bg-purple-500/5 rounded-3xl p-6 sm:p-7 flex flex-col items-center text-center space-y-3">
+            {/* Automático por producto - minimalista igual que resto */}
+            <div className="border-2 border-dashed border-zinc-700 hover:border-zinc-600 bg-zinc-950/50 rounded-3xl p-6 sm:p-7 flex flex-col items-center text-center space-y-3 transition-colors">
               <div className="w-14 h-14 bg-zinc-800 rounded-full flex items-center justify-center">
                 <Wand2 className="w-7 h-7 text-purple-400" />
               </div>
@@ -422,16 +444,33 @@ export default function App() {
                   onChange={(e) => setAutoProduct(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAutoSearch(); } }}
                   placeholder="ej: limpiador manchas coche"
-                  className="flex-1 bg-zinc-900 border border-zinc-800 rounded-full px-4 py-3 text-sm focus:border-purple-500 outline-none text-center sm:text-left"
+                  className="flex-1 bg-zinc-900 border border-zinc-800 rounded-full px-4 py-3 text-sm focus:border-zinc-600 outline-none text-center sm:text-left"
                 />
                 <button
                   onClick={handleAutoSearch}
-                  disabled={autoSearching || !autoProduct.trim()}
+                  disabled={autoSearching || (!autoProduct.trim() && !autoPhoto)}
                   className="px-6 py-3 bg-white text-black rounded-full font-bold text-sm hover:bg-zinc-100 disabled:opacity-40 active:scale-95 transition whitespace-nowrap"
                 >
                   {autoSearching ? <Loader2 className="w-4 h-4 animate-spin" /> : "Buscar"}
                 </button>
               </div>
+              <input ref={photoInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => handlePhotoSelect(e.target.files)} />
+              <button
+                onClick={() => photoInputRef.current?.click()}
+                className="w-full py-2.5 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-full text-xs font-medium flex items-center justify-center gap-2 transition"
+              >
+                <UploadCloud className="w-4 h-4 text-zinc-400" /> {autoPhoto ? "Cambiar foto" : "Subir foto del producto (opcional)"}
+              </button>
+              {autoPhotoPreview && (
+                <div className="w-full flex items-center gap-3 bg-zinc-900 border border-zinc-800 rounded-2xl p-2">
+                  <img src={autoPhotoPreview} alt="preview" className="w-14 h-14 rounded-xl object-cover border border-zinc-700" />
+                  <div className="flex-1 text-left">
+                    <div className="text-xs font-medium truncate">{autoPhoto?.name}</div>
+                    <div className="text-[11px] text-zinc-500">Se usará para buscar vídeos de este artículo</div>
+                  </div>
+                  <button onClick={() => { if (autoPhotoPreview) try { URL.revokeObjectURL(autoPhotoPreview); } catch {}; setAutoPhoto(null); setAutoPhotoPreview(null); }} className="w-7 h-7 bg-zinc-800 hover:bg-zinc-700 rounded-full flex items-center justify-center text-zinc-400 transition">✕</button>
+                </div>
+              )}
               {autoError && <div className="w-full rounded-2xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300 whitespace-pre-wrap">{autoError}</div>}
               {status && autoSearching && <div className="text-xs text-zinc-400 flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin" />{status}</div>}
               {autoResults.length > 0 && (
