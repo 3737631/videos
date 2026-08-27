@@ -7,7 +7,7 @@ export async function generateSpeechAndCues(
   const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑçãõâêîôûàèìòù.,!¿?'-]/g, "").trim();
   const rawWords = cleanText.split(/\s+/).filter(Boolean);
   if (rawWords.length === 0) {
-    rawWords.push("Increíble", "descúbrelo", "ahora");
+    rawWords.push("¡Increíble!", "descúbrelo", "ahora");
   }
 
   const wordChunks: string[] = [];
@@ -15,87 +15,71 @@ export async function generateSpeechAndCues(
     wordChunks.push(rawWords.slice(i, i + 2).join(" "));
   }
 
-  let finalAudioBlob: Blob | null = null;
+  let audioBlob: Blob | null = null;
 
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000);
-
     const res = await fetch('/api/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: cleanText, lang }),
-      signal: controller.signal
+      body: JSON.stringify({ text: cleanText, lang })
     });
-    clearTimeout(timeoutId);
 
     if (res.ok) {
-      const buf = await res.arrayBuffer();
-      if (buf.byteLength > 500) {
-        finalAudioBlob = new Blob([buf], { type: 'audio/mp3' });
+      const blob = await res.blob();
+      if (blob.size > 500) {
+        audioBlob = blob;
       }
     }
   } catch (e) {
-    console.warn("Proxy TTS failed, trying direct fallback:", e);
+    console.warn("API TTS fetch failed:", e);
   }
 
   // Respaldo directo si el servidor intermedio falla
-  if (!finalAudioBlob) {
+  if (!audioBlob) {
     try {
-      const directUrl = `https://api.streamelements.com/kappa/v2/speech?voice=Mia&text=${encodeURIComponent(cleanText)}`;
-      const dRes = await fetch(directUrl);
-      if (dRes.ok) {
-        const buf = await dRes.arrayBuffer();
-        if (buf.byteLength > 500) {
-          finalAudioBlob = new Blob([buf], { type: 'audio/mp3' });
-        }
+      const vMap: Record<string, string> = { es: "Mia", en: "Brian", pt: "Vitoria", fr: "Celine" };
+      const voice = vMap[lang] || "Mia";
+      const seUrl = `https://api.streamelements.com/kappa/v2/speech?voice=${voice}&text=${encodeURIComponent(cleanText)}`;
+      const seRes = await fetch(seUrl);
+      if (seRes.ok) {
+        const blob = await seRes.blob();
+        if (blob.size > 500) audioBlob = blob;
       }
     } catch (e) {}
   }
 
-  // Respaldo rítmico definitivo (pulsos de voz simulados, cero pitidos continuos)
-  if (!finalAudioBlob) {
-    finalAudioBlob = await generateRhythmicVoice(rawWords, Math.max(8, targetDurationSec));
+  // Respaldo rítmico agradable si todo lo demás falla (cero pitidos)
+  if (!audioBlob) {
+    audioBlob = await generateSynthVoice(Math.max(8, targetDurationSec));
   }
 
-  return { audioBlob: finalAudioBlob, wordChunks };
+  return { audioBlob, wordChunks };
 }
 
-async function generateRhythmicVoice(words: string[], targetDuration: number): Promise<Blob> {
+async function generateSynthVoice(durationSec: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
   const sampleRate = 44100;
-  const offlineCtx = new AC(1, sampleRate * targetDuration, sampleRate);
+  const offlineCtx = new AC(1, sampleRate * durationSec, sampleRate);
   
-  const timePerWord = targetDuration / Math.max(1, words.length);
-  
-  for (let i = 0; i < words.length; i++) {
-    const word = words[i];
-    const start = i * timePerWord;
-    const dur = Math.min(timePerWord * 0.8, 0.3);
-    
+  const notes = [261.63, 329.63, 392.00, 523.25];
+  const beat = 0.3;
+  for (let t = 0; t < durationSec; t += beat) {
     const osc = offlineCtx.createOscillator();
     const gain = offlineCtx.createGain();
-    osc.frequency.setValueAtTime(250 + (word.length * 35), start);
-    osc.type = "sawtooth";
+    osc.type = "sine";
+    osc.frequency.value = notes[Math.floor(Math.random() * notes.length)];
     
-    const filter = offlineCtx.createBiquadFilter();
-    filter.type = "lowpass";
-    filter.frequency.value = 800;
-
-    gain.gain.setValueAtTime(0, start);
-    gain.gain.linearRampToValueAtTime(0.25, start + 0.05);
-    gain.gain.exponentialRampToValueAtTime(0.001, start + dur);
-
-    osc.connect(filter);
-    filter.connect(gain);
+    gain.gain.setValueAtTime(0.15, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + beat * 0.9);
+    
+    osc.connect(gain);
     gain.connect(offlineCtx.destination);
-    
-    osc.start(start);
-    osc.stop(start + dur);
+    osc.start(t);
+    osc.stop(t + beat);
   }
   
-  const renderedBuffer = await offlineCtx.startRendering();
-  return audioBufferToWav(renderedBuffer);
+  const buffer = await offlineCtx.startRendering();
+  return audioBufferToWav(buffer);
 }
 
 export async function generateViralMusic(duration: number): Promise<Blob> {
@@ -130,8 +114,8 @@ export async function generateViralMusic(duration: number): Promise<Blob> {
       hat.stop(i + beatTime / 2 + 0.1);
     }
   }
-  const renderedBuffer = await offlineCtx.startRendering();
-  return audioBufferToWav(renderedBuffer);
+  const buffer = await offlineCtx.startRendering();
+  return audioBufferToWav(buffer);
 }
 
 function audioBufferToWav(buffer: AudioBuffer): Blob {

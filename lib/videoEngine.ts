@@ -267,7 +267,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
 
         // SUBTÍTULOS DINÁMICOS INFALIBLES
         if (mode === "voice") {
-          let cue = dynamicCues.find(c => elapsed >= c.start && elapsed < c.end);
+          let cue = dynamicCues.find(c => elapsed >= c.start && elapsed <= c.end);
           if (!cue && dynamicCues.length > 0) {
             // Respaldo dinámico por índice si el tiempo exacto se desvía un milisegundo
             const idx = Math.min(dynamicCues.length - 1, Math.floor((elapsed / actualDuration) * dynamicCues.length));

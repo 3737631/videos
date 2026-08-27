@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 export async function POST(req: Request) {
   try {
     const { text, lang = "es" } = await req.json();
-    const cleanText = (text || "").slice(0, 250);
+    const cleanText = (text || "¡Increíble producto!").slice(0, 300);
     
     const langMap: Record<string, string> = {
       es: "es-ES",
@@ -15,23 +15,29 @@ export async function POST(req: Request) {
 
     const url = `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${targetLang}&client=tw-ob&q=${encodeURIComponent(cleanText)}`;
     
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://translate.google.com/'
+      }
     });
 
-    if (!res.ok) {
+    if (!response.ok) {
       const seUrl = `https://api.streamelements.com/kappa/v2/speech?voice=Mia&text=${encodeURIComponent(cleanText)}`;
       const seRes = await fetch(seUrl);
       if (seRes.ok) {
         const buf = await seRes.arrayBuffer();
-        return new NextResponse(buf, { headers: { 'Content-Type': 'audio/mp3' } });
+        return new NextResponse(buf, { headers: { 'Content-Type': 'audio/mpeg' } });
       }
-      throw new Error("External TTS failed");
+      throw new Error("TTS unavailable");
     }
 
-    const buffer = await res.arrayBuffer();
-    return new NextResponse(buffer, { headers: { 'Content-Type': 'audio/mpeg' } });
-  } catch (err) {
-    return NextResponse.json({ error: "TTS error" }, { status: 500 });
+    const arrayBuffer = await response.arrayBuffer();
+    return new NextResponse(arrayBuffer, {
+      headers: { 'Content-Type': 'audio/mpeg' },
+    });
+  } catch (error) {
+    console.error("TTS API Route Error:", error);
+    return NextResponse.json({ error: "Failed to generate speech" }, { status: 500 });
   }
 }
