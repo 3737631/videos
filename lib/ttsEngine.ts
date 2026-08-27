@@ -4,6 +4,7 @@ export interface SpeechResult {
 }
 
 function cleanScript(text: string): string {
+  // Limpieza estricta conservando espacios y caracteres válidos
   return text
     .replace(/https?:\/\/\S+/gi, "")
     .replace(/[^\p{L}\p{N}\s.,!?¿¡'’"-]/gu, " ")
@@ -14,7 +15,7 @@ function cleanScript(text: string): string {
 function createWordChunks(text: string): string[] {
   const words = text.split(/\s+/).filter(Boolean);
   const chunks: string[] = [];
-  // Agrupa 1 o 2 palabras para que siempre quepan en formato vertical
+  // Agrupa máximo 2 palabras para que siempre quepan en formato TikTok (270px ancho)
   for (let i = 0; i < words.length; i += 2) {
     const chunk = words.slice(i, i + 2).join(" ");
     if (chunk) chunks.push(chunk.toUpperCase());
@@ -22,7 +23,7 @@ function createWordChunks(text: string): string[] {
   return chunks;
 }
 
-// Divide el texto en fragmentos cortos (<150 caracteres) para saltarse el límite de las APIs
+// Trocea el texto en fragmentos cortos para que las APIs gratuitas no rechacen la petición
 function splitIntoShortSentences(text: string, maxLength: number): string[] {
   const words = text.split(/\s+/);
   const chunks: string[] = [];
@@ -46,36 +47,35 @@ function base64ToBlob(dataURI: string): Blob {
   const mimeString = parts[0].split(':')[1].split(';')[0];
   const ab = new ArrayBuffer(byteString.length);
   const ia = new Uint8Array(ab);
-  for (let i = 0; i < byteString.length; i++) {
-    ia[i] = byteString.charCodeAt(i);
-  }
+  for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
   return new Blob([ab], { type: mimeString });
 }
 
+// Descargador blindado con 4 pasarelas distintas (Anti-AdBlockers y Anti-RateLimits)
 async function fetchTTSBlobWithFallbacks(text: string, lang: string): Promise<Blob> {
   const encodedText = encodeURIComponent(text);
   const SE_VOICES: Record<string, string> = { es: "Mia", en: "Brian", pt: "Vitoria", fr: "Celine" };
   const voice = SE_VOICES[lang] || "Mia";
   
-  const googleTtsUrl = `https://translate.googleapis.com/translate_tts?client=tw-ob&ie=UTF-8&tl=${lang}&q=${encodedText}`;
+  const googleTtsUrl = `https://translate.googleapis.com/translate_tts?client=gtx&ie=UTF-8&tl=${lang}&q=${encodedText}`;
+  const rvLang = lang === 'es' ? 'es-ES' : lang === 'en' ? 'en-US' : lang === 'pt' ? 'pt-BR' : 'fr-FR';
 
-  // Red de APIs públicas con CORS (Ideales para GitHub Pages)
   const urls = [
-    `https://api.streamelements.com/kappa/v2/speech?voice=${voice}&text=${encodedText}`,
-    `https://corsproxy.io/?${encodeURIComponent(googleTtsUrl)}`,
-    `https://api.allorigins.win/get?url=${encodeURIComponent(googleTtsUrl)}`
+    `https://api.streamelements.com/kappa/v2/speech?voice=${voice}&text=${encodedText}`, // 1. Alta calidad (Polly)
+    `https://code.responsivevoice.org/getvoice.php?t=${encodedText}&tl=${rvLang}&sv=&vn=&pitch=0.5&rate=0.5&vol=1`, // 2. Respaldo oficial con CORS abierto
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(googleTtsUrl)}`, // 3. Proxy a Google
+    `https://api.allorigins.win/get?url=${encodeURIComponent(googleTtsUrl)}` // 4. Proxy de emergencia (base64)
   ];
 
   for (const url of urls) {
     try {
       const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), 8000);
+      const id = setTimeout(() => controller.abort(), 10000); // 10s máximo por intento
       const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
       clearTimeout(id);
 
       if (!res.ok) continue;
 
-      // Si usamos AllOrigins, la respuesta es un JSON con el audio en base64 (muy seguro contra corrupción binaria)
       if (url.includes("allorigins.win/get")) {
         const json = await res.json();
         if (json.contents && json.contents.startsWith("data:audio")) {
@@ -85,12 +85,12 @@ async function fetchTTSBlobWithFallbacks(text: string, lang: string): Promise<Bl
       }
 
       const blob = await res.blob();
-      if (blob.size > 200) return blob;
+      if (blob.size > 200) return blob; // Audio válido
     } catch {
-      continue;
+      continue; // Pasa a la siguiente pasarela si falla
     }
   }
-  throw new Error(`Fallo al descargar la voz para: "${text.substring(0, 20)}...". Comprueba tu conexión o AdBlocker.`);
+  throw new Error(`Fallo al descargar la voz para: "${text.substring(0, 20)}...". Comprueba tu conexión o pausa tu AdBlocker.`);
 }
 
 export async function generateSpeechAndCues(
@@ -103,10 +103,8 @@ export async function generateSpeechAndCues(
     throw new Error("El guion está vacío.");
   }
 
-  // Obtenemos los bloques de subtítulos basados en el texto real completo
   const wordChunks = createWordChunks(cleanText);
-  // Dividimos el texto en trozos cortos de max 150 letras para evadir los límites de las APIs (200 letras)
-  const textChunks = splitIntoShortSentences(cleanText, 150);
+  const textChunks = splitIntoShortSentences(cleanText, 150); // Troceado inteligente
 
   const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
   if (!AudioContextClass) throw new Error("AudioContext no soportado en tu navegador.");
@@ -115,16 +113,20 @@ export async function generateSpeechAndCues(
   let totalDuration = 0;
   const decodedBuffers: AudioBuffer[] = [];
 
-  // Descargamos y decodificamos cada fragmento de voz por separado
+  // Descarga y une cada frase
   for (const tChunk of textChunks) {
     const blob = await fetchTTSBlobWithFallbacks(tChunk, lang);
     const arrayBuffer = await blob.arrayBuffer();
-    const decoded = await ctx.decodeAudioData(arrayBuffer);
-    decodedBuffers.push(decoded);
-    totalDuration += decoded.duration;
+    try {
+      const decoded = await ctx.decodeAudioData(arrayBuffer);
+      decodedBuffers.push(decoded);
+      totalDuration += decoded.duration;
+    } catch {
+      throw new Error("El archivo de voz descargado está corrupto. Intenta de nuevo.");
+    }
   }
 
-  // Combinamos todos los fragmentos en una sola pista perfecta y sin cortes
+  // Mezcla de todas las frases en una sola pista fluida
   const OfflineAudioContextClass = window.OfflineAudioContext || (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext }).webkitOfflineAudioContext;
   const offlineCtx = new OfflineAudioContextClass(1, Math.max(1, Math.ceil(ctx.sampleRate * totalDuration)), ctx.sampleRate);
   
@@ -143,7 +145,7 @@ export async function generateSpeechAndCues(
   return { audioBlob: finalWavBlob, wordChunks };
 }
 
-// Generador de música 100% local (sin red)
+// Generador de música (Local, NO depende de internet)
 export async function generateViralMusic(duration: number): Promise<Blob> {
   const safeDuration = Math.max(1, Math.min(60, duration));
   const sampleRate = 44100;
@@ -237,6 +239,5 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
       offset += 2;
     }
   }
-
   return new Blob([arrayBuffer], { type: "audio/wav" });
 }

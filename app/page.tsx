@@ -90,7 +90,7 @@ export default function App() {
   const processVideo = async () => {
     setStep(4);
     setProgress(5);
-    setStatus("Generando guion y voz (sin backend)...");
+    setStatus("Generando guion y voz real...");
 
     try {
       let audioBlob: Blob | null = null;
@@ -123,7 +123,7 @@ export default function App() {
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Ocurrió un error al procesar el vídeo.";
       alert("Error: " + msg);
-      setStep(3); // Te devuelve a la pantalla para reintentar
+      setStep(3); // Vuelve atrás para que puedas probar otra vez
     }
   };
 

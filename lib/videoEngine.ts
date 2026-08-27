@@ -79,7 +79,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     const decoded = await new Promise<AudioBuffer>((resolve, reject) => {
       audioCtx!.decodeAudioData(ab, resolve, reject);
     }).catch(() => {
-      throw new Error("El motor de vídeo no pudo decodificar la voz final.");
+      throw new Error("El motor de vídeo no pudo procesar la voz final.");
     });
 
     if (decoded && decoded.duration > 0) {
@@ -88,7 +88,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       source.buffer = decoded;
       
       if (mode === "voice") {
-        source.playbackRate.value = 1.15; 
+        source.playbackRate.value = 1.15; // Ritmo TikTok dinámico
         actualDuration = actualDuration / 1.15;
       } else {
         source.loop = true;
@@ -98,12 +98,13 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       source.start(0);
     }
 
-    // SINCRONIZACIÓN REAL PROPORCIONAL DE SUBTÍTULOS
+    // SINCRONIZACIÓN REAL PROPORCIONAL
     if (mode === "voice" && wordChunks && wordChunks.length > 0) {
       const totalChars = wordChunks.reduce((acc, chunk) => acc + chunk.length, 0);
       let accumulatedTime = 0;
       
       wordChunks.forEach((chunk) => {
+        // Asignar el tiempo exacto que le corresponde a la palabra según su longitud
         const weight = chunk.length / Math.max(1, totalChars);
         const duration = weight * actualDuration;
         
@@ -116,7 +117,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       });
     }
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : "Error conectando el audio al vídeo.";
+    const msg = e instanceof Error ? e.message : "Error configurando el audio principal.";
     if (audioCtx) { try { audioCtx.close(); } catch {}
     }
     if (canvas.parentNode) canvas.remove();
@@ -278,6 +279,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
             ctx.drawImage(activeVideo, (width - dw) / 2, (height - dh) / 2, dw, dh);
           }
 
+          // Dibujo de subtítulos sincronizados, asegurando que se corten en 220px
           if (mode === "voice" && dynamicCues.length > 0) {
             const cue = dynamicCues.find(c => elapsed >= c.start && elapsed < c.end);
             if (cue && cue.text) {
