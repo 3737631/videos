@@ -54,8 +54,8 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
   ctx.fillRect(0, 0, width, height);
 
   let dest: MediaStreamAudioDestinationNode | null = null;
-  // Asegurar duración viral mínima 8s y con cola de cierre 0.35s
   let actualDuration = Math.max(1.2, audioBuffer.duration);
+  let voiceDuration = actualDuration;
   const dynamicCues: SubtitleCue[] = [];
 
   try {
@@ -65,22 +65,23 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     source.buffer = audioBuffer;
     if (mode === "voice") {
       if (isFallback) {
-        const rate = 1.38;
-        source.playbackRate.value = rate;
-        if ("detune" in source && source.detune) source.detune.value = -1200 * Math.log2(rate);
-        actualDuration = actualDuration / rate;
-      } else {
         const rate = 1.45;
         source.playbackRate.value = rate;
         if ("detune" in source && source.detune) source.detune.value = -1200 * Math.log2(rate);
-        actualDuration = actualDuration / rate;
+        voiceDuration = actualDuration / rate;
+      } else {
+        const rate = 1.58;
+        source.playbackRate.value = rate;
+        if ("detune" in source && source.detune) source.detune.value = -1200 * Math.log2(rate);
+        voiceDuration = actualDuration / rate;
       }
-      // Cola viral de cierre para no cortar la última palabra
-      actualDuration = Math.max(7.5, actualDuration) + 0.35;
-      // Si el audio original era muy corto (<5s), estirar a viral mínimo
-      if (audioBuffer.duration < 5) actualDuration = Math.max(actualDuration, 7.5);
+      // Viral rápido: voz acelerada + cola de cierre sin subtítulo
+      actualDuration = Math.max(7.8, voiceDuration) + 0.35;
+      if (audioBuffer.duration < 5) actualDuration = Math.max(actualDuration, 7.8);
+      voiceDuration = actualDuration - 0.35;
     } else {
       source.loop = true;
+      voiceDuration = actualDuration;
     }
     source.connect(dest);
     source.start(0);
@@ -89,9 +90,14 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       let acc = 0;
       for (const chunk of wordChunks) {
         const w = chunk.length / Math.max(1, totalChars);
-        const d = w * actualDuration;
+        const d = w * voiceDuration;
         dynamicCues.push({ text: chunk, start: acc, end: acc + d });
         acc += d;
+      }
+      // Cierre: asegurar que último subtítulo no se extiende al silencio de cola
+      if (dynamicCues.length > 0) {
+        const last = dynamicCues[dynamicCues.length - 1];
+        if (last.end > voiceDuration) last.end = voiceDuration;
       }
     }
   } catch (e: unknown) {
