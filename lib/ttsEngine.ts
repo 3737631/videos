@@ -1,34 +1,56 @@
-export async function generateSpeechAndCues(
-  text: string,
-  lang: string = "es"
-): Promise<{ audioBlob: Blob; wordChunks: string[] }> {
-  const cleanText = text
-    .replace(
-      /[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑçÇãõÃÕâêîôûÂÊÎÔÛàèìòùÀÈÌÒÙ.,!¿?¡:'"()\-_\s]/g,
-      " "
-    )
+export interface SpeechResult {
+  audioBlob: Blob;
+  wordChunks: string[];
+}
+
+function cleanScript(text: string): string {
+  return text
+    .replace(/https?:\/\/\S+/gi, "")
+    .replace(/[^\p{L}\p{N}\s.,!?¿¡'’"-]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function createWordChunks(text: string): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+
+  const chunks: string[] = [];
+
+  for (let i = 0; i < words.length; i += 3) {
+    const chunk = words.slice(i, i + 3).join(" ");
+
+    if (chunk) {
+      chunks.push(chunk.toUpperCase());
+    }
+  }
+
+  return chunks;
+}
+
+export async function generateSpeechAndCues(
+  text: string,
+  lang = "es"
+): Promise<SpeechResult> {
+  const cleanText = cleanScript(text);
 
   if (!cleanText) {
-    throw new Error("El guion generado está vacío.");
+    throw new Error("El guion está vacío.");
   }
 
-  const rawWords = cleanText.split(/\s+/).filter(Boolean);
+  /*
+   * El endpoint público utilizado por el servidor tiene un límite
+   * práctico para frases largas. La aplicación está pensada para
+   * anuncios cortos, así que mantenemos el guion dentro de ese límite.
+   */
+  const limitedText =
+    cleanText.length > 230
+      ? `${cleanText.slice(0, 227).trim()}...`
+      : cleanText;
 
-  if (!rawWords.length) {
-    throw new Error("No se encontraron palabras válidas.");
-  }
+  const wordChunks = createWordChunks(limitedText);
 
-  const wordChunks: string[] = [];
-
-  for (let i = 0; i < rawWords.length; i += 2) {
-    wordChunks.push(
-      rawWords
-        .slice(i, i + 2)
-        .join(" ")
-        .toUpperCase()
-    );
+  if (wordChunks.length === 0) {
+    throw new Error("No se encontraron palabras en el guion.");
   }
 
   let response: Response;
@@ -38,46 +60,94 @@ export async function generateSpeechAndCues(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        Accept: "audio/mpeg,audio/*",
       },
       body: JSON.stringify({
-        text: cleanText,
+        text: limitedText,
         lang,
       }),
+      cache: "no-store",
     });
   } catch {
     throw new Error(
-      "No se pudo conectar con el generador de voz. Comprueba tu conexión o desactiva temporalmente el bloqueador de contenido."
+      "No se pudo conectar con el servidor de voz. Comprueba que la aplicación esté ejecutándose con Next.js."
     );
   }
 
   if (!response.ok) {
-    const errorData = await response
-      .json()
-      .catch(() => null);
+    let message = "No se pudo generar la voz.";
 
-    throw new Error(
-      errorData?.error ||
-        "No se pudo generar la voz. Vuelve a intentarlo."
-    );
+    try {
+      const data = await response.json();
+
+      if (
+        data &&
+        typeof data.error === "string" &&
+        data.error.trim()
+      ) {
+        message = data.error;
+      }
+    } catch {
+      // La respuesta no era JSON.
+    }
+
+    throw new Error(message);
   }
 
-  const contentType =
-    response.headers.get("content-type") || "";
+  const contentType = (
+    response.headers.get("content-type") || ""
+  ).toLowerCase();
 
   if (
-    contentType.includes("application/json") ||
-    contentType.includes("text/html")
+    contentType &&
+    !contentType.includes("audio") &&
+    !contentType.includes("mpeg") &&
+    !contentType.includes("mp3")
   ) {
     throw new Error(
-      "El servidor no devolvió un archivo de audio válido."
+      "El servidor de voz devolvió un formato que no es audio."
     );
   }
 
   const audioBlob = await response.blob();
 
-  if (audioBlob.size < 500) {
+  if (audioBlob.size < 1000) {
+    throw new Error("El archivo de voz recibido está vacío o corrupto.");
+  }
+
+  /*
+   * Comprobamos que el navegador puede decodificar el audio antes
+   * de comenzar el render del vídeo.
+   */
+  try {
+    const AudioContextClass =
+      window.AudioContext ||
+      (
+        window as typeof window & {
+          webkitAudioContext?: typeof AudioContext;
+        }
+      ).webkitAudioContext;
+
+    if (!AudioContextClass) {
+      throw new Error("AudioContext no está disponible.");
+    }
+
+    const audioContext = new AudioContextClass();
+
+    try {
+      const buffer = await audioBlob.arrayBuffer();
+
+      await audioContext.decodeAudioData(buffer.slice(0));
+
+      if (audioContext.state === "suspended") {
+        await audioContext.resume().catch(() => {});
+      }
+    } finally {
+      await audioContext.close().catch(() => {});
+    }
+  } catch {
     throw new Error(
-      "El audio generado está vacío o no es válido."
+      "La voz se generó, pero el navegador no pudo decodificar el audio."
     );
   }
 
@@ -90,21 +160,12 @@ export async function generateSpeechAndCues(
 export async function generateViralMusic(
   duration: number
 ): Promise<Blob> {
-  if (typeof window === "undefined") {
-    throw new Error(
-      "La música sólo puede generarse en el navegador."
-    );
-  }
+  const safeDuration = Math.max(1, Math.min(60, duration));
 
-  const AudioContextClass =
-    window.AudioContext ||
-    (
-      window as typeof window & {
-        webkitAudioContext?: typeof AudioContext;
-      }
-    ).webkitAudioContext;
+  const sampleRate = 44100;
+  const renderDuration = safeDuration + 0.5;
 
-  const OfflineAudioContextClass =
+  const AudioContextConstructor =
     window.OfflineAudioContext ||
     (
       window as typeof window & {
@@ -112,116 +173,119 @@ export async function generateViralMusic(
       }
     ).webkitOfflineAudioContext;
 
-  if (!OfflineAudioContextClass) {
-    throw new Error(
-      "Tu navegador no soporta generación de audio."
-    );
+  if (!AudioContextConstructor) {
+    throw new Error("Tu navegador no soporta generación de audio.");
   }
 
-  void AudioContextClass;
-
-  const safeDuration = Math.max(
+  const offlineCtx = new AudioContextConstructor(
     1,
-    Math.min(60, Number(duration) || 10)
-  );
-
-  const sampleRate = 44100;
-  const totalSeconds = safeDuration + 0.25;
-
-  const offlineCtx = new OfflineAudioContextClass(
-    2,
-    Math.ceil(sampleRate * totalSeconds),
+    Math.ceil(sampleRate * renderDuration),
     sampleRate
   );
 
-  const master = offlineCtx.createGain();
-  master.gain.value = 0.18;
-  master.connect(offlineCtx.destination);
-
   const bpm = 112;
   const beat = 60 / bpm;
-  const bar = beat * 4;
 
-  const bassNotes = [110, 98, 130.81, 123.47];
-  const chordNotes = [
-    [220, 261.63, 329.63],
-    [196, 246.94, 293.66],
-    [261.63, 329.63, 392],
-    [246.94, 293.66, 369.99],
-  ];
-
-  for (let t = 0, step = 0; t < safeDuration + beat; t += beat, step++) {
+  for (let time = 0; time < renderDuration; time += beat) {
+    /*
+     * KICK
+     */
     const kick = offlineCtx.createOscillator();
     const kickGain = offlineCtx.createGain();
 
     kick.type = "sine";
-    kick.frequency.setValueAtTime(130, t);
+
+    kick.frequency.setValueAtTime(130, time);
     kick.frequency.exponentialRampToValueAtTime(
-      48,
-      t + 0.12
+      45,
+      Math.min(time + 0.16, renderDuration)
     );
 
-    kickGain.gain.setValueAtTime(0.7, t);
+    kickGain.gain.setValueAtTime(0.0001, time);
     kickGain.gain.exponentialRampToValueAtTime(
-      0.001,
-      t + 0.18
+      0.45,
+      Math.min(time + 0.005, renderDuration)
+    );
+    kickGain.gain.exponentialRampToValueAtTime(
+      0.0001,
+      Math.min(time + 0.18, renderDuration)
     );
 
     kick.connect(kickGain);
-    kickGain.connect(master);
+    kickGain.connect(offlineCtx.destination);
 
-    kick.start(t);
-    kick.stop(t + 0.2);
+    kick.start(time);
+    kick.stop(Math.min(time + 0.2, renderDuration));
 
-    const hat = offlineCtx.createOscillator();
-    const hatGain = offlineCtx.createGain();
+    /*
+     * HI-HAT
+     */
+    const hatTime = time + beat / 2;
 
-    hat.type = "square";
-    hat.frequency.value = 7500;
+    if (hatTime < renderDuration) {
+      const hat = offlineCtx.createOscillator();
+      const hatGain = offlineCtx.createGain();
 
-    const hatTime = t + beat / 2;
+      hat.type = "square";
+      hat.frequency.setValueAtTime(6500, hatTime);
 
-    hatGain.gain.setValueAtTime(0.045, hatTime);
-    hatGain.gain.exponentialRampToValueAtTime(
-      0.001,
-      hatTime + 0.045
-    );
+      hatGain.gain.setValueAtTime(0.0001, hatTime);
+      hatGain.gain.exponentialRampToValueAtTime(
+        0.035,
+        Math.min(hatTime + 0.002, renderDuration)
+      );
+      hatGain.gain.exponentialRampToValueAtTime(
+        0.0001,
+        Math.min(hatTime + 0.055, renderDuration)
+      );
 
-    hat.connect(hatGain);
-    hatGain.connect(master);
+      hat.connect(hatGain);
+      hatGain.connect(offlineCtx.destination);
 
-    hat.start(hatTime);
-    hat.stop(hatTime + 0.05);
+      hat.start(hatTime);
+      hat.stop(Math.min(hatTime + 0.06, renderDuration));
+    }
 
-    const bass = offlineCtx.createOscillator();
-    const bassGain = offlineCtx.createGain();
+    /*
+     * BASS
+     */
+    if (Math.floor(time / beat) % 2 === 0) {
+      const bass = offlineCtx.createOscillator();
+      const bassGain = offlineCtx.createGain();
 
-    bass.type = "triangle";
-    bass.frequency.value =
-      bassNotes[step % bassNotes.length];
+      bass.type = "triangle";
+      bass.frequency.setValueAtTime(82.41, time);
 
-    bassGain.gain.setValueAtTime(0.12, t);
-    bassGain.gain.setValueAtTime(
-      0.001,
-      Math.min(t + beat * 0.85, safeDuration)
-    );
+      bassGain.gain.setValueAtTime(0.0001, time);
+      bassGain.gain.exponentialRampToValueAtTime(
+        0.08,
+        Math.min(time + 0.015, renderDuration)
+      );
+      bassGain.gain.exponentialRampToValueAtTime(
+        0.0001,
+        Math.min(time + 0.25, renderDuration)
+      );
 
-    bass.connect(bassGain);
-    bassGain.connect(master);
+      bass.connect(bassGain);
+      bassGain.connect(offlineCtx.destination);
 
-    bass.start(t);
-    bass.stop(
-      Math.min(t + beat * 0.9, safeDuration + 0.1)
-    );
+      bass.start(time);
+      bass.stop(Math.min(time + 0.27, renderDuration));
+    }
   }
 
   for (
-    let t = 0, barIndex = 0;
-    t < safeDuration;
-    t += bar, barIndex++
+    let time = 0, barIndex = 0;
+    time < safeDuration;
+    time += beat * 4, barIndex++
   ) {
     const notes =
-      chordNotes[barIndex % chordNotes.length];
+      [
+        [220, 261.63, 329.63],
+        [196, 246.94, 293.66],
+        [261.63, 329.63, 392],
+        [246.94, 293.66, 369.99],
+      ][barIndex % 4] || [220, 261.63, 329.63];
 
     for (const frequency of notes) {
       const osc = offlineCtx.createOscillator();
@@ -230,26 +294,26 @@ export async function generateViralMusic(
       osc.type = "sine";
       osc.frequency.value = frequency;
 
-      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.setValueAtTime(0.0001, time);
       gain.gain.linearRampToValueAtTime(
         0.025,
-        t + 0.08
+        time + 0.08
       );
       gain.gain.setValueAtTime(
         0.025,
-        Math.min(t + bar * 0.7, safeDuration)
+        Math.min(time + (beat * 4) * 0.7, safeDuration)
       );
       gain.gain.linearRampToValueAtTime(
         0.0001,
-        Math.min(t + bar * 0.95, safeDuration)
+        Math.min(time + (beat * 4) * 0.95, safeDuration)
       );
 
       osc.connect(gain);
-      gain.connect(master);
+      gain.connect(offlineCtx.destination);
 
-      osc.start(t);
+      osc.start(time);
       osc.stop(
-        Math.min(t + bar, safeDuration + 0.1)
+        Math.min(time + beat * 4, safeDuration + 0.1)
       );
     }
   }
@@ -259,137 +323,91 @@ export async function generateViralMusic(
   return audioBufferToWav(buffer);
 }
 
-function audioBufferToWav(
-  buffer: AudioBuffer
-): Blob {
-  const numberOfChannels =
-    buffer.numberOfChannels;
+function audioBufferToWav(buffer: AudioBuffer): Blob {
+  const numberOfChannels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const bitsPerSample = 16;
 
-  const bytesPerSample = 2;
-  const blockAlign =
-    numberOfChannels * bytesPerSample;
+  const dataLength =
+    buffer.length * numberOfChannels * (bitsPerSample / 8);
 
-  const dataSize =
-    buffer.length * blockAlign;
+  const totalLength = 44 + dataLength;
 
-  const arrayBuffer =
-    new ArrayBuffer(44 + dataSize);
-
-  const view =
-    new DataView(arrayBuffer);
+  const arrayBuffer = new ArrayBuffer(totalLength);
+  const view = new DataView(arrayBuffer);
 
   let offset = 0;
 
   const writeString = (value: string) => {
     for (let i = 0; i < value.length; i++) {
-      view.setUint8(
-        offset++,
-        value.charCodeAt(i)
-      );
+      view.setUint8(offset++, value.charCodeAt(i));
     }
   };
 
   writeString("RIFF");
-  view.setUint32(offset, 36 + dataSize, true);
+  view.setUint32(offset, totalLength - 8, true);
   offset += 4;
 
   writeString("WAVE");
-  writeString("fmt ");
 
+  writeString("fmt ");
   view.setUint32(offset, 16, true);
   offset += 4;
 
   view.setUint16(offset, 1, true);
   offset += 2;
 
-  view.setUint16(
-    offset,
-    numberOfChannels,
-    true
-  );
+  view.setUint16(offset, numberOfChannels, true);
   offset += 2;
 
-  view.setUint32(
-    offset,
-    buffer.sampleRate,
-    true
-  );
+  view.setUint32(offset, sampleRate, true);
   offset += 4;
 
   view.setUint32(
     offset,
-    buffer.sampleRate * blockAlign,
+    sampleRate * numberOfChannels * 2,
     true
   );
   offset += 4;
 
   view.setUint16(
     offset,
-    blockAlign,
+    numberOfChannels * 2,
     true
   );
   offset += 2;
 
-  view.setUint16(
-    offset,
-    16,
-    true
-  );
+  view.setUint16(offset, bitsPerSample, true);
   offset += 2;
 
   writeString("data");
 
-  view.setUint32(
-    offset,
-    dataSize,
-    true
-  );
+  view.setUint32(offset, dataLength, true);
   offset += 4;
 
   const channels: Float32Array[] = [];
 
-  for (
-    let channel = 0;
-    channel < numberOfChannels;
-    channel++
-  ) {
-    channels.push(
-      buffer.getChannelData(channel)
-    );
+  for (let channel = 0; channel < numberOfChannels; channel++) {
+    channels.push(buffer.getChannelData(channel));
   }
 
-  for (let i = 0; i < buffer.length; i++) {
-    for (
-      let channel = 0;
-      channel < numberOfChannels;
-      channel++
-    ) {
-      const sample =
-        Math.max(
-          -1,
-          Math.min(
-            1,
-            channels[channel][i]
-          )
-        );
+  for (let sample = 0; sample < buffer.length; sample++) {
+    for (let channel = 0; channel < numberOfChannels; channel++) {
+      let value = channels[channel][sample];
 
-      const intSample =
-        sample < 0
-          ? sample * 32768
-          : sample * 32767;
+      value = Math.max(-1, Math.min(1, value));
 
-      view.setInt16(
-        offset,
-        intSample,
-        true
-      );
+      const intValue =
+        value < 0
+          ? value * 0x8000
+          : value * 0x7fff;
 
+      view.setInt16(offset, intValue, true);
       offset += 2;
     }
   }
 
-  return new Blob(
-    [arrayBuffer],
-    { type: "audio/wav" }
-  );
+  return new Blob([arrayBuffer], {
+    type: "audio/wav",
+  });
 }

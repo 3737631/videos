@@ -2,51 +2,48 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-const MAX_TEXT_LENGTH = 400;
+type LanguageCode = "es" | "en" | "pt" | "fr";
 
-const LANG_MAP: Record<string, string> = {
-  es: "es-ES",
-  en: "en-US",
-  pt: "pt-BR",
-  fr: "fr-FR",
+const LANGUAGE_MAP: Record<LanguageCode, string> = {
+  es: "es",
+  en: "en",
+  pt: "pt",
+  fr: "fr",
 };
 
-const VOICE_MAP: Record<string, string> = {
-  es: "Mia",
-  en: "Brian",
-  pt: "Vitoria",
-  fr: "Celine",
-};
+function isValidLanguage(value: unknown): value is LanguageCode {
+  return (
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(LANGUAGE_MAP, value)
+  );
+}
 
-function isValidAudioResponse(response: Response, buffer: ArrayBuffer): boolean {
-  if (!response.ok) return false;
-  if (!buffer || buffer.byteLength < 500) return false;
-
-  const contentType = response.headers.get("content-type") || "";
-
-  if (
-    contentType.includes("text/html") ||
-    contentType.includes("application/json") ||
-    contentType.includes("text/plain")
-  ) {
-    return false;
-  }
-
-  return true;
+function cleanText(input: string): string {
+  return input
+    .replace(/[\u0000-\u001F\u007F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 async function fetchWithTimeout(
   url: string,
-  init: RequestInit,
   timeoutMs = 10000
 ): Promise<Response> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
 
   try {
     return await fetch(url, {
-      ...init,
+      method: "GET",
       signal: controller.signal,
+      headers: {
+        Accept: "audio/mpeg,audio/*,*/*;q=0.8",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
+      },
       cache: "no-store",
     });
   } finally {
@@ -54,209 +51,163 @@ async function fetchWithTimeout(
   }
 }
 
-async function tryGoogleTTS(
+async function googleTranslateTTS(
   text: string,
-  lang: string
-): Promise<{ buffer: ArrayBuffer; contentType: string } | null> {
-  const targetLang = LANG_MAP[lang] || LANG_MAP.es;
-  const clean = text.slice(0, MAX_TEXT_LENGTH);
+  lang: LanguageCode
+): Promise<Buffer> {
+  const targetLanguage = LANGUAGE_MAP[lang];
 
-  const url =
-    `https://translate.googleapis.com/translate_tts` +
-    `?ie=UTF-8` +
-    `&tl=${encodeURIComponent(targetLang)}` +
-    `&client=tw-ob` +
-    `&q=${encodeURIComponent(clean)}`;
+  /*
+   * Google Translate TTS funciona de forma más consistente
+   * utilizando client=gtx y el código simple de idioma.
+   *
+   * Mantenemos el texto corto para evitar límites del endpoint.
+   */
+  const encodedText = encodeURIComponent(text);
 
-  try {
-    const response = await fetchWithTimeout(
-      url,
-      {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-          Referer: "https://translate.google.com/",
-          Accept: "audio/mpeg,audio/*;q=0.9,*/*;q=0.1",
-        },
-      },
-      10000
-    );
+  const urls = [
+    `https://translate.googleapis.com/translate_tts?client=gtx&ie=UTF-8&tl=${targetLanguage}&q=${encodedText}`,
+    `https://translate.google.com/translate_tts?client=tw-ob&ie=UTF-8&tl=${targetLanguage}&q=${encodedText}`,
+  ];
 
-    const buffer = await response.arrayBuffer();
+  let lastError = "El proveedor de voz no respondió.";
 
-    if (isValidAudioResponse(response, buffer)) {
-      return {
-        buffer,
-        contentType: response.headers.get("content-type") || "audio/mpeg",
-      };
+  for (const url of urls) {
+    try {
+      const response = await fetchWithTimeout(url, 12000);
+
+      if (!response.ok) {
+        lastError = `Google TTS respondió HTTP ${response.status}.`;
+        continue;
+      }
+
+      const contentType = (
+        response.headers.get("content-type") || ""
+      ).toLowerCase();
+
+      const arrayBuffer = await response.arrayBuffer();
+
+      if (arrayBuffer.byteLength < 1000) {
+        lastError = "Google TTS devolvió un archivo demasiado pequeño.";
+        continue;
+      }
+
+      /*
+       * A veces el servidor puede devolver un Content-Type poco fiable.
+       * Comprobamos también que el contenido tenga apariencia de MP3.
+       */
+      const bytes = new Uint8Array(arrayBuffer);
+
+      const hasId3 =
+        bytes.length >= 3 &&
+        bytes[0] === 0x49 &&
+        bytes[1] === 0x44 &&
+        bytes[2] === 0x33;
+
+      const hasMp3Frame =
+        bytes.length >= 2 &&
+        bytes[0] === 0xff &&
+        (bytes[1] & 0xe0) === 0xe0;
+
+      const looksLikeAudio =
+        contentType.includes("audio") || hasId3 || hasMp3Frame;
+
+      if (!looksLikeAudio) {
+        lastError =
+          "Google TTS devolvió una respuesta que no parece ser un archivo de audio.";
+        continue;
+      }
+
+      return Buffer.from(arrayBuffer);
+    } catch (error) {
+      if (error instanceof Error) {
+        lastError = error.name === "AbortError"
+          ? "Google TTS tardó demasiado en responder."
+          : error.message;
+      }
     }
-  } catch {
-    // ignore and fallback
   }
 
-  return null;
-}
-
-async function tryStreamElementsTTS(
-  text: string,
-  lang: string
-): Promise<{ buffer: ArrayBuffer; contentType: string } | null> {
-  const voice = VOICE_MAP[lang] || VOICE_MAP.es;
-  const clean = text.slice(0, MAX_TEXT_LENGTH);
-
-  const url =
-    `https://api.streamelements.com/kappa/v2/speech` +
-    `?voice=${encodeURIComponent(voice)}` +
-    `&text=${encodeURIComponent(clean)}`;
-
-  try {
-    const response = await fetchWithTimeout(
-      url,
-      {
-        headers: {
-          Accept: "audio/mpeg,audio/*;q=0.9,*/*;q=0.1",
-        },
-      },
-      10000
-    );
-
-    const buffer = await response.arrayBuffer();
-
-    if (isValidAudioResponse(response, buffer)) {
-      return {
-        buffer,
-        contentType: response.headers.get("content-type") || "audio/mpeg",
-      };
-    }
-  } catch {
-    // fallback
-  }
-
-  return null;
-}
-
-async function tryEnvProviderTTS(
-  text: string
-): Promise<{ buffer: ArrayBuffer; contentType: string } | null> {
-  const apiKey = process.env.TTS_API_KEY;
-  const apiUrl = process.env.TTS_API_URL;
-
-  if (!apiKey || !apiUrl) return null;
-
-  const clean = text.slice(0, MAX_TEXT_LENGTH);
-
-  try {
-    const response = await fetchWithTimeout(
-      apiUrl,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-          Accept: "audio/mpeg,audio/*;q=0.9,*/*;q=0.1",
-        },
-        body: JSON.stringify({ text: clean }),
-      },
-      10000
-    );
-
-    const buffer = await response.arrayBuffer();
-
-    if (isValidAudioResponse(response, buffer)) {
-      return {
-        buffer,
-        contentType: response.headers.get("content-type") || "audio/mpeg",
-      };
-    }
-  } catch {
-    // fallback
-  }
-
-  return null;
+  throw new Error(lastError);
 }
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => null);
+    let body: unknown;
 
-    if (!body || typeof body !== "object") {
+    try {
+      body = await req.json();
+    } catch {
       return NextResponse.json(
-        { error: "Solicitud inválida." },
+        { error: "La petición TTS contiene JSON inválido." },
         { status: 400 }
       );
     }
 
-    const rawText = typeof body.text === "string" ? body.text : "";
-    const langRaw =
-      typeof body.lang === "string" ? body.lang.toLowerCase() : "es";
+    if (!body || typeof body !== "object") {
+      return NextResponse.json(
+        { error: "La petición TTS no es válida." },
+        { status: 400 }
+      );
+    }
 
-    const text = rawText.trim().slice(0, MAX_TEXT_LENGTH);
+    const data = body as Record<string, unknown>;
 
-    if (!text) {
+    if (typeof data.text !== "string") {
       return NextResponse.json(
         { error: "El texto es obligatorio." },
         { status: 400 }
       );
     }
 
-    if (!LANG_MAP[langRaw]) {
+    const lang = isValidLanguage(data.lang) ? data.lang : "es";
+
+    const text = cleanText(data.text);
+
+    if (!text) {
       return NextResponse.json(
-        { error: "Idioma no soportado. Usa es, en, pt o fr." },
+        { error: "El texto está vacío." },
         { status: 400 }
       );
     }
 
-    const sanitized = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
-
-    // Prioridad: 1. ENV provider si existe, 2. Google, 3. StreamElements
-    const envResult = await tryEnvProviderTTS(sanitized);
-    if (envResult) {
-      return new NextResponse(envResult.buffer, {
-        status: 200,
-        headers: {
-          "Content-Type": envResult.contentType,
-          "Cache-Control": "no-store",
+    /*
+     * Este endpoint público de Google Translate tiene límites.
+     * Para esta aplicación queremos generar guiones cortos de anuncio.
+     */
+    if (text.length > 240) {
+      return NextResponse.json(
+        {
+          error:
+            "El guion es demasiado largo para generar la voz. Reduce la descripción del producto.",
         },
-      });
+        { status: 400 }
+      );
     }
 
-    const googleResult = await tryGoogleTTS(sanitized, langRaw);
-    if (googleResult) {
-      return new NextResponse(googleResult.buffer, {
-        status: 200,
-        headers: {
-          "Content-Type": googleResult.contentType,
-          "Cache-Control": "no-store",
-        },
-      });
-    }
+    const audio = await googleTranslateTTS(text, lang);
 
-    const seResult = await tryStreamElementsTTS(sanitized, langRaw);
-    if (seResult) {
-      return new NextResponse(seResult.buffer, {
-        status: 200,
-        headers: {
-          "Content-Type": seResult.contentType,
-          "Cache-Control": "no-store",
-        },
-      });
-    }
+    return new NextResponse(new Uint8Array(audio), {
+      status: 200,
+      headers: {
+        "Content-Type": "audio/mpeg",
+        "Content-Length": String(audio.length),
+        "Cache-Control": "no-store",
+      },
+    });
+  } catch (error) {
+    console.error("[TTS ERROR]", error);
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : "No se pudo generar el audio.";
 
     return NextResponse.json(
       {
-        error:
-          "No se pudo generar la voz en este momento. Comprueba tu conexión y vuelve a intentarlo.",
+        error: `No se pudo generar la voz: ${message}`,
       },
       { status: 502 }
-    );
-  } catch (error) {
-    console.error("TTS error:", error);
-
-    return NextResponse.json(
-      {
-        error: "Error interno al generar la voz.",
-      },
-      { status: 500 }
     );
   }
 }
