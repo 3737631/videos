@@ -64,13 +64,12 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     source.buffer = audioBuffer;
     if (mode === "voice") {
       if (isFallback) {
-        // Fallback también rápido viral pero sin pitido
-        source.playbackRate.value = 1.14;
-        actualDuration = actualDuration / 1.14;
+        source.playbackRate.value = 1.20;
+        actualDuration = actualDuration / 1.20;
       } else {
-        // Viral rápido sin silencio: 1.18 más rápido tik tok
-        source.playbackRate.value = 1.18;
-        actualDuration = actualDuration / 1.18;
+        // Viral más rápido: 1.27
+        source.playbackRate.value = 1.27;
+        actualDuration = actualDuration / 1.27;
       }
     } else {
       source.loop = true;
@@ -116,15 +115,22 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
 
   return new Promise<{ url: string, mimeType: string }>((resolve, reject) => {
     let isFinished = false;
-    let currentClipIdx = -1;
+    let currentClipIdx = 0;
     let activeVideo: HTMLVideoElement | null = null;
     let lastDrawTime = performance.now();
     let frameId = 0;
     const clipDur = actualDuration / clips.length;
+    const preloaded: HTMLVideoElement[] = [];
 
     const finalize = () => {
       cancelAnimationFrame(frameId);
-      if (activeVideo) {
+      for (const v of preloaded) {
+        try { v.pause(); } catch {}
+        v.removeAttribute("src");
+        try { v.load(); } catch {}
+        v.remove();
+      }
+      if (activeVideo && !preloaded.includes(activeVideo)) {
         try { activeVideo.pause(); } catch {}
         activeVideo.removeAttribute("src");
         try { activeVideo.load(); } catch {}
@@ -146,72 +152,69 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     recorder.onerror = () => reject(new Error("Error grabador MediaRecorder"));
     recorder.start(100);
 
-    const loadVideoAsync = async (index: number) => {
-      if (index < 0 || index >= clips.length) return;
-      const clip = clips[index];
-      const safeDur = Number.isFinite(clip.playDuration) && clip.playDuration > 0.6 ? clip.playDuration : 5;
-      const maxOffset = Math.max(0, safeDur - clipDur - 0.2);
-      const offset = maxOffset > 0.2 ? Math.random() * maxOffset : 0;
-      const v = document.createElement("video");
-      v.src = clip.url;
-      v.muted = true;
-      v.playsInline = true;
-      v.preload = "auto";
-      v.crossOrigin = "anonymous";
-      v.loop = true;
-      v.style.cssText = CANVAS_CSS;
-      v.setAttribute("playsinline", "");
-      document.body.appendChild(v);
-      // Cargar metadata
-      await new Promise<void>((res) => {
-        let done = false;
-        const finish = () => { if (!done) { done = true; res(); } };
-        if (v.readyState >= 1) finish();
-        else {
-          v.addEventListener("loadedmetadata", finish, { once: true });
-          v.addEventListener("error", finish, { once: true });
-          setTimeout(finish, 1800);
+    // Precarga todos los clips a la vez para que el cambio sea instantáneo y no trabe
+    const preloadAll = async () => {
+      const promises = clips.map(async (clip, idx) => {
+        const safeDur = Number.isFinite(clip.playDuration) && clip.playDuration > 0.6 ? clip.playDuration : 5;
+        const maxOffset = Math.max(0, safeDur - clipDur - 0.3);
+        const offset = maxOffset > 0.3 ? Math.random() * maxOffset : Math.random() * Math.max(0, safeDur * 0.3);
+        const v = document.createElement("video");
+        v.src = clip.url;
+        v.muted = true;
+        v.playsInline = true;
+        v.preload = "auto";
+        v.crossOrigin = "anonymous";
+        v.loop = true;
+        v.style.cssText = CANVAS_CSS;
+        v.setAttribute("playsinline", "");
+        document.body.appendChild(v);
+        await new Promise<void>((res) => {
+          let done = false;
+          const finish = () => { if (!done) { done = true; res(); } };
+          if (v.readyState >= 1) finish();
+          else {
+            v.addEventListener("loadedmetadata", finish, { once: true });
+            v.addEventListener("error", finish, { once: true });
+            setTimeout(finish, 1500);
+          }
+        });
+        try {
+          if (Number.isFinite(offset) && v.duration && offset < v.duration) v.currentTime = offset;
+        } catch {}
+        await new Promise<void>((res) => {
+          let done = false;
+          const finish = () => { if (!done) { done = true; res(); } };
+          if (v.readyState >= 2) finish();
+          else {
+            v.addEventListener("canplay", finish, { once: true });
+            v.addEventListener("loadeddata", finish, { once: true });
+            v.addEventListener("error", finish, { once: true });
+            setTimeout(finish, 700);
+          }
+        });
+        try { await v.play(); } catch {}
+        if (v.readyState < 2 || v.videoWidth === 0) {
+          console.warn(`[VIDEO] clip ${idx} no listo w=${v.videoWidth} - se ocultará pero no romperá`);
         }
+        preloaded[idx] = v;
       });
-      try {
-        if (Number.isFinite(offset) && v.duration && offset < v.duration) v.currentTime = offset;
-      } catch {}
-      await new Promise<void>((res) => {
-        let done = false;
-        const finish = () => { if (!done) { done = true; res(); } };
-        // Si ya tiene datos, no esperar
-        if (v.readyState >= 2) finish();
-        else {
-          v.addEventListener("canplay", finish, { once: true });
-          v.addEventListener("loadeddata", finish, { once: true });
-          v.addEventListener("error", finish, { once: true });
-          setTimeout(finish, 900);
+      await Promise.all(promises);
+      // Elegir primer vídeo con datos válidos
+      for (let i = 0; i < preloaded.length; i++) {
+        if (preloaded[i] && preloaded[i].videoWidth > 0) {
+          activeVideo = preloaded[i];
+          currentClipIdx = i;
+          break;
         }
-      });
-      try { await v.play(); } catch {}
-      // Solo cambiar si el vídeo cargó bien, si no mantener el anterior y no dejar negro
-      if (v.readyState < 2 || v.videoWidth === 0) {
-        console.warn(`[VIDEO] clip ${index} no listo readyState=${v.readyState} w=${v.videoWidth} - manteniendo anterior`);
-        v.removeAttribute("src");
-        try { v.load(); } catch {}
-        v.remove();
-        return;
       }
-      const old = activeVideo;
-      activeVideo = v;
-      currentClipIdx = index;
-      if (old) {
-        try { old.pause(); } catch {}
-        old.removeAttribute("src");
-        try { old.load(); } catch {}
-        old.remove();
+      if (!activeVideo && preloaded[0]) {
+        activeVideo = preloaded[0];
+        currentClipIdx = 0;
       }
     };
 
     const start = performance.now();
-    currentClipIdx = -1;
-    loadVideoAsync(0).then(() => {
-      if (currentClipIdx === -1 && activeVideo) currentClipIdx = 0;
+    preloadAll().then(() => {
       // Primer frame inmediato para no grabar negro inicial
       const drawOnce = () => {
         ctx.fillStyle = "#000";
@@ -236,7 +239,12 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
           if (elapsed >= actualDuration) { stopRecording(); return; }
           const neededIdx = Math.min(clips.length - 1, Math.floor(elapsed / clipDur));
           if (neededIdx !== currentClipIdx) {
-            loadVideoAsync(neededIdx);
+            const cand = preloaded[neededIdx];
+            if (cand && cand.readyState >= 1 && cand.videoWidth > 0) {
+              activeVideo = cand;
+              currentClipIdx = neededIdx;
+              if (cand.paused) cand.play().catch(() => {});
+            }
           }
           // Auto-reanudar vídeo si se pausó (evita negro con varios clips)
           if (activeVideo && activeVideo.paused && !isFinished && activeVideo.readyState >= 2) {
