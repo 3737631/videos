@@ -145,13 +145,37 @@ export default function App() {
     setStep(2);
   };
 
-  const generateScriptLocal = (info: string, lang: string) => {
+  const generateScriptLocal = (info: string, lang: string, targetDuration = 9) => {
     const cleanInfo = info.replace(/https?:\/\/\S+/gi, "").trim() || "este producto";
+    const lower = cleanInfo.toLowerCase();
+    const isCleaner = /limpia|deterg|mancha|suci|jab[oó]n|desinfect|multiusos|quitagrasa/.test(lower);
+    const isVacuum = /aspira|polvo/.test(lower);
+    const isCar = /coche|auto|veh[ií]culo|tapicer[ií]a|llanta/.test(lower);
+    const isKitchen = /cocina|sart[eé]n|olla|freidora|horno|licuadora/.test(lower);
+    const isBeauty = /crema|serum|maquill|piel|cabello|uñas/.test(lower);
+    const isCloth = /ropa|camiseta|vestido|zapatilla|moda/.test(lower);
+
+    const benefitPool: Record<string, string[]> = {
+      cleaner: ["Elimina manchas y grasa en segundos sin frotar.", "Deja todo brillante y desinfectado al instante.", "Rinde muchísimo y no daña superficies."],
+      vacuum: ["Aspira todo el polvo en una sola pasada.", "Llega a cada rincón sin esfuerzo.", "Silenciosa, potente y sin cables."],
+      car: ["Deja tu coche como nuevo en minutos.", "Limpia tapicería y llantas sin esfuerzo.", "Brillo profesional sin ir al lavadero."],
+      kitchen: ["Cocina más rápido y sin pegarse nada.", "Antiadherente y fácil de limpiar.", "Ahorra tiempo y energía cada día."],
+      beauty: ["Notarás la diferencia desde el primer uso.", "Fórmula suave y efectiva.", "Piel y cabello radiantes al instante."],
+      cloth: ["Cómoda, resistente y con estilo.", "Combina con todo y dura muchísimo.", "Talla perfecta y acabado premium."],
+      generic: ["Te ahorra horas de esfuerzo y es súper fácil.", "La calidad te dejará con la boca abierta.", "Es el mejor invento y funciona perfecto."],
+    };
+    let benefits = benefitPool.generic;
+    if (isCleaner) benefits = benefitPool.cleaner;
+    else if (isVacuum) benefits = benefitPool.vacuum;
+    else if (isCar) benefits = benefitPool.car;
+    else if (isKitchen) benefits = benefitPool.kitchen;
+    else if (isBeauty) benefits = benefitPool.beauty;
+    else if (isCloth) benefits = benefitPool.cloth;
 
     const data: Record<string, { hooks: string[], benefits: string[], calls: string[] }> = {
       es: {
         hooks: [`¿Cansado de los mismos problemas? Necesitas ${cleanInfo}.`, `El secreto que nadie te quiere contar sobre ${cleanInfo}.`, `Mira cómo ${cleanInfo} me salvó la vida.`],
-        benefits: ["Te ahorra horas de esfuerzo y es súper fácil.", "La calidad te dejará con la boca abierta.", "Es el mejor invento y funciona perfecto."],
+        benefits,
         calls: ["Consíguelo hoy y cambia tu rutina.", "Pruébalo ahora. Te encantará.", "Empieza a usarlo ya. No te arrepentirás."]
       },
       en: {
@@ -175,8 +199,19 @@ export default function App() {
     const h = d.hooks[Math.floor(Math.random() * d.hooks.length)];
     const b = d.benefits[Math.floor(Math.random() * d.benefits.length)];
     const c = d.calls[Math.floor(Math.random() * d.calls.length)];
-    
-    return `${h} ${b} ${c}`;
+    let full = `${h} ${b} ${c}`;
+    // Adaptar longitud al vídeo: 6s = corto (~110 chars), 8-9s = medio (~150), 10s+ = largo
+    const maxChars = targetDuration <= 6 ? 110 : targetDuration <= 8 ? 150 : targetDuration <= 10 ? 190 : 240;
+    if (full.length > maxChars) {
+      // Recortar sin cortar palabra y sin dejar frase a medias
+      let cut = full.slice(0, maxChars);
+      const lastDot = cut.lastIndexOf(".");
+      const lastSpace = cut.lastIndexOf(" ");
+      if (lastDot > maxChars * 0.6) cut = cut.slice(0, lastDot + 1);
+      else if (lastSpace > 0) cut = cut.slice(0, lastSpace).trim() + ".";
+      full = cut;
+    }
+    return full;
   };
 
   const processVideo = async () => {
@@ -200,7 +235,7 @@ export default function App() {
 
       if (mode === "voice") {
         setStatus(`Generando guion y voz en ${language.toUpperCase()}...`);
-        const script = generateScriptLocal(productPrompt, language);
+        const script = generateScriptLocal(productPrompt, language, totalDuration);
         
         // Pasamos el callback de Status para evitar congelamiento visual en pantalla
         const tts = await generateSpeechAndCues(script, language, ctx, (msg) => setStatus(msg));
@@ -246,6 +281,16 @@ export default function App() {
     clearMemory();
     setClips([]);
     setFinalVideo(null);
+    setProductPrompt("");
+    setTiktokDraft("");
+    setTiktokLinks([]);
+    setTiktokError("");
+    setMode(null);
+    setLanguage("es");
+    setTotalDuration(10);
+    setProgress(0);
+    setStatus("");
+    setVideoMimeType("video/webm");
     if (sharedAudioCtxRef.current) {
       sharedAudioCtxRef.current.close().catch(() => {});
       sharedAudioCtxRef.current = null;
@@ -272,7 +317,7 @@ export default function App() {
           <div className="space-y-5">
             {/* TikTok minimalista - idéntico a subir vídeos */}
             <div className="border-2 border-dashed border-zinc-700 hover:border-zinc-600 bg-zinc-950/50 rounded-3xl p-6 sm:p-7 flex flex-col items-center text-center space-y-3 transition-colors">
-              <div className="w-14 h-14 bg-cyan-500/15 border border-cyan-500/20 rounded-full flex items-center justify-center">
+              <div className="w-14 h-14 bg-zinc-800 rounded-full flex items-center justify-center">
                 <Link2 className="w-7 h-7 text-cyan-400" />
               </div>
               <div>
