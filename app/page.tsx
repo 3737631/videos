@@ -6,6 +6,7 @@ import { VideoClip, AppMode } from "@/types";
 import { renderFinalVideo } from "@/lib/videoEngine";
 import { generateSpeechAndCues, generateViralMusic } from "@/lib/ttsEngine";
 import { fetchTikTokClips } from "@/lib/tiktok";
+import { searchTikTokClean, TikTokSearchResult } from "@/lib/tiktokSearch";
 
 export default function App() {
   const [step, setStep] = useState(1);
@@ -25,6 +26,10 @@ export default function App() {
   const [tiktokLinks, setTiktokLinks] = useState<string[]>([]);
   const [tiktokLoading, setTiktokLoading] = useState(false);
   const [tiktokError, setTiktokError] = useState("");
+  const [autoProduct, setAutoProduct] = useState("");
+  const [autoResults, setAutoResults] = useState<(TikTokSearchResult & { selected: boolean })[]>([]);
+  const [autoSearching, setAutoSearching] = useState(false);
+  const [autoError, setAutoError] = useState("");
 
   // Asegurar limpieza estricta en desmontajes
   useEffect(() => {
@@ -69,6 +74,86 @@ export default function App() {
 
   const handleRemoveLink = (idx: number) => {
     setTiktokLinks(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleAutoSearch = async () => {
+    const kw = autoProduct.trim() || productPrompt.trim();
+    if (!kw || kw.length < 2) { setAutoError("Escribe el nombre del producto"); return; }
+    setAutoError(""); setAutoSearching(true); setStatus(`Buscando vídeos limpios de "${kw}"...`);
+    try {
+      const results = await searchTikTokClean(kw, 8, (m) => setStatus(m));
+      setAutoResults(results.map((r, i) => ({ ...r, selected: i < 3 })));
+      setStatus("");
+      if (results.length === 0) setAutoError("No se encontraron vídeos limpios");
+    } catch (e) {
+      setAutoError(e instanceof Error ? e.message : String(e));
+    } finally { setAutoSearching(false); setStatus(""); }
+  };
+
+  const toggleAutoSelect = (idx: number) => {
+    setAutoResults(prev => prev.map((r, i) => i === idx ? { ...r, selected: !r.selected } : r));
+  };
+
+  const handleAutoUse = async () => {
+    const selected = autoResults.filter(r => r.selected);
+    if (selected.length === 0) { setAutoError("Selecciona al menos 1 vídeo"); return; }
+    setTiktokLoading(true); setStatus(`Descargando ${selected.length} vídeos sin marca...`);
+    try {
+      clearMemory();
+      if (finalVideo) { try { URL.revokeObjectURL(finalVideo); } catch {} setFinalVideo(null); }
+      // Reusa fetchTikTokClips pero con play URLs directas: construimos pseudo-urls
+      // Descargamos directo aquí para no pasar por tikwm api de nuevo
+      const clips: VideoClip[] = [];
+      for (let i = 0; i < selected.length; i++) {
+        const play = selected[i].play;
+        setStatus(`Bajando vídeo ${i + 1}/${selected.length}...`);
+        const blob = await (async () => {
+          try {
+            const r = await fetch(play, { cache: "no-store" });
+            if (r.ok) { const b = await r.blob(); if (b.size > 10000) return b; }
+          } catch {}
+          const prox = `https://corsproxy.io/?${encodeURIComponent(play)}`;
+          const r2 = await fetch(prox, { cache: "no-store" });
+          if (!r2.ok) throw new Error("descarga falló");
+          const b2 = await r2.blob();
+          if (b2.size < 10000) throw new Error("vídeo vacío");
+          return b2;
+        })();
+        const url = URL.createObjectURL(blob);
+        const dur = await new Promise<number>((res) => {
+          const v = document.createElement("video");
+          v.preload = "metadata"; v.muted = true; v.playsInline = true; v.src = url;
+          let done = false; const finish = (d: number) => { if (done) return; done = true; v.removeAttribute("src"); try { v.load(); } catch {} v.remove(); res(d); };
+          v.onloadedmetadata = () => finish(Number.isFinite(v.duration) && v.duration > 0.5 ? v.duration : 4);
+          v.onerror = () => finish(4); setTimeout(() => finish(4), 2500);
+        });
+        const file = new File([blob], `tiktok-auto-${Date.now()}-${i}.mp4`, { type: blob.type || "video/mp4" });
+        clips.push({ file, url, startOffset: 0, playDuration: dur });
+      }
+      const accDur = clips.reduce((s, c) => s + c.playDuration, 0);
+      setClips(clips);
+      setTotalDuration(Math.min(15, Math.max(8, Math.round(accDur))));
+      // Si no hay descripción, usar el producto buscado
+      if (!productPrompt.trim()) setProductPrompt(autoProduct.trim());
+      setStep(2);
+    } catch (e) {
+      setAutoError(e instanceof Error ? e.message : String(e));
+    } finally { setTiktokLoading(false); setStatus(""); }
+  };
+
+  const handleShareTikTok = async () => {
+    if (!finalVideo) return;
+    try {
+      const res = await fetch(finalVideo);
+      const blob = await res.blob();
+      const file = new File([blob], `viral-${Date.now()}.${videoMimeType.includes("mp4") ? "mp4" : "webm"}`, { type: blob.type });
+      const nav = navigator as unknown as { canShare?: (d: unknown) => boolean; share?: (d: unknown) => Promise<void> };
+      if (nav.canShare && nav.canShare({ files: [file] }) && nav.share) {
+        await nav.share({ files: [file], title: "Video viral", text: productPrompt.slice(0, 100) });
+        return;
+      }
+    } catch {}
+    window.open("https://www.tiktok.com/upload", "_blank");
   };
 
   const handleTikTokDownload = async () => {
@@ -289,6 +374,9 @@ export default function App() {
     setTiktokDraft("");
     setTiktokLinks([]);
     setTiktokError("");
+    setAutoProduct("");
+    setAutoResults([]);
+    setAutoError("");
     setMode(null);
     setLanguage("es");
     setTotalDuration(10);
@@ -319,7 +407,65 @@ export default function App() {
         
         {step === 1 && (
           <div className="space-y-5">
-            {/* TikTok minimalista - idéntico a subir vídeos */}
+            {/* Automático por producto - busca vídeos limpios solo */}
+            <div className="border-2 border-dashed border-purple-500/30 bg-purple-500/5 rounded-3xl p-6 sm:p-7 flex flex-col items-center text-center space-y-3">
+              <div className="w-14 h-14 bg-zinc-800 rounded-full flex items-center justify-center">
+                <Wand2 className="w-7 h-7 text-purple-400" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base">Modo Automático</h3>
+                <p className="text-xs text-zinc-500 mt-1">Escribe el producto y buscamos vídeos limpios sin marca</p>
+              </div>
+              <div className="w-full flex gap-2">
+                <input
+                  value={autoProduct}
+                  onChange={(e) => setAutoProduct(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAutoSearch(); } }}
+                  placeholder="ej: limpiador manchas coche"
+                  className="flex-1 bg-zinc-900 border border-zinc-800 rounded-full px-4 py-3 text-sm focus:border-purple-500 outline-none text-center sm:text-left"
+                />
+                <button
+                  onClick={handleAutoSearch}
+                  disabled={autoSearching || !autoProduct.trim()}
+                  className="px-6 py-3 bg-white text-black rounded-full font-bold text-sm hover:bg-zinc-100 disabled:opacity-40 active:scale-95 transition whitespace-nowrap"
+                >
+                  {autoSearching ? <Loader2 className="w-4 h-4 animate-spin" /> : "Buscar"}
+                </button>
+              </div>
+              {autoError && <div className="w-full rounded-2xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300 whitespace-pre-wrap">{autoError}</div>}
+              {status && autoSearching && <div className="text-xs text-zinc-400 flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin" />{status}</div>}
+              {autoResults.length > 0 && (
+                <div className="w-full space-y-3">
+                  <div className="grid grid-cols-3 gap-2">
+                    {autoResults.map((r, idx) => (
+                      <button
+                        key={r.id}
+                        onClick={() => toggleAutoSelect(idx)}
+                        className={`relative rounded-2xl overflow-hidden border-2 aspect-[9/16] bg-black ${r.selected ? "border-purple-500" : "border-zinc-800"}`}
+                      >
+                        <img src={r.cover} alt="" className="w-full h-full object-cover opacity-80" />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
+                        <div className={`absolute top-2 right-2 w-5 h-5 rounded-full border flex items-center justify-center text-[10px] ${r.selected ? "bg-purple-500 border-purple-500 text-white" : "bg-black/50 border-white/50 text-white"}`}>{r.selected ? "✓" : ""}</div>
+                        <div className="absolute bottom-1 left-1 right-1 text-[10px] text-white text-left leading-tight">
+                          <div className="truncate">{r.author}</div>
+                          <div className="text-[9px] opacity-70">{r.duration.toFixed(1)}s · ♥{r.likes > 1000 ? `${(r.likes/1000).toFixed(1)}k` : r.likes}</div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    onClick={handleAutoUse}
+                    disabled={tiktokLoading || autoResults.filter(r=>r.selected).length===0}
+                    className="w-full py-3 bg-white text-black rounded-full font-bold text-sm flex items-center justify-center gap-2 hover:bg-zinc-100 disabled:opacity-50 active:scale-[0.98] transition"
+                  >
+                    {tiktokLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Creando...</> : <>Usar {autoResults.filter(r=>r.selected).length} vídeos para viral</>}
+                  </button>
+                  <p className="text-[11px] text-zinc-500">Se descargarán sin marca y pasará a elegir Voz/Música</p>
+                </div>
+              )}
+            </div>
+
+            {/* TikTok manual minimalista - idéntico a subir vídeos */}
             <div className="border-2 border-dashed border-zinc-700 hover:border-zinc-600 bg-zinc-950/50 rounded-3xl p-6 sm:p-7 flex flex-col items-center text-center space-y-3 transition-colors">
               <div className="w-14 h-14 bg-zinc-800 rounded-full flex items-center justify-center">
                 <Link2 className="w-7 h-7 text-cyan-400" />
@@ -526,6 +672,10 @@ export default function App() {
                 <Download className="w-4 h-4 sm:w-5 sm:h-5" /> Guardar
               </a>
             </div>
+            <button onClick={handleShareTikTok} className="w-full mt-3 py-3 bg-white text-black rounded-full font-bold text-sm flex items-center justify-center gap-2 hover:bg-zinc-100 active:scale-[0.98] transition">
+              <Link2 className="w-4 h-4" /> Subir a TikTok
+            </button>
+            <p className="text-[11px] text-zinc-500 mt-2 text-center">Se abrirá TikTok o el menú de compartir de tu móvil</p>
           </div>
         )}
 
