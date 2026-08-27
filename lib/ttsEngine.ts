@@ -7,9 +7,10 @@ export async function generateSpeechAndCues(
   const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑçãõâêîôûàèìòù.,!¿?'-]/g, "").trim();
   const rawWords = cleanText.split(/\s+/).filter(Boolean);
   if (rawWords.length === 0) {
-    rawWords.push("Increíble", "descúbrelo", "ahora");
+    rawWords.push("¡Increíble!", "Descúbrelo", "ahora");
   }
 
+  // Subtítulos ultra dinámicos: estrictamente de 1 a 2 palabras para estilo TikTok
   const wordChunks: string[] = [];
   for (let i = 0; i < rawWords.length; i += 2) {
     wordChunks.push(rawWords.slice(i, i + 2).join(" "));
@@ -24,10 +25,10 @@ export async function generateSpeechAndCues(
   const v = voiceMap[lang] || voiceMap["es"];
   const encoded = encodeURIComponent(cleanText);
 
-  // SISTEMA DE 6 CAPAS INMUNE A BLOQUEOS
+  // EL LEGENDARIO SISTEMA DE 6 CAPAS EN CASCADA CONTRA ADBLOCKERS
   const apis = [
-    '/api/tts', // Capa 1: Servidor interno Next.js
-    `https://api.streamelements.com/kappa/v2/speech?voice=${v.streamElements}&text=${encoded}`, // Capa 2: Amazon Polly
+    '/api/tts', // Capa 1: Servidor interno (inmune a adblockers de cliente)
+    `https://api.streamelements.com/kappa/v2/speech?voice=${v.streamElements}&text=${encoded}`, // Capa 2
     `https://texttospeech.responsivevoice.org/v1/text:synthesize?text=${encoded}&lang=${lang}&engine=g3`, // Capa 3
     `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`, // Capa 4
     `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`, // Capa 5
@@ -53,37 +54,36 @@ export async function generateSpeechAndCues(
         const blob = await res.blob();
         if (blob.size > 500) {
           audioBlob = blob;
-          break;
+          break; // ¡Éxito! Encontramos una capa libre
         }
       }
     } catch (e) {
-      continue;
+      continue; // Si una capa falla o está bloqueada, probamos la siguiente de inmediato
     }
   }
 
-  // Si todo fallara, generamos un tono de voz sintetizado agradable (cero pitidos planos)
+  // Si todas las capas fallaran (ej. sin internet total), generamos notas rítmicas suaves (cero pitidos planos)
   if (!audioBlob) {
-    audioBlob = await generateFallbackVoice(Math.max(8, targetDurationSec));
+    audioBlob = await generateHarmonicSynth(Math.max(8, targetDurationSec));
   }
 
   return { audioBlob, wordChunks };
 }
 
-async function generateFallbackVoice(durationSec: number): Promise<Blob> {
+async function generateHarmonicSynth(durationSec: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
-  const sampleRate = 44100;
-  const offlineCtx = new AC(1, sampleRate * durationSec, sampleRate);
+  const offlineCtx = new (window.OfflineAudioContext || (window as any).webkitOfflineAudioContext)(1, 44100 * durationSec, 44100);
   
-  const notes = [300, 350, 400, 450];
-  const beat = 0.25;
+  const notes = [261.63, 329.63, 392.00, 523.25]; // Acordes armónicos agradables
+  const beat = 0.5;
   for (let t = 0; t < durationSec; t += beat) {
     const osc = offlineCtx.createOscillator();
     const gain = offlineCtx.createGain();
-    osc.type = "sine";
+    osc.type = "triangle";
     osc.frequency.value = notes[Math.floor(Math.random() * notes.length)];
     
-    gain.gain.setValueAtTime(0.2, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + beat * 0.8);
+    gain.gain.setValueAtTime(0.15, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + beat * 0.9);
     
     osc.connect(gain);
     gain.connect(offlineCtx.destination);
@@ -96,36 +96,21 @@ async function generateFallbackVoice(durationSec: number): Promise<Blob> {
 }
 
 export async function generateViralMusic(duration: number): Promise<Blob> {
-  const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
-  const sampleRate = 44100;
-  const offlineCtx = new AC(1, sampleRate * (duration + 2), sampleRate);
+  const offlineCtx = new (window.OfflineAudioContext || (window as any).webkitOfflineAudioContext)(1, 44100 * (duration + 2), 44100);
   const bpm = 120;
   const beatTime = 60 / bpm; 
   
   for (let i = 0; i < duration + 2; i += beatTime) {
     const kick = offlineCtx.createOscillator();
     const kickGain = offlineCtx.createGain();
-    kick.frequency.setValueAtTime(150, i);
-    kick.frequency.exponentialRampToValueAtTime(0.01, i + 0.5);
-    kickGain.gain.setValueAtTime(1, i);
-    kickGain.gain.exponentialRampToValueAtTime(0.01, i + 0.5);
+    kick.frequency.setValueAtTime(120, i);
+    kick.frequency.exponentialRampToValueAtTime(0.01, i + 0.3);
+    kickGain.gain.setValueAtTime(0.8, i);
+    kickGain.gain.exponentialRampToValueAtTime(0.01, i + 0.3);
     kick.connect(kickGain);
     kickGain.connect(offlineCtx.destination);
     kick.start(i);
-    kick.stop(i + 0.5);
-    
-    if (i + beatTime / 2 < duration + 2) {
-      const hat = offlineCtx.createOscillator();
-      const hatGain = offlineCtx.createGain();
-      hat.type = "square";
-      hat.frequency.setValueAtTime(8000, i + beatTime / 2);
-      hatGain.gain.setValueAtTime(0.1, i + beatTime / 2);
-      hatGain.gain.exponentialRampToValueAtTime(0.01, i + beatTime / 2 + 0.1);
-      hat.connect(hatGain);
-      hatGain.connect(offlineCtx.destination);
-      hat.start(i + beatTime / 2);
-      hat.stop(i + beatTime / 2 + 0.1);
-    }
+    kick.stop(i + 0.3);
   }
   const buffer = await offlineCtx.startRendering();
   return audioBufferToWav(buffer);

@@ -6,7 +6,7 @@ function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number,
   const words = text.split(' ');
   let line = '';
   const lines = [];
-  const lineHeight = 32; 
+  const lineHeight = 30; 
 
   for (let n = 0; n < words.length; n++) {
     const testLine = line + words[n] + ' ';
@@ -79,8 +79,8 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
           source.buffer = decoded;
           
           if (mode === "voice") {
-            source.playbackRate.value = 1.20;
-            actualDuration = actualDuration / 1.20;
+            source.playbackRate.value = 1.15;
+            actualDuration = actualDuration / 1.15;
           } else {
             source.loop = true;
           }
@@ -264,12 +264,12 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
           const currentText = dynamicCues[cueIndex];
 
           if (currentText) {
-            ctx.font = '900 26px "Inter", sans-serif'; 
+            ctx.font = '900 24px "Inter", sans-serif'; 
             ctx.textAlign = "center"; 
             ctx.textBaseline = "middle";
             ctx.lineJoin = "round";
             
-            ctx.lineWidth = 5; 
+            ctx.lineWidth = 4; 
             ctx.strokeStyle = "#000";
             ctx.fillStyle = "#FFE600";
             
