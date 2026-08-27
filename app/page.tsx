@@ -43,16 +43,17 @@ export default function App() {
   const handleAddLink = () => {
     const raw = tiktokDraft.trim();
     if (!raw) return;
-    // Extraer todas las urls del texto pegado
     const found = raw.match(/https?:\/\/[^\s]+/gi) || [];
-    const candidates = found.length > 0 ? found : [raw];
-    const valid = candidates.filter(u => /tiktok\.com|vm\.tiktok/i.test(u));
-    const toAdd = valid.length > 0 ? valid : candidates;
-    if (toAdd.length === 0) {
-      setTiktokError("Pega un enlace válido de TikTok");
+    if (found.length === 0) {
+      setTiktokError("Solo se aceptan enlaces de TikTok");
       return;
     }
-    const dedup = toAdd.filter(u => !tiktokLinks.includes(u));
+    const valid = found.filter(u => /tiktok\.com|vm\.tiktok/i.test(u));
+    if (valid.length === 0) {
+      setTiktokError("Solo se aceptan enlaces de TikTok");
+      return;
+    }
+    const dedup = valid.filter(u => !tiktokLinks.includes(u));
     if (dedup.length === 0) {
       setTiktokError("Ese enlace ya está añadido");
       return;
@@ -271,8 +272,8 @@ export default function App() {
           <div className="space-y-5">
             {/* TikTok minimalista - idéntico a subir vídeos */}
             <div className="border-2 border-dashed border-zinc-700 hover:border-zinc-600 bg-zinc-950/50 rounded-3xl p-6 sm:p-7 flex flex-col items-center text-center space-y-3 transition-colors">
-              <div className="w-14 h-14 bg-zinc-800 rounded-full flex items-center justify-center">
-                <Link2 className="w-7 h-7 text-zinc-400" />
+              <div className="w-14 h-14 bg-cyan-500/15 border border-cyan-500/20 rounded-full flex items-center justify-center">
+                <Link2 className="w-7 h-7 text-cyan-400" />
               </div>
               <div>
                 <h3 className="font-bold text-base">Pega tu enlace de TikTok</h3>
@@ -313,17 +314,28 @@ export default function App() {
                   onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddLink(); } }}
                   onPaste={(e) => {
                     const text = e.clipboardData.getData("text");
-                    if (/tiktok\.com|vm\.tiktok/i.test(text)) {
+                    const isTikTok = /tiktok\.com|vm\.tiktok/i.test(text);
+                    if (!isTikTok) {
                       e.preventDefault();
-                      const found = text.match(/https?:\/\/[^\s,]+/gi) || [text];
-                      const valid = found.filter(u => /tiktok/i.test(u));
-                      const toAdd = valid.length ? valid : [text.trim()];
-                      const dedup = toAdd.filter(u => !tiktokLinks.includes(u));
-                      if (dedup.length > 0 && tiktokLinks.length + dedup.length <= 5) {
-                        setTiktokLinks(prev => [...prev, ...dedup]);
-                        setTiktokDraft("");
-                        setTiktokError("");
-                      }
+                      setTiktokError("Solo se aceptan enlaces de TikTok");
+                      return;
+                    }
+                    e.preventDefault();
+                    const found = text.match(/https?:\/\/[^\s,]+/gi) || [];
+                    const valid = found.filter(u => /tiktok/i.test(u));
+                    if (valid.length === 0) {
+                      setTiktokError("Solo se aceptan enlaces de TikTok");
+                      return;
+                    }
+                    const dedup = valid.filter(u => !tiktokLinks.includes(u));
+                    if (dedup.length === 0) {
+                      setTiktokError("Ese enlace ya está añadido");
+                      return;
+                    }
+                    if (dedup.length > 0 && tiktokLinks.length + dedup.length <= 5) {
+                      setTiktokLinks(prev => [...prev, ...dedup]);
+                      setTiktokDraft("");
+                      setTiktokError("");
                     }
                   }}
                   placeholder="pega aqui tu enlace de tiktok"
