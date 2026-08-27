@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { UploadCloud, Music, Mic, Wand2, Download, RefreshCcw, Globe } from "lucide-react";
 import { VideoClip, AppMode } from "@/types";
 import { renderFinalVideo } from "@/lib/videoEngine";
@@ -20,6 +20,15 @@ export default function App() {
   
   const sharedAudioCtxRef = useRef<AudioContext | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+
+  // Asegurar limpieza estricta en desmontajes
+  useEffect(() => {
+    return () => {
+      if (sharedAudioCtxRef.current) {
+        sharedAudioCtxRef.current.close().catch(() => {});
+      }
+    };
+  }, []);
 
   const clearMemory = () => {
     clips.forEach(c => URL.revokeObjectURL(c.url));
@@ -92,24 +101,27 @@ export default function App() {
   const processVideo = async () => {
     setStep(4);
     setProgress(5);
-    setStatus("Activando canales de audio...");
+    setStatus("Activando canales de audio (safari-safe)...");
 
     try {
-      // MAGIA: El AudioContext DEBE crearse durante la interacción del usuario para evitar bloqueos
+      // 1. INICIALIZACIÓN INMEDIATA DEL CONTEXTO (Bypass Safari Audio Lock)
       const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       if (!AudioContextClass) throw new Error("AudioContext no soportado");
       const ctx = new AudioContextClass();
-      if (ctx.state === "suspended") await ctx.resume();
+      await ctx.resume();
       sharedAudioCtxRef.current = ctx;
 
       let audioBuffer: AudioBuffer | null = null;
       let wordChunks: string[] = [];
 
+      setProgress(15);
+
       if (mode === "voice") {
-        setStatus(`Generando voz en ${language.toUpperCase()}...`);
+        setStatus(`Generando guion y voz en ${language.toUpperCase()}...`);
         const script = generateScriptLocal(productPrompt, language);
         
-        const tts = await generateSpeechAndCues(script, language, ctx);
+        // Pasamos el callback de Status para evitar congelamiento visual en pantalla
+        const tts = await generateSpeechAndCues(script, language, ctx, (msg) => setStatus(msg));
         audioBuffer = tts.audioBuffer;
         wordChunks = tts.wordChunks;
       } else {
@@ -117,7 +129,9 @@ export default function App() {
         audioBuffer = await generateViralMusic(totalDuration);
       }
 
+      setProgress(30);
       setStatus("Renderizando vídeo final a 30 FPS...");
+      
       const { url, mimeType } = await renderFinalVideo({
         clips, 
         audioBuffer, 
@@ -125,19 +139,20 @@ export default function App() {
         wordChunks, 
         mode: mode!, 
         targetDuration: totalDuration, 
-        onProgress: (p) => setProgress(Math.round(p))
+        onProgress: (p) => setProgress(30 + Math.round(p * 0.7)) // Escala el 70% restante
       });
 
       setVideoMimeType(mimeType);
       setFinalVideo(url);
       setStep(5);
     } catch (e: unknown) {
+      console.error("[Proceso interrumpido]", e);
       if (sharedAudioCtxRef.current) {
         sharedAudioCtxRef.current.close().catch(() => {});
         sharedAudioCtxRef.current = null;
       }
-      const msg = e instanceof Error ? e.message : "Ocurrió un error en el procesado.";
-      alert("Error: " + msg);
+      const msg = e instanceof Error ? e.message : String(e);
+      alert(`Ocurrió un error en el procesado: \n${msg}`);
       setStep(3); 
     }
   };
@@ -159,7 +174,7 @@ export default function App() {
     <main className="min-h-[100dvh] bg-[#09090b] text-white flex flex-col items-center justify-center p-4 sm:p-6 overflow-x-hidden">
       <div className="w-full max-w-xl text-center mb-6 sm:mb-8 mt-4">
         <div className="inline-block bg-purple-500/10 border border-purple-500/30 text-purple-400 px-3 py-1 rounded-full text-[10px] sm:text-xs font-bold mb-3 sm:mb-4 tracking-widest">
-          CREADOR VIRAL V3 (ESTABILIDAD ABSOLUTA)
+          CREADOR VIRAL V3 FINAL
         </div>
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent leading-tight">
           Creador Viral
@@ -192,7 +207,7 @@ export default function App() {
               <div className="p-3 sm:p-4 bg-purple-500/10 rounded-full shrink-0"><Mic className="text-purple-400 w-6 h-6" /></div>
               <div className="text-left">
                 <h3 className="font-bold text-base sm:text-lg">Modo Narrador IA</h3>
-                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Guion, voz y subtítulos.</p>
+                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Guion, voz humana rápida y subtítulos.</p>
               </div>
             </button>
           </div>
@@ -237,7 +252,7 @@ export default function App() {
               <div className="absolute inset-0 border-4 border-zinc-800 border-t-purple-500 rounded-full animate-spin"></div>
               <div className="absolute inset-0 flex items-center justify-center font-bold font-mono text-sm sm:text-base">{progress}%</div>
             </div>
-            <h2 className="text-lg sm:text-xl font-bold text-center">Exportando vídeo...</h2>
+            <h2 className="text-lg sm:text-xl font-bold text-center">Procesando...</h2>
             <p className="text-zinc-500 text-xs sm:text-sm mt-2 text-center px-4">{status}</p>
           </div>
         )}

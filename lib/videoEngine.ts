@@ -36,7 +36,7 @@ function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number,
 }
 
 export async function renderFinalVideo(config: RenderConfig): Promise<{ url: string, mimeType: string }> {
-  const { clips, audioBuffer, audioContext, mode, wordChunks } = config;
+  const { clips, audioBuffer, audioContext, mode, wordChunks, onProgress } = config;
   
   const width = 270;
   const height = 480;
@@ -63,13 +63,17 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
   const dynamicCues: SubtitleCue[] = [];
 
   try {
-    // Usamos el contexto Vivo que pasó del botón de la UI
+    // Fundamental en Safari: asegurar que el contexto está corriendo
+    if (audioContext.state === "suspended") {
+      await audioContext.resume();
+    }
+    
     dest = audioContext.createMediaStreamDestination();
     const source = audioContext.createBufferSource();
     source.buffer = audioBuffer;
     
     if (mode === "voice") {
-      source.playbackRate.value = 1.15; // Ritmo TikTok dinámico
+      source.playbackRate.value = 1.15;
       actualDuration = actualDuration / 1.15;
     } else {
       source.loop = true;
@@ -78,7 +82,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     source.connect(dest);
     source.start(0);
 
-    // Sincronización proporcional de los subtítulos reales
+    // Sync proporcional estricta
     if (mode === "voice" && wordChunks && wordChunks.length > 0) {
       const totalChars = wordChunks.reduce((acc, chunk) => acc + chunk.length, 0);
       let accumulatedTime = 0;
@@ -86,34 +90,31 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       wordChunks.forEach((chunk) => {
         const weight = chunk.length / Math.max(1, totalChars);
         const duration = weight * actualDuration;
-        
-        dynamicCues.push({
-          text: chunk,
-          start: accumulatedTime,
-          end: accumulatedTime + duration
-        });
+        dynamicCues.push({ text: chunk, start: accumulatedTime, end: accumulatedTime + duration });
         accumulatedTime += duration;
       });
     }
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : "Error en la conexión del stream de audio.";
+    const msg = e instanceof Error ? e.message : String(e);
     if (canvas.parentNode) canvas.remove();
-    throw new Error(msg);
+    throw new Error("Fallo en la conexión del stream de audio: " + msg);
   }
 
   const captureStreamFunc = canvas.captureStream || canvas.mozCaptureStream || canvas.webkitCaptureStream;
-  if (!captureStreamFunc) throw new Error("Grabación de vídeo no soportada.");
+  if (!captureStreamFunc) throw new Error("Captura de Canvas no soportada.");
   
   const stream = captureStreamFunc.call(canvas, FPS);
-  dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
+  if (dest) dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
 
+  // Orden estricto de soporte para Safari (Prefiere MP4 nativo)
   const possibleMimes = [
-    "video/webm;codecs=vp8,opus",
-    "video/webm",
     "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
-    "video/mp4"
+    "video/mp4",
+    "video/webm;codecs=vp8,opus",
+    "video/webm"
   ];
-  let selectedMime = "video/webm";
+  
+  let selectedMime = "video/webm"; // Default fallback
   for (const m of possibleMimes) {
     if (MediaRecorder.isTypeSupported(m)) {
       selectedMime = m;
@@ -153,7 +154,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       if (canvas.parentNode) canvas.remove();
 
       if (chunks.length === 0) {
-        reject(new Error("Cero fotogramas capturados."));
+        reject(new Error("Cero fotogramas capturados. El vídeo no se renderizó."));
       } else {
         const finalBlob = new Blob(chunks, { type: selectedMime });
         resolve({ url: URL.createObjectURL(finalBlob), mimeType: selectedMime });
@@ -166,13 +167,11 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       try {
         if (recorder.state === "recording") recorder.stop();
         else finalize();
-      } catch {
-        finalize();
-      }
+      } catch { finalize(); }
     };
 
     recorder.onstop = () => setTimeout(finalize, 200);
-    recorder.onerror = () => reject(new Error("Error del grabador de vídeo interno."));
+    recorder.onerror = () => reject(new Error("Error del grabador MediaRecorder"));
     recorder.start();
 
     const loadVideoAsync = async (index: number) => {
@@ -209,6 +208,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
 
     const start = performance.now();
     currentClipIdx = 0;
+    
     loadVideoAsync(0).then(() => {
       const drawLoop = () => {
         if (isFinished) return;
@@ -221,7 +221,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
           lastDrawTime = now - (delta % frameInterval);
           const elapsed = (now - start) / 1000;
           
-          config.onProgress(Math.min(100, (elapsed / actualDuration) * 100));
+          onProgress(Math.min(100, (elapsed / actualDuration) * 100));
 
           if (elapsed >= actualDuration) {
             stopRecording();
@@ -251,11 +251,9 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
               ctx.textAlign = "center"; 
               ctx.textBaseline = "middle";
               ctx.lineJoin = "round";
-              
               ctx.lineWidth = 5; 
               ctx.strokeStyle = "#000";
               ctx.fillStyle = "#FFE600";
-              
               drawWrappedText(ctx, cue.text, width / 2, height * 0.70, 220);
             }
           }
