@@ -1,10 +1,4 @@
-export interface SubtitleCue {
-  id: number;
-  text: string;
-  start: number;
-  end: number;
-  words: Array<{ text: string; start: number; end: number }>;
-}
+export type AppMode = "music" | "voice";
 
 export interface VideoClip {
   file: File;
@@ -13,14 +7,11 @@ export interface VideoClip {
   playDuration: number;
 }
 
-export type AppMode = "music" | "voice";
-
 export interface RenderConfig {
   clips: VideoClip[];
   audioBlob: Blob | null;
-  cues?: SubtitleCue[];
-  wordChunks?: string[];
+  wordChunks: string[];
   mode: AppMode;
   targetDuration: number;
-  onProgress: (pct: number) => void;
+  onProgress: (progress: number) => void;
 }

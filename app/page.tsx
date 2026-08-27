@@ -89,17 +89,17 @@ export default function App() {
   const processVideo = async () => {
     setStep(4);
     setProgress(5);
-    setStatus("Preparando archivos...");
+    setStatus("Preparando motores...");
 
     try {
-      let audioBlob = null;
+      let audioBlob: Blob | null = null;
       let wordChunks: string[] = [];
 
       if (mode === "voice") {
         setStatus(`Generando voz en ${language.toUpperCase()}...`);
         const script = generateScriptLocal(productPrompt, language);
         
-        const tts = await generateSpeechAndCues(script, language, totalDuration);
+        const tts = await generateSpeechAndCues(script, language);
         audioBlob = tts.audioBlob;
         wordChunks = tts.wordChunks;
       } else {
@@ -112,17 +112,16 @@ export default function App() {
         clips, 
         audioBlob, 
         wordChunks, 
-        cues: [], 
         mode: mode!, 
         targetDuration: totalDuration, 
-        onProgress: (p: number) => setProgress(Math.round(p))
-      } as any);
+        onProgress: (p) => setProgress(Math.round(p))
+      });
 
       setFinalVideo(url);
       setStep(5);
     } catch (e: any) {
-      alert("Error: " + e.message);
-      setStep(1);
+      alert("Error: " + (e.message || "Ocurrió un error al procesar el vídeo."));
+      setStep(3);
     }
   };
 

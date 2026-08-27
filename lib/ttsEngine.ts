@@ -1,63 +1,43 @@
 export async function generateSpeechAndCues(
   text: string,
-  lang: string = "es",
-  targetDurationSec: number = 10
+  lang: string = "es"
 ): Promise<{ audioBlob: Blob; wordChunks: string[] }> {
   
-  const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑçãõâêîôûàèìòù.,!¿?'-]/g, "").trim();
-  const rawWords = cleanText.split(/\s+/).filter(Boolean);
-  if (rawWords.length === 0) {
-    rawWords.push("¡INCREÍBLE!", "DESCÚBRELO", "AHORA");
+  // Expresión regular correcta: preserva los espacios (\s)
+  const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑçãõâêîôûàèìòù.,!¿?'-_\s]/g, "").trim();
+  if (!cleanText) {
+    throw new Error("El guion generado está vacío.");
   }
 
-  // Subtítulos ultra dinámicos en mayúsculas (de 1 a 2 palabras para estilo TikTok profesional)
+  const rawWords = cleanText.split(/\s+/).filter(Boolean);
+  if (rawWords.length === 0) {
+    throw new Error("No se encontraron palabras válidas en el guion.");
+  }
+
+  // Agrupación en bloques de 2 palabras para subtítulos estilo TikTok
   const wordChunks: string[] = [];
   for (let i = 0; i < rawWords.length; i += 2) {
     wordChunks.push(rawWords.slice(i, i + 2).join(" ").toUpperCase());
   }
 
-  // Generación local de voz por síntesis de formantes vocales (Inmune a CORS y AdBlockers, cero pitidos, cero silencio)
-  const audioBlob = await generateSpeechSynthesisAudio(rawWords, Math.max(10, targetDurationSec));
+  // Petición al proxy interno (Inmune a AdBlockers y bloqueos CORS)
+  const response = await fetch('/api/tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: cleanText, lang })
+  });
 
-  return { audioBlob, wordChunks };
-}
-
-async function generateSpeechSynthesisAudio(words: string[], durationSec: number): Promise<Blob> {
-  const AC = (window as any).OfflineAudioContext || (window as any).webkitOfflineAudioContext;
-  const offlineCtx = new (AC as any)(1, 44100 * durationSec, 44100);
-  const timePerWord = durationSec / Math.max(1, words.length);
-
-  for (let i = 0; i < words.length; i++) {
-    const start = i * timePerWord;
-    const wordDur = Math.min(timePerWord * 0.85, 0.45);
-
-    const osc = offlineCtx.createOscillator();
-    const filter = offlineCtx.createBiquadFilter();
-    const gain = offlineCtx.createGain();
-
-    // Oscilador de diente de sierra para simular armónicos vocales hablados
-    osc.type = "sawtooth";
-    osc.frequency.setValueAtTime(130 + (i % 5) * 15, start);
-
-    // Filtro pasobanda modelado en frecuencias formantes de voz humana
-    filter.type = "bandpass";
-    filter.frequency.value = 750 + (words[i].length * 15);
-    filter.Q.value = 3;
-
-    gain.gain.setValueAtTime(0.01, start);
-    gain.gain.linearRampToValueAtTime(0.25, start + 0.05);
-    gain.gain.exponentialRampToValueAtTime(0.001, start + wordDur);
-
-    osc.connect(filter);
-    filter.connect(gain);
-    gain.connect(offlineCtx.destination);
-
-    osc.start(start);
-    osc.stop(start + wordDur);
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({}));
+    throw new Error(errData.error || "No se pudo generar la voz humana. Comprueba tu conexión a internet.");
   }
 
-  const buffer = await offlineCtx.startRendering();
-  return audioBufferToWav(buffer);
+  const audioBlob = await response.blob();
+  if (audioBlob.size < 500) {
+    throw new Error("El audio de voz recibido está vacío.");
+  }
+
+  return { audioBlob, wordChunks };
 }
 
 export async function generateViralMusic(duration: number): Promise<Blob> {

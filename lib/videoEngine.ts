@@ -30,13 +30,16 @@ function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number,
 }
 
 export async function renderFinalVideo(config: RenderConfig): Promise<string> {
-  const { clips, audioBlob, targetDuration, onProgress, mode } = config;
-  const wordChunks = (config as any).wordChunks;
+  const { clips, audioBlob, targetDuration, onProgress, mode, wordChunks } = config;
   
   const width = 270;
   const height = 480;
   const FPS = 30; 
   const frameInterval = 1000 / FPS;
+
+  if (!clips || clips.length === 0) {
+    throw new Error("No hay clips de vídeo para renderizar.");
+  }
 
   const canvas = document.createElement("canvas");
   canvas.width = width; 
@@ -52,47 +55,45 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
 
   let dest: MediaStreamAudioDestinationNode | null = null;
   let audioCtx: AudioContext | null = null;
-  let actualDuration = Math.max(10, targetDuration || 10);
+  let actualDuration = targetDuration || 10;
   let dynamicCues: { text: string; start: number; end: number }[] = [];
 
   try {
     const AC = window.AudioContext || (window as any).webkitAudioContext;
-    if (AC) {
-      audioCtx = new AC();
-      if (audioCtx.state === "suspended") await audioCtx.resume();
-      dest = audioCtx.createMediaStreamDestination();
+    if (!AC) throw new Error("AudioContext no soportado en este navegador.");
+    
+    audioCtx = new AC();
+    if (audioCtx.state === "suspended") await audioCtx.resume();
+    dest = audioCtx.createMediaStreamDestination();
 
-      const osc = audioCtx.createOscillator();
-      const silentGain = audioCtx.createGain();
-      silentGain.gain.value = 0.01; 
-      osc.connect(silentGain);
-      silentGain.connect(dest);
-      osc.start();
+    if (audioBlob) {
+      const ab = await audioBlob.arrayBuffer();
+      // Si la decodificación falla, lanza un error claro y descriptivo (sin ocultarlo)
+      const decoded = await audioCtx.decodeAudioData(ab).catch((err) => {
+        throw new Error("Error al decodificar el audio: " + (err.message || "formato no válido"));
+      });
 
-      if (audioBlob) {
-        const ab = await audioBlob.arrayBuffer();
-        const decoded = await audioCtx.decodeAudioData(ab).catch(() => null);
-
-        if (decoded && decoded.duration > 1) {
-          actualDuration = Math.max(8, decoded.duration);
-          const source = audioCtx.createBufferSource();
-          source.buffer = decoded;
-          
-          if (mode === "voice") {
-            source.playbackRate.value = 1.25;
-            actualDuration = actualDuration / 1.25;
-          } else {
-            source.loop = true;
-          }
-
-          source.connect(dest);
-          source.start(0);
+      if (decoded && decoded.duration > 0) {
+        actualDuration = decoded.duration;
+        const source = audioCtx.createBufferSource();
+        source.buffer = decoded;
+        
+        if (mode === "voice") {
+          source.playbackRate.value = 1.15; // Ritmo ágil natural
+          actualDuration = actualDuration / 1.15;
+        } else {
+          source.loop = true;
         }
-      }
 
-      const validChunks = (wordChunks && wordChunks.length > 0) ? wordChunks : ["¡MIRA ESTO!", "DESCÚBRELO", "AHORA"];
-      const timePerChunk = actualDuration / validChunks.length;
-      validChunks.forEach((text: string, i: number) => {
+        source.connect(dest);
+        source.start(0);
+      }
+    }
+
+    // Sincronización precisa de subtítulos basada en los wordChunks reales
+    if (mode === "voice" && wordChunks && wordChunks.length > 0) {
+      const timePerChunk = actualDuration / wordChunks.length;
+      wordChunks.forEach((text: string, i: number) => {
         dynamicCues.push({
           text: text,
           start: i * timePerChunk,
@@ -100,12 +101,14 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         });
       });
     }
-  } catch (e) {
-    console.warn("Aviso de audio:", e);
+  } catch (e: any) {
+    if (audioCtx) { try { audioCtx.close(); } catch(err){} }
+    if (canvas.parentNode) canvas.remove();
+    throw new Error(e.message || "Error al inicializar el audio para el vídeo.");
   }
 
   const captureStreamFunc = canvas.captureStream || (canvas as any).mozCaptureStream || (canvas as any).webkitCaptureStream;
-  if (!captureStreamFunc) throw new Error("Tu navegador no soporta captura de vídeo.");
+  if (!captureStreamFunc) throw new Error("Tu navegador no soporta captura de vídeo en Canvas.");
   
   const stream = captureStreamFunc.call(canvas, FPS);
   if (dest) {
@@ -265,7 +268,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
           ctx.drawImage(activeVideo, (width - dw) / 2, (height - dh) / 2, dw, dh);
         }
 
-        // SUBTÍTULOS DINÁMICOS POR ÍNDICE EXACTO (Vertical 270x480, ancho máximo 200px para que nunca salgan)
+        // SUBTÍTULOS DINÁMICOS VERTICALES (Ancho máximo exacto de 200px para lienzo vertical de 270px)
         if (mode === "voice" && dynamicCues.length > 0) {
           let cue = dynamicCues.find(c => elapsed >= c.start && elapsed <= c.end);
           if (!cue) {
@@ -283,7 +286,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
             ctx.strokeStyle = "#000";
             ctx.fillStyle = "#FFE600";
             
-            // Ancho máximo estrictamente limitado a 200px para que encaje perfecto sin salirse
             drawWrappedText(ctx, cue.text, width / 2, height * 0.70, 200);
           }
         }
