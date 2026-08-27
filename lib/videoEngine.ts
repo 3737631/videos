@@ -79,9 +79,8 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
           source.buffer = decoded;
           
           if (mode === "voice") {
-            let speedRatio = actualDuration / targetDuration;
-            speedRatio = Math.max(0.8, Math.min(speedRatio, 1.5)); 
-            source.playbackRate.value = speedRatio;
+            source.playbackRate.value = 1.25; // Ritmo TikTok constante
+            actualDuration = actualDuration / 1.25;
           } else {
             source.loop = true;
           }
@@ -113,16 +112,25 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
     dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
   }
 
-  const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")
-    ? "video/webm;codecs=vp8,opus"
-    : MediaRecorder.isTypeSupported("video/webm")
-    ? "video/webm"
-    : "";
+  // Detector Universal de Códecs compatible con Chrome, Firefox, Safari e iOS
+  const possibleMimes = [
+    "video/webm;codecs=vp8,opus",
+    "video/webm",
+    "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+    "video/mp4"
+  ];
+  let selectedMime = "";
+  for (const m of possibleMimes) {
+    if (MediaRecorder.isTypeSupported(m)) {
+      selectedMime = m;
+      break;
+    }
+  }
 
   let recorder: MediaRecorder;
   try {
-    recorder = mimeType 
-      ? new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 1500000 }) 
+    recorder = selectedMime 
+      ? new MediaRecorder(stream, { mimeType: selectedMime, videoBitsPerSecond: 1500000 }) 
       : new MediaRecorder(stream);
   } catch (err) {
     recorder = new MediaRecorder(stream);
@@ -157,7 +165,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       if (chunks.length === 0) {
         reject(new Error("No se procesó vídeo (Cero fotogramas capturados)."));
       } else {
-        const finalBlob = new Blob(chunks, { type: recorder.mimeType || "video/webm" });
+        const finalBlob = new Blob(chunks, { type: recorder.mimeType || selectedMime || "video/webm" });
         resolve(URL.createObjectURL(finalBlob));
       }
     };
@@ -196,8 +204,16 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       document.body.appendChild(newVideo);
       
       await new Promise<void>(res => { 
-        newVideo.oncanplay = () => res(); 
-        setTimeout(res, 400); 
+        let resolved = false;
+        const done = () => {
+          if (!resolved) {
+            resolved = true;
+            res();
+          }
+        };
+        newVideo.oncanplay = done;
+        newVideo.onloadeddata = done;
+        setTimeout(done, 1200); // Timeout de seguridad para evitar bloqueos
       });
       
       newVideo.play().catch(()=>{});
@@ -263,7 +279,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
             ctx.strokeStyle = "#000";
             ctx.fillStyle = "#FFE600";
             
-            drawWrappedText(ctx, cue.text, width / 2, height * 0.65, width - 40);
+            drawWrappedText(ctx, cue.text, width / 2, height * 0.75, width - 40);
           }
         }
       }
