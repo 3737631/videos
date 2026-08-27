@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { UploadCloud, Music, Mic, Wand2, Download, RefreshCcw, Globe } from "lucide-react";
+import { UploadCloud, Music, Mic, Wand2, Download, RefreshCcw, Globe, Link2, Loader2 } from "lucide-react";
 import { VideoClip, AppMode } from "@/types";
 import { renderFinalVideo } from "@/lib/videoEngine";
 import { generateSpeechAndCues, generateViralMusic } from "@/lib/ttsEngine";
+import { fetchTikTokClips } from "@/lib/tiktok";
 
 export default function App() {
   const [step, setStep] = useState(1);
@@ -20,6 +21,9 @@ export default function App() {
   
   const sharedAudioCtxRef = useRef<AudioContext | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const [tiktokInput, setTiktokInput] = useState("");
+  const [tiktokLoading, setTiktokLoading] = useState(false);
+  const [tiktokError, setTiktokError] = useState("");
 
   // Asegurar limpieza estricta en desmontajes
   useEffect(() => {
@@ -33,6 +37,37 @@ export default function App() {
   const clearMemory = () => {
     for (const c of clips) try { URL.revokeObjectURL(c.url); } catch {}
     if (finalVideo) try { URL.revokeObjectURL(finalVideo); } catch {}
+  };
+
+  const handleTikTokDownload = async () => {
+    if (!tiktokInput.trim()) {
+      setTiktokError("Pega al menos un enlace de TikTok");
+      return;
+    }
+    setTiktokError("");
+    setTiktokLoading(true);
+    setStatus("Descargando TikToks sin marca...");
+    try {
+      clearMemory();
+      if (finalVideo) {
+        try { URL.revokeObjectURL(finalVideo); } catch {}
+        setFinalVideo(null);
+      }
+      const { clips: tkClips, errors } = await fetchTikTokClips(tiktokInput, (msg) => setStatus(msg));
+      const accDur = tkClips.reduce((s, c) => s + c.playDuration, 0);
+      setClips(tkClips);
+      setTotalDuration(Math.min(15, Math.max(8, Math.round(accDur))));
+      if (errors.length > 0) setTiktokError(`Descargados ${tkClips.length} OK. Errores: ${errors.join(" | ").slice(0, 200)}`);
+      else setTiktokError("");
+      setStep(2);
+      setStatus("");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setTiktokError(msg);
+    } finally {
+      setTiktokLoading(false);
+      setStatus("");
+    }
   };
 
   const handleUpload = async (files: FileList | null) => {
@@ -201,12 +236,51 @@ export default function App() {
       <div className="w-full max-w-xl bg-zinc-900 border border-zinc-800 rounded-3xl sm:rounded-[2rem] p-5 sm:p-8 shadow-2xl relative overflow-hidden">
         
         {step === 1 && (
-          <div onClick={() => fileInput.current?.click()} className="border-2 border-dashed border-zinc-700 hover:border-purple-500 bg-zinc-950/50 rounded-2xl sm:rounded-3xl p-8 sm:p-12 flex flex-col items-center cursor-pointer transition-all active:scale-95 touch-manipulation">
-            <input type="file" ref={fileInput} onChange={(e) => handleUpload(e.target.files)} multiple accept="video/*" className="hidden" />
-            <div className="w-16 h-16 sm:w-20 sm:h-20 bg-zinc-800 rounded-full flex items-center justify-center mb-4 transition-transform">
-              <UploadCloud className="w-8 h-8 sm:w-10 sm:h-10 text-purple-400" />
+          <div className="space-y-5">
+            {/* TikTok sin marca - misma estética */}
+            <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-4 sm:p-5 space-y-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-pink-500/15 rounded-lg"><Link2 className="w-5 h-5 text-pink-400" /></div>
+                <h3 className="font-bold text-sm sm:text-base">TikTok sin marca de agua</h3>
+                <span className="ml-auto text-[10px] bg-zinc-800 border border-zinc-700 px-2 py-0.5 rounded-full">Varios</span>
+              </div>
+              <p className="text-xs text-zinc-500">Pega uno o varios enlaces (uno por línea). Se descargan sin marca y luego eliges Voz o Música igual que con tus vídeos.</p>
+              <textarea
+                value={tiktokInput}
+                onChange={(e) => setTiktokInput(e.target.value)}
+                placeholder={"https://www.tiktok.com/@usuario/video/1234567890123456789\nhttps://vm.tiktok.com/XXXX"}
+                className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-sm focus:border-pink-500 outline-none min-h-[88px] resize-y"
+                rows={3}
+              />
+              {tiktokError && (
+                <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300 whitespace-pre-wrap">{tiktokError}</div>
+              )}
+              {status && tiktokLoading && (
+                <div className="text-xs text-zinc-400 flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin" />{status}</div>
+              )}
+              <button
+                onClick={handleTikTokDownload}
+                disabled={tiktokLoading || !tiktokInput.trim()}
+                className="w-full py-3 bg-gradient-to-r from-pink-600 to-purple-600 rounded-xl font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-50 active:scale-[0.98] transition"
+              >
+                {tiktokLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Descargando...</> : <><Link2 className="w-4 h-4" /> Descargar sin marca</>}
+              </button>
             </div>
-            <h2 className="text-lg sm:text-xl font-bold text-center">Toca para subir vídeos</h2>
+
+            <div className="flex items-center gap-3">
+              <div className="h-px flex-1 bg-zinc-800" />
+              <span className="text-xs text-zinc-500 px-2">o</span>
+              <div className="h-px flex-1 bg-zinc-800" />
+            </div>
+
+            <div onClick={() => fileInput.current?.click()} className="border-2 border-dashed border-zinc-700 hover:border-purple-500 bg-zinc-950/50 rounded-2xl sm:rounded-3xl p-8 sm:p-12 flex flex-col items-center cursor-pointer transition-all active:scale-95 touch-manipulation">
+              <input type="file" ref={fileInput} onChange={(e) => handleUpload(e.target.files)} multiple accept="video/*" className="hidden" />
+              <div className="w-16 h-16 sm:w-20 sm:h-20 bg-zinc-800 rounded-full flex items-center justify-center mb-4 transition-transform">
+                <UploadCloud className="w-8 h-8 sm:w-10 sm:h-10 text-purple-400" />
+              </div>
+              <h2 className="text-lg sm:text-xl font-bold text-center">Toca para subir vídeos</h2>
+              <p className="text-xs text-zinc-500 mt-1">Desde tu galería (mismo flujo Voz/Música)</p>
+            </div>
           </div>
         )}
 
