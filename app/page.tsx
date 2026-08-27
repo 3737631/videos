@@ -146,8 +146,12 @@ export default function App() {
   };
 
   const generateScriptLocal = (info: string, lang: string, targetDuration = 9) => {
-    const cleanInfo = info.replace(/https?:\/\/\S+/gi, "").trim() || "este producto";
-    const lower = cleanInfo.toLowerCase();
+    const rawInfo = info.replace(/https?:\/\/\S+/gi, "").trim() || "este producto";
+    // Usar solo palabras clave, no la descripción exacta para no dejar rastro verbatim
+    const words = rawInfo.split(/\s+/).filter(w => w.length > 2);
+    const keyword = words.slice(0, 3).join(" ").slice(0, 22) || rawInfo.slice(0, 18);
+    const cleanInfo = keyword;
+    const lower = rawInfo.toLowerCase();
     const isCleaner = /limpia|deterg|mancha|suci|jab[oó]n|desinfect|multiusos|quitagrasa/.test(lower);
     const isVacuum = /aspira|polvo/.test(lower);
     const isCar = /coche|auto|veh[ií]culo|tapicer[ií]a|llanta/.test(lower);
