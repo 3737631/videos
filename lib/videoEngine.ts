@@ -167,7 +167,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       isFinished = true;
       try {
         if (recorder.state === "recording") {
-          recorder.stop(); // Dispara onstop al terminar de vaciar datos
+          recorder.stop();
         } else {
           finalize();
         }
@@ -176,14 +176,12 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       }
     };
 
-    // Espera un tick en onstop para asegurar que los chunks están completos
     recorder.onstop = () => {
       setTimeout(finalize, 150);
     };
 
     recorder.onerror = () => reject(new Error("Error interno del grabador de vídeo."));
 
-    // INICIO SIN TIMESLICE: Evita el corte de datos prematuro
     recorder.start();
 
     const loadVideoAsync = async (index: number) => {
@@ -265,7 +263,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
             ctx.strokeStyle = "#000";
             ctx.fillStyle = "#FFE600";
             
-            drawWrappedText(ctx, cue.text, width / 2, height * 0.75, width - 40);
+            drawWrappedText(ctx, cue.text, width / 2, height * 0.65, width - 40);
           }
         }
       }
