@@ -7,7 +7,7 @@ export async function generateSpeechAndCues(
   const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑçãõâêîôûàèìòù.,!¿?'-]/g, "").trim();
   const rawWords = cleanText.split(/\s+/).filter(Boolean);
   if (rawWords.length === 0) {
-    rawWords.push("¡Increíble!", "descúbrelo", "ahora");
+    rawWords.push("Increíble", "descúbrelo", "ahora");
   }
 
   const wordChunks: string[] = [];
@@ -15,62 +15,75 @@ export async function generateSpeechAndCues(
     wordChunks.push(rawWords.slice(i, i + 2).join(" "));
   }
 
+  const voiceMap: Record<string, { streamElements: string, google: string }> = {
+    es: { streamElements: "Mia", google: "es-ES" },
+    en: { streamElements: "Brian", google: "en-US" },
+    pt: { streamElements: "Vitoria", google: "pt-BR" },
+    fr: { streamElements: "Celine", google: "fr-FR" }
+  };
+  const v = voiceMap[lang] || voiceMap["es"];
+  const encoded = encodeURIComponent(cleanText);
+
+  // SISTEMA DE 6 CAPAS INMUNE A BLOQUEOS
+  const apis = [
+    '/api/tts', // Capa 1: Servidor interno Next.js
+    `https://api.streamelements.com/kappa/v2/speech?voice=${v.streamElements}&text=${encoded}`, // Capa 2: Amazon Polly
+    `https://texttospeech.responsivevoice.org/v1/text:synthesize?text=${encoded}&lang=${lang}&engine=g3`, // Capa 3
+    `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`, // Capa 4
+    `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`, // Capa 5
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`)}` // Capa 6
+  ];
+
   let audioBlob: Blob | null = null;
 
-  try {
-    const res = await fetch('/api/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: cleanText, lang })
-    });
-
-    if (res.ok) {
-      const blob = await res.blob();
-      if (blob.size > 500) {
-        audioBlob = blob;
-      }
-    }
-  } catch (e) {
-    console.warn("API TTS fetch failed:", e);
-  }
-
-  // Respaldo directo si el servidor intermedio falla
-  if (!audioBlob) {
+  for (const url of apis) {
     try {
-      const vMap: Record<string, string> = { es: "Mia", en: "Brian", pt: "Vitoria", fr: "Celine" };
-      const voice = vMap[lang] || "Mia";
-      const seUrl = `https://api.streamelements.com/kappa/v2/speech?voice=${voice}&text=${encodeURIComponent(cleanText)}`;
-      const seRes = await fetch(seUrl);
-      if (seRes.ok) {
-        const blob = await seRes.blob();
-        if (blob.size > 500) audioBlob = blob;
+      let res;
+      if (url === '/api/tts') {
+        res = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: cleanText, lang })
+        });
+      } else {
+        res = await fetch(url, { cache: "no-store" });
       }
-    } catch (e) {}
+
+      if (res.ok) {
+        const blob = await res.blob();
+        if (blob.size > 500) {
+          audioBlob = blob;
+          break;
+        }
+      }
+    } catch (e) {
+      continue;
+    }
   }
 
-  // Respaldo rítmico agradable si todo lo demás falla (cero pitidos)
+  // Si todo fallara, generamos un tono de voz sintetizado agradable (cero pitidos planos)
   if (!audioBlob) {
-    audioBlob = await generateSynthVoice(Math.max(8, targetDurationSec));
+    audioBlob = await generateFallbackVoice(Math.max(8, targetDurationSec));
   }
 
   return { audioBlob, wordChunks };
 }
 
-async function generateSynthVoice(durationSec: number): Promise<Blob> {
+async function generateFallbackVoice(durationSec: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
   const sampleRate = 44100;
   const offlineCtx = new AC(1, sampleRate * durationSec, sampleRate);
   
-  const notes = [261.63, 329.63, 392.00, 523.25];
-  const beat = 0.3;
+  const notes = [300, 350, 400, 450];
+  const beat = 0.25;
   for (let t = 0; t < durationSec; t += beat) {
     const osc = offlineCtx.createOscillator();
     const gain = offlineCtx.createGain();
     osc.type = "sine";
     osc.frequency.value = notes[Math.floor(Math.random() * notes.length)];
     
-    gain.gain.setValueAtTime(0.15, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + beat * 0.9);
+    gain.gain.setValueAtTime(0.2, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + beat * 0.8);
     
     osc.connect(gain);
     gain.connect(offlineCtx.destination);

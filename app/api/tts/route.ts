@@ -37,7 +37,6 @@ export async function POST(req: Request) {
       headers: { 'Content-Type': 'audio/mpeg' },
     });
   } catch (error) {
-    console.error("TTS API Route Error:", error);
     return NextResponse.json({ error: "Failed to generate speech" }, { status: 500 });
   }
 }
