@@ -8,7 +8,6 @@ type ExtCanvasElement = HTMLCanvasElement & {
   webkitCaptureStream(fps?: number): MediaStream;
 };
 
-// Dibuja texto con un máximo de ancho para que no se salga de la pantalla vertical
 function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number) {
   const words = text.split(' ');
   let line = '';
@@ -36,11 +35,7 @@ function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number,
   }
 }
 
-function getExtensionFromMimeType(mime: string): string {
-  return mime.toLowerCase().includes("mp4") ? "mp4" : "webm";
-}
-
-export async function renderFinalVideo(config: RenderConfig): Promise<{ url: string, mimeType: string, extension: string }> {
+export async function renderFinalVideo(config: RenderConfig): Promise<{ url: string, mimeType: string }> {
   const { clips, audioBlob, mode, wordChunks } = config;
   
   const width = 270;
@@ -70,10 +65,10 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
   let dest: MediaStreamAudioDestinationNode | null = null;
   let audioCtx: AudioContext | null = null;
   let actualDuration = 10;
-  let dynamicCues: SubtitleCue[] = [];
+  const dynamicCues: SubtitleCue[] = [];
 
   try {
-    const AudioCtxClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtxClass) throw new Error("AudioContext no soportado en tu navegador.");
     
     audioCtx = new AudioCtxClass();
@@ -84,7 +79,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     const decoded = await new Promise<AudioBuffer>((resolve, reject) => {
       audioCtx!.decodeAudioData(ab, resolve, reject);
     }).catch(() => {
-      throw new Error("El archivo de audio no pudo ser decodificado.");
+      throw new Error("El motor de vídeo no pudo decodificar la voz final.");
     });
 
     if (decoded && decoded.duration > 0) {
@@ -93,7 +88,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       source.buffer = decoded;
       
       if (mode === "voice") {
-        source.playbackRate.value = 1.15; // Velocidad dinámica
+        source.playbackRate.value = 1.15; 
         actualDuration = actualDuration / 1.15;
       } else {
         source.loop = true;
@@ -103,13 +98,12 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       source.start(0);
     }
 
-    // CÁLCULO REAL DE SINCRONIZACIÓN (PROPORCIONAL a la longitud de cada palabra)
+    // SINCRONIZACIÓN REAL PROPORCIONAL DE SUBTÍTULOS
     if (mode === "voice" && wordChunks && wordChunks.length > 0) {
       const totalChars = wordChunks.reduce((acc, chunk) => acc + chunk.length, 0);
       let accumulatedTime = 0;
       
       wordChunks.forEach((chunk) => {
-        // Peso = qué porcentaje del tiempo total le corresponde a este bloque según sus letras
         const weight = chunk.length / Math.max(1, totalChars);
         const duration = weight * actualDuration;
         
@@ -121,10 +115,12 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
         accumulatedTime += duration;
       });
     }
-  } catch (e: any) {
-    if (audioCtx) { try { audioCtx.close(); } catch(err){} }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "Error conectando el audio al vídeo.";
+    if (audioCtx) { try { audioCtx.close(); } catch {}
+    }
     if (canvas.parentNode) canvas.remove();
-    throw new Error(e.message || "Error configurando el audio principal.");
+    throw new Error(msg);
   }
 
   const captureStreamFunc = canvas.captureStream || canvas.mozCaptureStream || canvas.webkitCaptureStream;
@@ -135,7 +131,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
   }
 
-  // Detectar MIME type óptimo dinámicamente
   const possibleMimes = [
     "video/webm;codecs=vp8,opus",
     "video/webm",
@@ -153,7 +148,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
   let recorder: MediaRecorder;
   try {
     recorder = new MediaRecorder(stream, { mimeType: selectedMime, videoBitsPerSecond: 1500000 });
-  } catch (err) {
+  } catch {
     recorder = new MediaRecorder(stream);
     selectedMime = recorder.mimeType || "video/webm";
   }
@@ -165,7 +160,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     }
   };
 
-  return new Promise<{ url: string, mimeType: string, extension: string }>((resolve, reject) => {
+  return new Promise<{ url: string, mimeType: string }>((resolve, reject) => {
     let isFinished = false;
     let currentClipIdx = -1;
     let activeVideo: HTMLVideoElement | null = null;
@@ -182,13 +177,13 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
         activeVideo.remove(); 
       }
       if (canvas.parentNode) canvas.remove();
-      try { audioCtx?.close(); } catch(e){}
+      try { audioCtx?.close(); } catch {}
 
       if (chunks.length === 0) {
         reject(new Error("La grabación finalizó pero no se capturaron fotogramas."));
       } else {
         const finalBlob = new Blob(chunks, { type: selectedMime });
-        resolve({ url: URL.createObjectURL(finalBlob), mimeType: selectedMime, extension: getExtensionFromMimeType(selectedMime) });
+        resolve({ url: URL.createObjectURL(finalBlob), mimeType: selectedMime });
       }
     };
 
@@ -201,7 +196,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
         } else {
           finalize();
         }
-      } catch(e) {
+      } catch {
         finalize();
       }
     };
@@ -283,7 +278,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
             ctx.drawImage(activeVideo, (width - dw) / 2, (height - dh) / 2, dw, dh);
           }
 
-          // SUBTÍTULOS: Búsqueda exacta del tramo de tiempo y renderizado seguro
           if (mode === "voice" && dynamicCues.length > 0) {
             const cue = dynamicCues.find(c => elapsed >= c.start && elapsed < c.end);
             if (cue && cue.text) {
@@ -296,7 +290,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
               ctx.strokeStyle = "#000";
               ctx.fillStyle = "#FFE600";
               
-              // Max width = 220px para asegurar que no se salen de pantalla
               drawWrappedText(ctx, cue.text, width / 2, height * 0.70, 220);
             }
           }

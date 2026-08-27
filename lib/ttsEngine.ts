@@ -4,7 +4,6 @@ export interface SpeechResult {
 }
 
 function cleanScript(text: string): string {
-  // Mantiene letras, números, puntuación básica y ESPACIOS
   return text
     .replace(/https?:\/\/\S+/gi, "")
     .replace(/[^\p{L}\p{N}\s.,!?¿¡'’"-]/gu, " ")
@@ -15,16 +14,83 @@ function cleanScript(text: string): string {
 function createWordChunks(text: string): string[] {
   const words = text.split(/\s+/).filter(Boolean);
   const chunks: string[] = [];
-
-  // Agrupa de 1 a 2 palabras para asegurar que quepan en el formato vertical
+  // Agrupa 1 o 2 palabras para que siempre quepan en formato vertical
   for (let i = 0; i < words.length; i += 2) {
     const chunk = words.slice(i, i + 2).join(" ");
-    if (chunk) {
-      chunks.push(chunk.toUpperCase());
+    if (chunk) chunks.push(chunk.toUpperCase());
+  }
+  return chunks;
+}
+
+// Divide el texto en fragmentos cortos (<150 caracteres) para saltarse el límite de las APIs
+function splitIntoShortSentences(text: string, maxLength: number): string[] {
+  const words = text.split(/\s+/);
+  const chunks: string[] = [];
+  let currentChunk = "";
+
+  for (const word of words) {
+    if ((currentChunk + " " + word).trim().length <= maxLength) {
+      currentChunk = (currentChunk + " " + word).trim();
+    } else {
+      if (currentChunk) chunks.push(currentChunk);
+      currentChunk = word;
     }
   }
-
+  if (currentChunk) chunks.push(currentChunk);
   return chunks;
+}
+
+function base64ToBlob(dataURI: string): Blob {
+  const parts = dataURI.split(',');
+  const byteString = atob(parts[1]);
+  const mimeString = parts[0].split(':')[1].split(';')[0];
+  const ab = new ArrayBuffer(byteString.length);
+  const ia = new Uint8Array(ab);
+  for (let i = 0; i < byteString.length; i++) {
+    ia[i] = byteString.charCodeAt(i);
+  }
+  return new Blob([ab], { type: mimeString });
+}
+
+async function fetchTTSBlobWithFallbacks(text: string, lang: string): Promise<Blob> {
+  const encodedText = encodeURIComponent(text);
+  const SE_VOICES: Record<string, string> = { es: "Mia", en: "Brian", pt: "Vitoria", fr: "Celine" };
+  const voice = SE_VOICES[lang] || "Mia";
+  
+  const googleTtsUrl = `https://translate.googleapis.com/translate_tts?client=tw-ob&ie=UTF-8&tl=${lang}&q=${encodedText}`;
+
+  // Red de APIs públicas con CORS (Ideales para GitHub Pages)
+  const urls = [
+    `https://api.streamelements.com/kappa/v2/speech?voice=${voice}&text=${encodedText}`,
+    `https://corsproxy.io/?${encodeURIComponent(googleTtsUrl)}`,
+    `https://api.allorigins.win/get?url=${encodeURIComponent(googleTtsUrl)}`
+  ];
+
+  for (const url of urls) {
+    try {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), 8000);
+      const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
+      clearTimeout(id);
+
+      if (!res.ok) continue;
+
+      // Si usamos AllOrigins, la respuesta es un JSON con el audio en base64 (muy seguro contra corrupción binaria)
+      if (url.includes("allorigins.win/get")) {
+        const json = await res.json();
+        if (json.contents && json.contents.startsWith("data:audio")) {
+          return base64ToBlob(json.contents);
+        }
+        continue;
+      }
+
+      const blob = await res.blob();
+      if (blob.size > 200) return blob;
+    } catch {
+      continue;
+    }
+  }
+  throw new Error(`Fallo al descargar la voz para: "${text.substring(0, 20)}...". Comprueba tu conexión o AdBlocker.`);
 }
 
 export async function generateSpeechAndCues(
@@ -34,90 +100,56 @@ export async function generateSpeechAndCues(
   const cleanText = cleanScript(text);
 
   if (!cleanText) {
-    throw new Error("El guion está vacío tras la limpieza.");
+    throw new Error("El guion está vacío.");
   }
 
-  const limitedText = cleanText.length > 250 ? `${cleanText.slice(0, 247).trim()}...` : cleanText;
-  const wordChunks = createWordChunks(limitedText);
+  // Obtenemos los bloques de subtítulos basados en el texto real completo
+  const wordChunks = createWordChunks(cleanText);
+  // Dividimos el texto en trozos cortos de max 150 letras para evadir los límites de las APIs (200 letras)
+  const textChunks = splitIntoShortSentences(cleanText, 150);
 
-  if (wordChunks.length === 0) {
-    throw new Error("No se encontraron palabras válidas en el guion.");
-  }
-
-  const SE_VOICES: Record<string, string> = {
-    es: "Mia",
-    en: "Brian",
-    pt: "Vitoria",
-    fr: "Celine"
-  };
+  const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextClass) throw new Error("AudioContext no soportado en tu navegador.");
   
-  const voice = SE_VOICES[lang] || "Mia";
-  const encodedText = encodeURIComponent(limitedText);
-  const googleTtsUrl = encodeURIComponent(`https://translate.googleapis.com/translate_tts?client=gtx&ie=UTF-8&tl=${lang}&q=${encodedText}`);
+  const ctx = new AudioContextClass();
+  let totalDuration = 0;
+  const decodedBuffers: AudioBuffer[] = [];
 
-  // Red de APIs exclusivas para FrontEnd (GitHub Pages compatible, con CORS abierto)
-  const urls = [
-    `https://api.streamelements.com/kappa/v2/speech?voice=${voice}&text=${encodedText}`, // API Directa
-    `https://api.allorigins.win/raw?url=${googleTtsUrl}`, // Proxy AllOrigins
-    `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?client=gtx&ie=UTF-8&tl=${lang}&q=${encodedText}`, // Proxy CorsProxy
-    `https://api.codetabs.com/v1/proxy?quest=https://translate.googleapis.com/translate_tts?client=gtx&ie=UTF-8&tl=${lang}&q=${encodedText}` // Proxy CodeTabs
-  ];
-
-  let audioBlob: Blob | null = null;
-
-  for (const url of urls) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000); // 6 segundos máximo por intento
-
-      const response = await fetch(url, { signal: controller.signal, cache: "no-store" });
-      clearTimeout(timeoutId);
-
-      if (response.ok) {
-        const blob = await response.blob();
-        // Solo aceptamos blobs válidos (más de 200 bytes, para ignorar errores HTML camuflados)
-        if (blob.size > 200) {
-          audioBlob = blob;
-          break; 
-        }
-      }
-    } catch (e) {
-      continue; // Si falla por AdBlock o error de red, prueba el siguiente proxy
-    }
+  // Descargamos y decodificamos cada fragmento de voz por separado
+  for (const tChunk of textChunks) {
+    const blob = await fetchTTSBlobWithFallbacks(tChunk, lang);
+    const arrayBuffer = await blob.arrayBuffer();
+    const decoded = await ctx.decodeAudioData(arrayBuffer);
+    decodedBuffers.push(decoded);
+    totalDuration += decoded.duration;
   }
 
-  // CERO PITIDOS: Si todas las redes fallan, mostramos el error real en pantalla
-  if (!audioBlob) {
-    throw new Error("Todas las conexiones de voz fueron bloqueadas. Por favor, pausa tu AdBlocker o revisa tu conexión a internet.");
+  // Combinamos todos los fragmentos en una sola pista perfecta y sin cortes
+  const OfflineAudioContextClass = window.OfflineAudioContext || (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext }).webkitOfflineAudioContext;
+  const offlineCtx = new OfflineAudioContextClass(1, Math.max(1, Math.ceil(ctx.sampleRate * totalDuration)), ctx.sampleRate);
+  
+  let currentTime = 0;
+  for (const buf of decodedBuffers) {
+    const source = offlineCtx.createBufferSource();
+    source.buffer = buf;
+    source.connect(offlineCtx.destination);
+    source.start(currentTime);
+    currentTime += buf.duration;
   }
 
-  // Verificación estricta: Comprobar que el navegador es capaz de decodificar el audio antes de renderizar
-  try {
-    const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AudioContextClass) throw new Error("Tu navegador no soporta AudioContext.");
+  const renderedBuffer = await offlineCtx.startRendering();
+  const finalWavBlob = audioBufferToWav(renderedBuffer);
 
-    const audioContext = new AudioContextClass();
-    const buffer = await audioBlob.arrayBuffer();
-    
-    await new Promise<AudioBuffer>((resolve, reject) => {
-      audioContext.decodeAudioData(buffer.slice(0), resolve, reject);
-    });
-    
-    await audioContext.close().catch(() => {});
-  } catch (e) {
-    throw new Error("La voz se descargó, pero el archivo está corrupto o el navegador no puede procesarlo.");
-  }
-
-  return { audioBlob, wordChunks };
+  return { audioBlob: finalWavBlob, wordChunks };
 }
 
-// Generador de base musical para modo "Music" (Este usa OfflineAudioContext local, no requiere internet)
+// Generador de música 100% local (sin red)
 export async function generateViralMusic(duration: number): Promise<Blob> {
   const safeDuration = Math.max(1, Math.min(60, duration));
   const sampleRate = 44100;
   const renderDuration = safeDuration + 0.5;
 
-  const AudioContextConstructor = window.OfflineAudioContext || (window as typeof window & { webkitOfflineAudioContext?: typeof OfflineAudioContext }).webkitOfflineAudioContext;
+  const AudioContextConstructor = window.OfflineAudioContext || (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext }).webkitOfflineAudioContext;
   if (!AudioContextConstructor) throw new Error("Tu navegador no soporta generación de audio.");
 
   const offlineCtx = new AudioContextConstructor(1, Math.ceil(sampleRate * renderDuration), sampleRate);
@@ -184,9 +216,7 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
   let offset = 0;
 
   const writeString = (value: string) => {
-    for (let i = 0; i < value.length; i++) {
-      view.setUint8(offset++, value.charCodeAt(i));
-    }
+    for (let i = 0; i < value.length; i++) view.setUint8(offset++, value.charCodeAt(i));
   };
 
   writeString("RIFF"); view.setUint32(offset, totalLength - 8, true); offset += 4;
@@ -197,16 +227,13 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
   writeString("data"); view.setUint32(offset, dataLength, true); offset += 4;
 
   const channels: Float32Array[] = [];
-  for (let channel = 0; channel < numberOfChannels; channel++) {
-    channels.push(buffer.getChannelData(channel));
-  }
+  for (let channel = 0; channel < numberOfChannels; channel++) channels.push(buffer.getChannelData(channel));
 
   for (let sample = 0; sample < buffer.length; sample++) {
     for (let channel = 0; channel < numberOfChannels; channel++) {
       let value = channels[channel][sample];
       value = Math.max(-1, Math.min(1, value));
-      const intValue = value < 0 ? value * 0x8000 : value * 0x7fff;
-      view.setInt16(offset, intValue, true);
+      view.setInt16(offset, value < 0 ? value * 0x8000 : value * 0x7fff, true);
       offset += 2;
     }
   }
