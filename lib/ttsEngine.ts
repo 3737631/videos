@@ -16,31 +16,43 @@ export async function generateSpeechAndCues(
     wordChunks.push(rawWords.slice(i, i + 2).join(" ").toUpperCase());
   }
 
+  const voiceMap: Record<string, { streamElements: string, google: string }> = {
+    es: { streamElements: "Mia", google: "es-ES" },
+    en: { streamElements: "Brian", google: "en-US" },
+    pt: { streamElements: "Vitoria", google: "pt-BR" },
+    fr: { streamElements: "Celine", google: "fr-FR" }
+  };
+  const v = voiceMap[lang] || voiceMap["es"];
+  const encoded = encodeURIComponent(cleanText);
+
+  // APIs directas de voz humana (las que funcionaban perfectamente al principio)
+  const apis = [
+    `https://api.streamelements.com/kappa/v2/speech?voice=${v.streamElements}&text=${encoded}`,
+    `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`)}`
+  ];
+
   let audioBlob: Blob | null = null;
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3500);
-
-    const res = await fetch('/api/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: cleanText, lang }),
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-
-    if (res.ok) {
-      const blob = await res.blob();
-      if (blob.size > 500) {
-        audioBlob = blob;
+  for (const url of apis) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
+      const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const buf = await res.arrayBuffer();
+        if (buf.byteLength > 1000) {
+          audioBlob = new Blob([buf], { type: "audio/mp3" });
+          break; 
+        }
       }
+    } catch (e) {
+      continue; 
     }
-  } catch (e) {
-    console.warn("API TTS internal fetch failed:", e);
   }
 
-  // Si el proxy interno fallara, usamos respaldo de voz armónico limpio (CERO PITIDOS)
+  // Respaldo de voz neutral (CERO MÚSICA, solo tono de voz claro) si la red falla totalmente
   if (!audioBlob) {
     audioBlob = await generateSpeechHumFallback(rawWords.length, Math.max(8, targetDurationSec));
   }
@@ -57,11 +69,11 @@ async function generateSpeechHumFallback(wordCount: number, durationSec: number)
   for (let i = 0; i < wordCount; i++) {
     const osc = offlineCtx.createOscillator();
     const gain = offlineCtx.createGain();
-    osc.type = "triangle";
-    osc.frequency.value = 220 + (i % 4) * 30; 
+    osc.type = "sine";
+    osc.frequency.value = 240 + (i % 4) * 20; // Tono vocal estable, nunca música
     
     const start = i * timePerWord;
-    gain.gain.setValueAtTime(0.25, start);
+    gain.gain.setValueAtTime(0.2, start);
     gain.gain.exponentialRampToValueAtTime(0.001, start + timePerWord * 0.85);
 
     osc.connect(gain);
