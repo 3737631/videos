@@ -31,34 +31,47 @@ export default function App() {
   }, []);
 
   const clearMemory = () => {
-    clips.forEach(c => URL.revokeObjectURL(c.url));
-    if (finalVideo) URL.revokeObjectURL(finalVideo);
+    for (const c of clips) try { URL.revokeObjectURL(c.url); } catch {}
+    if (finalVideo) try { URL.revokeObjectURL(finalVideo); } catch {}
   };
 
   const handleUpload = async (files: FileList | null) => {
     if (!files || !files.length) return;
     clearMemory();
-    
+    const fileArray = Array.from(files).filter(f => f.type.startsWith("video/"));
+    if (fileArray.length === 0) {
+      alert("Sube al menos un archivo de vídeo válido");
+      return;
+    }
     const validClips: VideoClip[] = [];
-    const lector = document.createElement("video");
-    lector.playsInline = true;
-    lector.muted = true;
-    
     let accDur = 0;
-    for (const file of Array.from(files)) {
+    for (const file of fileArray) {
       const url = URL.createObjectURL(file);
-      lector.src = url;
       const dur = await new Promise<number>((res) => {
-        lector.onloadedmetadata = () => res(lector.duration || 3);
-        lector.onerror = () => res(3);
-        setTimeout(() => res(3), 1000); 
+        const v = document.createElement("video");
+        v.preload = "metadata";
+        v.muted = true;
+        v.playsInline = true;
+        v.src = url;
+        let done = false;
+        const finish = (d: number) => {
+          if (done) return;
+          done = true;
+          v.removeAttribute("src");
+          try { v.load(); } catch {}
+          res(d);
+        };
+        v.onloadedmetadata = () => finish(Number.isFinite(v.duration) && v.duration > 0.5 ? v.duration : 3);
+        v.onerror = () => finish(3);
+        setTimeout(() => finish(3), 2500);
       });
       validClips.push({ file, url, startOffset: 0, playDuration: dur });
       accDur += dur;
     }
-    lector.removeAttribute("src"); 
-    lector.load();
-
+    if (validClips.length === 0) {
+      alert("No se pudo leer ningún vídeo");
+      return;
+    }
     setClips(validClips.sort(() => Math.random() - 0.5));
     setTotalDuration(Math.min(15, Math.max(8, Math.round(accDur))));
     setStep(2);
