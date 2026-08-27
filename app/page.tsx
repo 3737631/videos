@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   UploadCloud,
   Music,
@@ -27,7 +27,22 @@ export default function App() {
   const [videoMimeType, setVideoMimeType] = useState<string>("video/webm");
   const fileInput = useRef<HTMLInputElement>(null);
 
-  const clearMemory = (keepFinalVideo = false) => {
+  useEffect(() => {
+    return () => {
+      for (const clip of clips) {
+        try {
+          URL.revokeObjectURL(clip.url);
+        } catch {}
+      }
+      if (finalVideo) {
+        try {
+          URL.revokeObjectURL(finalVideo);
+        } catch {}
+      }
+    };
+  }, [clips, finalVideo]);
+
+  const clearMemory = (keepFinalVideo = false): void => {
     for (const clip of clips) {
       try {
         URL.revokeObjectURL(clip.url);
@@ -37,21 +52,28 @@ export default function App() {
       try {
         URL.revokeObjectURL(finalVideo);
       } catch {}
+      setFinalVideo(null);
     }
   };
 
-  const handleUpload = async (files: FileList | null) => {
-    if (!files || !files.length) return;
+  const handleUpload = async (files: FileList | null): Promise<void> => {
+    if (!files || files.length === 0) return;
 
     clearMemory();
 
-    const fileArray = Array.from(files).slice(0, 6);
+    const fileArray = Array.from(files)
+      .filter((f) => f.type.startsWith("video/"))
+      .slice(0, 6);
+
+    if (fileArray.length === 0) {
+      alert("Selecciona al menos un vídeo válido (MP4, MOV, WebM).");
+      return;
+    }
+
     const newClips: VideoClip[] = [];
     let accDur = 0;
 
     for (const file of fileArray) {
-      if (!file.type.startsWith("video/")) continue;
-
       const url = URL.createObjectURL(file);
 
       const probe = document.createElement("video");
@@ -61,25 +83,24 @@ export default function App() {
       probe.src = url;
 
       const duration = await new Promise<number>((resolve) => {
-        let done = false;
-        const finish = (d: number) => {
-          if (done) return;
-          done = true;
+        let settled = false;
+        const done = (d: number) => {
+          if (settled) return;
+          settled = true;
           resolve(d);
         };
-        const timer = setTimeout(() => finish(3), 4000);
+        const timer = setTimeout(() => done(3), 4000);
         probe.onloadedmetadata = () => {
           clearTimeout(timer);
           const d = Number.isFinite(probe.duration) ? probe.duration : 3;
-          finish(Math.max(0.5, d));
+          done(Math.max(0.5, d));
         };
         probe.onerror = () => {
           clearTimeout(timer);
-          finish(3);
+          done(3);
         };
       });
 
-      // Remove probe element to free memory, but keep URL for clip
       try {
         probe.removeAttribute("src");
         probe.load();
@@ -100,15 +121,13 @@ export default function App() {
     }
 
     setClips(newClips);
-    setTotalDuration(Math.min(15, Math.max(8, Math.round(accDur / Math.max(1, newClips.length) * 1.2))));
-    // Fallback simple: average duration, ensure 8-15
     const avg = accDur / newClips.length;
-    setTotalDuration(Math.min(15, Math.max(8, Math.round(avg * 1.5 + 2))));
+    setTotalDuration(Math.min(15, Math.max(8, Math.round(avg * 1.2 + 2))));
     setStep(2);
   };
 
-  const generateScriptLocal = (info: string, lang: string) => {
-    const cleanInfo = info.replace(/https?:\/\/\S+/gi, "").trim() || "este producto";
+  const generateScriptLocal = (info: string, lang: string): string => {
+    const cleanInfo = info.replace(/https?:\/\/\S+/g, "").trim() || "este producto";
 
     const data: Record<string, { hooks: string[]; benefits: string[]; calls: string[] }> = {
       es: {
@@ -170,21 +189,21 @@ export default function App() {
     };
 
     const d = data[lang] || data.es;
-    const h = d.hooks[Math.floor(Math.random() * d.hooks.length)];
-    const b = d.benefits[Math.floor(Math.random() * d.benefits.length)];
-    const c = d.calls[Math.floor(Math.random() * d.calls.length)];
+    const hook = d.hooks[Math.floor(Math.random() * d.hooks.length)];
+    const benefit = d.benefits[Math.floor(Math.random() * d.benefits.length)];
+    const call = d.calls[Math.floor(Math.random() * d.calls.length)];
 
-    return `${h} ${b} ${c}`;
+    return `${hook} ${benefit} ${call}`;
   };
 
-  const getExtensionForMime = (mime: string) => {
+  const getExtensionForMime = (mime: string): string => {
     if (mime.includes("mp4")) return "mp4";
     if (mime.includes("webm")) return "webm";
     if (mime.includes("ogg")) return "ogv";
     return "webm";
   };
 
-  const processVideo = async () => {
+  const processVideo = async (): Promise<void> => {
     if (clips.length === 0) {
       alert("Sube al menos un vídeo.");
       return;
@@ -205,62 +224,75 @@ export default function App() {
 
     try {
       if (mode === "voice") {
-        setStatus(`Generando voz en ${language.toUpperCase()}...`);
+        setStatus(`Generando guion en ${language.toUpperCase()}...`);
         const script = generateScriptLocal(productPrompt, language);
+
+        setStatus("Generando voz humana...");
+        setProgress(10);
         const tts = await generateSpeechAndCues(script, language);
         audioBlob = tts.audioBlob;
         wordChunks = tts.wordChunks;
+        setProgress(30);
 
-        // Estimar duración real del audio para sincronizar vídeo si es posible
         try {
           const ac = new (window.AudioContext ||
             (window as unknown as { webkitAudioContext: typeof AudioContext })
               .webkitAudioContext)();
-          const ab = await audioBlob.arrayBuffer();
-          const decoded = await ac.decodeAudioData(ab.slice(0));
+          const arrayBuffer = await audioBlob.arrayBuffer();
+          const decoded = await ac.decodeAudioData(arrayBuffer.slice(0));
           if (decoded.duration > 1) {
             effectiveDuration = Math.max(8, Math.min(20, decoded.duration / 1.15));
           }
           await ac.close();
         } catch {
-          // fallback keep totalDuration
+          // keep effectiveDuration as totalDuration
         }
+        setProgress(35);
       } else {
         setStatus("Generando base musical...");
+        setProgress(15);
         audioBlob = await generateViralMusic(totalDuration);
         effectiveDuration = totalDuration;
+        setProgress(30);
       }
 
       setStatus("Renderizando vídeo final a 30 FPS...");
+      setProgress(40);
+
       const url = await renderFinalVideo({
         clips,
         audioBlob,
         wordChunks,
         mode: mode as AppMode,
         targetDuration: effectiveDuration,
-        onProgress: (p: number) => setProgress(Math.round(p)),
+        onProgress: (p: number) => {
+          const mapped = 40 + (p / 100) * 60;
+          setProgress(Math.round(Math.min(100, mapped)));
+        },
       });
 
-      // Detectar MIME real del blob final
       try {
-        const head = await fetch(url).then((r) => r.blob());
-        const mime = head.type || "video/webm";
+        const response = await fetch(url);
+        const blob = await response.blob();
+        const mime = blob.type || "video/webm";
         setVideoMimeType(mime);
       } catch {
         setVideoMimeType("video/webm");
       }
 
       setFinalVideo(url);
+      setProgress(100);
       setStep(5);
-    } catch (e: unknown) {
+    } catch (error: unknown) {
       const message =
-        e instanceof Error
-          ? e.message
+        error instanceof Error
+          ? error.message
           : "Ocurrió un error al procesar el vídeo.";
-      // Detectar AdBlock / fetch bloqueado
+
       if (
         message.includes("No se pudo conectar") ||
-        message.includes("bloqueador")
+        message.includes("bloqueador") ||
+        message.includes("No se pudo generar la voz")
       ) {
         alert(
           "No se pudo generar la voz. Desactiva temporalmente el bloqueador para esta página o vuelve a intentarlo."
@@ -272,7 +304,7 @@ export default function App() {
     }
   };
 
-  const resetAll = () => {
+  const resetAll = (): void => {
     clearMemory(true);
     if (finalVideo) {
       try {

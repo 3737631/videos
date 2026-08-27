@@ -9,7 +9,7 @@ function drawWrappedText(
   x: number,
   y: number,
   maxWidth: number
-) {
+): void {
   const words = text.split(" ");
   let line = "";
   const lines: string[] = [];
@@ -109,7 +109,7 @@ export async function renderFinalVideo(
   let finalStream: MediaStream | null = null;
   let recorder: MediaRecorder | null = null;
 
-  const cleanup = () => {
+  const cleanup = (): void => {
     try {
       if (audioSource) {
         try {
@@ -122,12 +122,12 @@ export async function renderFinalVideo(
       }
     } catch {}
 
-    for (const v of createdVideos) {
+    for (const video of createdVideos) {
       try {
-        v.pause();
-        v.removeAttribute("src");
-        v.load();
-        v.remove();
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+        video.remove();
       } catch {}
     }
     createdVideos.length = 0;
@@ -183,11 +183,11 @@ export async function renderFinalVideo(
     osc.start();
 
     if (audioBlob) {
-      const ab = await audioBlob.arrayBuffer();
+      const arrayBuffer = await audioBlob.arrayBuffer();
       let decoded: AudioBuffer | null = null;
 
       try {
-        decoded = await audioCtx.decodeAudioData(ab.slice(0));
+        decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
       } catch (err) {
         throw new Error(
           "Error al decodificar el audio: " +
@@ -203,7 +203,6 @@ export async function renderFinalVideo(
         if (mode === "voice") {
           const rawRatio = actualDuration / Math.max(1, targetDuration);
           const clamped = Math.max(0.8, Math.min(rawRatio, 1.8));
-          const playbackRate = rawRatio > 2 ? 1.15 : clamped;
 
           if (rawRatio > 2) {
             actualDuration = decoded.duration / 1.15;
@@ -224,11 +223,7 @@ export async function renderFinalVideo(
       }
     }
 
-    if (
-      mode === "voice" &&
-      wordChunks &&
-      wordChunks.length > 0
-    ) {
+    if (mode === "voice" && wordChunks && wordChunks.length > 0) {
       const timePerChunk = actualDuration / wordChunks.length;
       dynamicCues = wordChunks.map((text, i) => ({
         text: text,
@@ -245,27 +240,23 @@ export async function renderFinalVideo(
       }));
     }
 
+    const canvasWithCapture = canvas as HTMLCanvasElement & {
+      captureStream?: (fps: number) => MediaStream;
+      mozCaptureStream?: (fps: number) => MediaStream;
+      webkitCaptureStream?: (fps: number) => MediaStream;
+    };
+
     const captureFn =
-      (canvas as HTMLCanvasElement & {
-        captureStream?: (fps: number) => MediaStream;
-        mozCaptureStream?: (fps: number) => MediaStream;
-        webkitCaptureStream?: (fps: number) => MediaStream;
-      }).captureStream ||
-      (canvas as HTMLCanvasElement & {
-        mozCaptureStream?: (fps: number) => MediaStream;
-      }).mozCaptureStream ||
-      (canvas as HTMLCanvasElement & {
-        webkitCaptureStream?: (fps: number) => MediaStream;
-      }).webkitCaptureStream;
+      canvasWithCapture.captureStream?.bind(canvasWithCapture) ||
+      canvasWithCapture.mozCaptureStream?.bind(canvasWithCapture) ||
+      canvasWithCapture.webkitCaptureStream?.bind(canvasWithCapture);
 
     if (!captureFn) {
       throw new Error("Tu navegador no soporta captura de vídeo en Canvas.");
     }
 
-    const canvasStream = captureFn.call(canvas, FPS) as MediaStream;
-    const tracks: MediaStreamTrack[] = [
-      ...canvasStream.getVideoTracks(),
-    ];
+    const canvasStream = captureFn(FPS);
+    const tracks: MediaStreamTrack[] = [...canvasStream.getVideoTracks()];
 
     if (dest) {
       tracks.push(...dest.stream.getAudioTracks());
@@ -288,8 +279,7 @@ export async function renderFinalVideo(
 
     const chunks: BlobPart[] = [];
 
-    recorder.ondataavailable = (e: Event) => {
-      const event = e as BlobEvent;
+    recorder.ondataavailable = (event: BlobEvent) => {
       if (event.data && event.data.size > 0) {
         chunks.push(event.data);
       }
@@ -307,11 +297,12 @@ export async function renderFinalVideo(
       let activeVideo: HTMLVideoElement | null = null;
       let lastDrawTime = performance.now();
       let frameId = 0;
+      const loadingIndices = new Set<number>();
 
       const clipCount = clips.length;
       const clipDur = actualDuration / clipCount;
 
-      const finalize = () => {
+      const finalize = (): void => {
         if (isResolved) return;
         isResolved = true;
         cancelAnimationFrame(frameId);
@@ -336,7 +327,7 @@ export async function renderFinalVideo(
         resolve(URL.createObjectURL(blob));
       };
 
-      const stopRecording = () => {
+      const stopRecording = (): void => {
         if (isFinished) return;
         isFinished = true;
         try {
@@ -359,29 +350,25 @@ export async function renderFinalVideo(
         reject(new Error("Error interno del grabador de vídeo."));
       };
 
-      const loadVideoAsync = async (index: number) => {
+      const loadVideoAsync = async (index: number): Promise<void> => {
         if (index < 0 || index >= clips.length) return;
+        if (loadingIndices.has(index)) return;
+        loadingIndices.add(index);
 
         const clip = clips[index];
-
-        const safeStart = Number.isFinite(clip.startOffset)
-          ? Math.max(0, Math.min(clip.startOffset, Math.max(0, clip.playDuration - 0.1)))
-          : 0;
-
         const safeDuration = Math.max(0.5, clip.playDuration || 1);
-
-        if (safeStart > safeDuration) return;
+        const safeStart = Number.isFinite(clip.startOffset)
+          ? Math.max(0, Math.min(clip.startOffset, Math.max(0, safeDuration - 0.1)))
+          : 0;
 
         const newVideo = document.createElement("video");
         newVideo.src = clip.url;
         newVideo.muted = true;
         newVideo.playsInline = true;
-        (newVideo as HTMLVideoElement & { playsInline?: boolean }).playsInline = true;
         newVideo.preload = "auto";
         newVideo.style.cssText = CANVAS_CSS;
         newVideo.crossOrigin = "anonymous";
 
-        // Evitar currentTime NaN
         try {
           newVideo.currentTime = safeStart;
         } catch {}
@@ -404,7 +391,9 @@ export async function renderFinalVideo(
 
         if (newVideo.readyState >= 1) {
           try {
-            const target = safeStart + Math.random() * Math.max(0, safeDuration - clipDur - 0.1);
+            const target =
+              safeStart +
+              Math.random() * Math.max(0, safeDuration - clipDur - 0.1);
             if (Number.isFinite(target)) newVideo.currentTime = target;
           } catch {}
         }
@@ -426,6 +415,8 @@ export async function renderFinalVideo(
             if (idx !== -1) createdVideos.splice(idx, 1);
           } catch {}
         }
+
+        loadingIndices.delete(index);
       };
 
       recorder.start(250);
@@ -436,7 +427,7 @@ export async function renderFinalVideo(
         await loadVideoAsync(0);
       })();
 
-      const drawLoop = () => {
+      const drawLoop = (): void => {
         if (isFinished) return;
         frameId = requestAnimationFrame(drawLoop);
 
