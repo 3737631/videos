@@ -6,7 +6,7 @@ function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number,
   const words = text.split(' ');
   let line = '';
   const lines = [];
-  const lineHeight = 30; 
+  const lineHeight = 34; 
 
   for (let n = 0; n < words.length; n++) {
     const testLine = line + words[n] + ' ';
@@ -53,7 +53,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
   let dest: MediaStreamAudioDestinationNode | null = null;
   let audioCtx: AudioContext | null = null;
   let actualDuration = Math.max(10, targetDuration || 10);
-  let dynamicCues: { text: string; start: number; end: number }[] = [];
+  let dynamicCues: {text: string, start: number, end: number}[] = [];
 
   try {
     const AC = window.AudioContext || (window as any).webkitAudioContext;
@@ -94,7 +94,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       const timePerChunk = actualDuration / validChunks.length;
       validChunks.forEach((text: string, i: number) => {
         dynamicCues.push({
-          text: text,
+          text: text.toUpperCase(),
           start: i * timePerChunk,
           end: (i + 1) * timePerChunk
         });

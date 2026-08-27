@@ -13,7 +13,6 @@ export async function POST(req: Request) {
     };
     const targetLang = langMap[lang] || "es-ES";
 
-    // Intento 1: Google TTS oficial vía servidor
     const url = `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${targetLang}&client=tw-ob&q=${encodeURIComponent(cleanText)}`;
     
     const response = await fetch(url, {
@@ -32,7 +31,6 @@ export async function POST(req: Request) {
       }
     }
 
-    // Intento 2 (Respaldo servidor): StreamElements Amazon Polly
     const seUrl = `https://api.streamelements.com/kappa/v2/speech?voice=Mia&text=${encodeURIComponent(cleanText)}`;
     const seRes = await fetch(seUrl);
     if (seRes.ok) {
@@ -42,7 +40,7 @@ export async function POST(req: Request) {
       }
     }
 
-    throw new Error("Servidores de voz externos no disponibles");
+    throw new Error("TTS unavailable");
   } catch (error) {
     return NextResponse.json({ error: "Failed to generate speech" }, { status: 500 });
   }
