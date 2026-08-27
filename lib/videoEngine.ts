@@ -79,8 +79,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
           source.buffer = decoded;
           
           if (mode === "voice") {
-            // Velocidad viral ágil (1.25x)
-            source.playbackRate.value = 1.25; 
+            source.playbackRate.value = 1.25;
             actualDuration = actualDuration / 1.25;
           } else {
             source.loop = true;
@@ -91,7 +90,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         }
       }
 
-      // Mapeo preciso de subtítulos por intervalos de tiempo
       const validChunks = (wordChunks && wordChunks.length > 0) ? wordChunks : ["¡MIRA ESTO!", "DESCÚBRELO", "AHORA"];
       const timePerChunk = actualDuration / validChunks.length;
       validChunks.forEach((text: string, i: number) => {
@@ -285,7 +283,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
             ctx.strokeStyle = "#000";
             ctx.fillStyle = "#FFE600";
             
-            // Ancho máximo estrictamente limitado a 200px para que encaje perfecto en vertical
+            // Ancho máximo estrictamente limitado a 200px para que encaje perfecto sin salirse
             drawWrappedText(ctx, cue.text, width / 2, height * 0.70, 200);
           }
         }

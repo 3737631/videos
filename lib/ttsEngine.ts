@@ -36,7 +36,10 @@ export async function generateSpeechAndCues(
 
   for (const url of apis) {
     try {
-      const res = await fetch(url, { cache: "no-store" });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
+      const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
+      clearTimeout(timeoutId);
       if (res.ok) {
         const buf = await res.arrayBuffer();
         if (buf.byteLength > 1000) {
