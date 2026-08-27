@@ -1,7 +1,6 @@
 import { RenderConfig } from "@/types";
 
-// Solución al error de procesamiento: Opacidad invisible en lugar de fuera de pantalla para evitar el throttling del navegador
-const INVISIBLE_CSS = "position:absolute;top:0;left:0;width:270px;height:480px;opacity:0.001;pointer-events:none;z-index:-100;";
+const CANVAS_CSS = "position:absolute;top:0;left:0;width:270px;height:480px;opacity:0.001;pointer-events:none;z-index:-100;";
 
 function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number) {
   const words = text.split(' ');
@@ -31,7 +30,7 @@ function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number,
 }
 
 export async function renderFinalVideo(config: RenderConfig): Promise<string> {
-  const { clips, audioBlob, cues, targetDuration, onProgress, mode } = config;
+  const { clips, audioBlob, targetDuration, onProgress, mode } = config;
   const wordChunks = (config as any).wordChunks;
   
   const width = 270;
@@ -42,7 +41,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
   const canvas = document.createElement("canvas");
   canvas.width = width; 
   canvas.height = height;
-  canvas.style.cssText = INVISIBLE_CSS;
+  canvas.style.cssText = CANVAS_CSS;
   document.body.appendChild(canvas);
   
   const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
@@ -107,13 +106,13 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
     console.warn("Aviso de audio:", e);
   }
 
-  const captureStreamFunc = canvas.captureStream || (canvas as any).mozCaptureStream || (canvas as any).webkitCaptureStream;
-  const canvasStream = captureStreamFunc.call(canvas, FPS);
-  const tracks = [...canvasStream.getVideoTracks()];
-  if (dest) tracks.push(...dest.stream.getAudioTracks());
-  const combinedStream = new MediaStream(tracks);
-  
-  // Selección segura de formato para MediaRecorder
+  const stream = (canvas as any).captureStream ? canvas.captureStream(FPS) : (canvas as any).mozCaptureStream ? (canvas as any).mozCaptureStream(FPS) : null;
+  if (!stream) throw new Error("canvas.captureStream no está soportado en este navegador.");
+
+  if (dest) {
+    dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
+  }
+
   const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")
     ? "video/webm;codecs=vp8,opus"
     : MediaRecorder.isTypeSupported("video/webm")
@@ -123,22 +122,21 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
   let recorder: MediaRecorder;
   try {
     recorder = mimeType 
-      ? new MediaRecorder(combinedStream, { mimeType, videoBitsPerSecond: 1000000 }) 
-      : new MediaRecorder(combinedStream);
+      ? new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 1500000 }) 
+      : new MediaRecorder(stream);
   } catch (err) {
-    recorder = new MediaRecorder(combinedStream);
+    recorder = new MediaRecorder(stream);
   }
-  
+
   const chunks: BlobPart[] = [];
-  recorder.ondataavailable = e => { 
+  recorder.ondataavailable = (e) => {
     if (e.data && e.data.size > 0) {
-      chunks.push(e.data); 
+      chunks.push(e.data);
     }
   };
 
   return new Promise<string>(async (resolve, reject) => {
     let isFinished = false;
-    let isResolved = false; 
     let currentClipIdx = -1;
     let activeVideo: HTMLVideoElement | null = null;
     let lastDrawTime = performance.now();
@@ -147,17 +145,13 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
     const clipDur = actualDuration / clips.length;
 
     const finalize = () => {
-      if (isResolved) return;
-      isResolved = true; 
       cancelAnimationFrame(frameId);
-      tracks.forEach(t => t.stop());
-      if (activeVideo) {
-        activeVideo.removeAttribute("src");
-        activeVideo.remove();
+      if (activeVideo) { 
+        activeVideo.pause();
+        activeVideo.removeAttribute("src"); 
+        activeVideo.remove(); 
       }
-      setTimeout(() => { 
-        if (canvas.parentNode) canvas.remove(); 
-      }, 200);
+      if (canvas.parentNode) canvas.remove();
       try { audioCtx?.close(); } catch(e){}
 
       if (chunks.length === 0) {
@@ -173,8 +167,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       isFinished = true;
       try {
         if (recorder.state === "recording") {
-          recorder.requestData();
-          recorder.stop();
+          recorder.stop(); // Dispara onstop al terminar de vaciar datos
         } else {
           finalize();
         }
@@ -182,6 +175,16 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         finalize();
       }
     };
+
+    // Espera un tick en onstop para asegurar que los chunks están completos
+    recorder.onstop = () => {
+      setTimeout(finalize, 150);
+    };
+
+    recorder.onerror = () => reject(new Error("Error interno del grabador de vídeo."));
+
+    // INICIO SIN TIMESLICE: Evita el corte de datos prematuro
+    recorder.start();
 
     const loadVideoAsync = async (index: number) => {
       if (index >= clips.length) return;
@@ -191,7 +194,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       newVideo.currentTime = Math.random() * Math.max(0, clips[index].playDuration - clipDur);
       newVideo.muted = true;
       newVideo.playsInline = true;
-      newVideo.style.cssText = INVISIBLE_CSS;
+      newVideo.style.cssText = CANVAS_CSS;
       document.body.appendChild(newVideo);
       
       await new Promise<void>(res => { 
@@ -212,12 +215,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
       }
     };
 
-    recorder.onstop = finalize;
-    recorder.onerror = () => reject(new Error("Error interno del grabador de vídeo."));
-
-    recorder.start(250); 
     const start = performance.now();
-    
     currentClipIdx = 0;
     await loadVideoAsync(0);
 
@@ -242,7 +240,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         const activeIdx = Math.min(clips.length - 1, Math.floor(elapsed / clipDur));
         if (activeIdx !== currentClipIdx) {
           currentClipIdx = activeIdx;
-          loadVideoAsync(currentClipIdx); 
+          loadVideoAsync(activeIdx); 
         }
 
         ctx.fillStyle = "#000000"; 
