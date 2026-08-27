@@ -4,6 +4,7 @@ export interface SpeechResult {
 }
 
 function cleanScript(text: string): string {
+  // Mantiene letras, números, puntuación básica y ESPACIOS
   return text
     .replace(/https?:\/\/\S+/gi, "")
     .replace(/[^\p{L}\p{N}\s.,!?¿¡'’"-]/gu, " ")
@@ -15,7 +16,7 @@ function createWordChunks(text: string): string[] {
   const words = text.split(/\s+/).filter(Boolean);
   const chunks: string[] = [];
 
-  // Lo ajusto a 2 palabras por bloque para que JAMÁS se salgan del lienzo de 270px
+  // Agrupa de 1 a 2 palabras para asegurar que quepan en el formato vertical
   for (let i = 0; i < words.length; i += 2) {
     const chunk = words.slice(i, i + 2).join(" ");
     if (chunk) {
@@ -33,109 +34,93 @@ export async function generateSpeechAndCues(
   const cleanText = cleanScript(text);
 
   if (!cleanText) {
-    throw new Error("El guion está vacío.");
+    throw new Error("El guion está vacío tras la limpieza.");
   }
 
-  const limitedText =
-    cleanText.length > 270
-      ? `${cleanText.slice(0, 267).trim()}...`
-      : cleanText;
-
+  const limitedText = cleanText.length > 250 ? `${cleanText.slice(0, 247).trim()}...` : cleanText;
   const wordChunks = createWordChunks(limitedText);
 
   if (wordChunks.length === 0) {
-    throw new Error("No se encontraron palabras en el guion.");
+    throw new Error("No se encontraron palabras válidas en el guion.");
   }
 
-  let response: Response;
+  const SE_VOICES: Record<string, string> = {
+    es: "Mia",
+    en: "Brian",
+    pt: "Vitoria",
+    fr: "Celine"
+  };
+  
+  const voice = SE_VOICES[lang] || "Mia";
+  const encodedText = encodeURIComponent(limitedText);
+  const googleTtsUrl = encodeURIComponent(`https://translate.googleapis.com/translate_tts?client=gtx&ie=UTF-8&tl=${lang}&q=${encodedText}`);
 
-  try {
-    response = await fetch("/api/tts", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "audio/mpeg,audio/*",
-      },
-      body: JSON.stringify({
-        text: limitedText,
-        lang,
-      }),
-      cache: "no-store",
-    });
-  } catch {
-    throw new Error("No se pudo conectar con el servidor de voz local.");
-  }
+  // Red de APIs exclusivas para FrontEnd (GitHub Pages compatible, con CORS abierto)
+  const urls = [
+    `https://api.streamelements.com/kappa/v2/speech?voice=${voice}&text=${encodedText}`, // API Directa
+    `https://api.allorigins.win/raw?url=${googleTtsUrl}`, // Proxy AllOrigins
+    `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?client=gtx&ie=UTF-8&tl=${lang}&q=${encodedText}`, // Proxy CorsProxy
+    `https://api.codetabs.com/v1/proxy?quest=https://translate.googleapis.com/translate_tts?client=gtx&ie=UTF-8&tl=${lang}&q=${encodedText}` // Proxy CodeTabs
+  ];
 
-  if (!response.ok) {
-    let message = "No se pudo generar la voz.";
+  let audioBlob: Blob | null = null;
+
+  for (const url of urls) {
     try {
-      const data = await response.json();
-      if (data && typeof data.error === "string" && data.error.trim()) {
-        message = data.error;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000); // 6 segundos máximo por intento
+
+      const response = await fetch(url, { signal: controller.signal, cache: "no-store" });
+      clearTimeout(timeoutId);
+
+      if (response.ok) {
+        const blob = await response.blob();
+        // Solo aceptamos blobs válidos (más de 200 bytes, para ignorar errores HTML camuflados)
+        if (blob.size > 200) {
+          audioBlob = blob;
+          break; 
+        }
       }
-    } catch {}
-    throw new Error(message);
-  }
-
-  const audioBlob = await response.blob();
-
-  // Reducido a 200 para permitir audios muy cortos válidos
-  if (audioBlob.size < 200) {
-    throw new Error("El archivo de voz recibido está vacío o corrupto.");
-  }
-
-  // Comprobación de decodificación real
-  try {
-    const AudioContextClass =
-      window.AudioContext ||
-      (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-
-    if (!AudioContextClass) {
-      throw new Error("AudioContext no está disponible.");
+    } catch (e) {
+      continue; // Si falla por AdBlock o error de red, prueba el siguiente proxy
     }
+  }
+
+  // CERO PITIDOS: Si todas las redes fallan, mostramos el error real en pantalla
+  if (!audioBlob) {
+    throw new Error("Todas las conexiones de voz fueron bloqueadas. Por favor, pausa tu AdBlocker o revisa tu conexión a internet.");
+  }
+
+  // Verificación estricta: Comprobar que el navegador es capaz de decodificar el audio antes de renderizar
+  try {
+    const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) throw new Error("Tu navegador no soporta AudioContext.");
 
     const audioContext = new AudioContextClass();
-
-    try {
-      const buffer = await audioBlob.arrayBuffer();
-      await audioContext.decodeAudioData(buffer.slice(0)); // Garantiza que es audio real decodificable
-    } finally {
-      await audioContext.close().catch(() => {});
-    }
-  } catch (e: any) {
-    throw new Error("La voz se descargó, pero es un archivo no válido o corrupto.");
+    const buffer = await audioBlob.arrayBuffer();
+    
+    await new Promise<AudioBuffer>((resolve, reject) => {
+      audioContext.decodeAudioData(buffer.slice(0), resolve, reject);
+    });
+    
+    await audioContext.close().catch(() => {});
+  } catch (e) {
+    throw new Error("La voz se descargó, pero el archivo está corrupto o el navegador no puede procesarlo.");
   }
 
-  return {
-    audioBlob,
-    wordChunks,
-  };
+  return { audioBlob, wordChunks };
 }
 
-// Generador de música (intacto, tal cual lo configuraste y funciona bien)
+// Generador de base musical para modo "Music" (Este usa OfflineAudioContext local, no requiere internet)
 export async function generateViralMusic(duration: number): Promise<Blob> {
   const safeDuration = Math.max(1, Math.min(60, duration));
   const sampleRate = 44100;
   const renderDuration = safeDuration + 0.5;
 
-  const AudioContextConstructor =
-    window.OfflineAudioContext ||
-    (
-      window as typeof window & {
-        webkitOfflineAudioContext?: typeof OfflineAudioContext;
-      }
-    ).webkitOfflineAudioContext;
+  const AudioContextConstructor = window.OfflineAudioContext || (window as typeof window & { webkitOfflineAudioContext?: typeof OfflineAudioContext }).webkitOfflineAudioContext;
+  if (!AudioContextConstructor) throw new Error("Tu navegador no soporta generación de audio.");
 
-  if (!AudioContextConstructor) {
-    throw new Error("Tu navegador no soporta generación de audio.");
-  }
-
-  const offlineCtx = new AudioContextConstructor(
-    1,
-    Math.ceil(sampleRate * renderDuration),
-    sampleRate
-  );
-
+  const offlineCtx = new AudioContextConstructor(1, Math.ceil(sampleRate * renderDuration), sampleRate);
   const bpm = 112;
   const beat = 60 / bpm;
 
@@ -204,28 +189,12 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
     }
   };
 
-  writeString("RIFF");
-  view.setUint32(offset, totalLength - 8, true);
-  offset += 4;
-  writeString("WAVE");
-  writeString("fmt ");
-  view.setUint32(offset, 16, true);
-  offset += 4;
-  view.setUint16(offset, 1, true);
-  offset += 2;
-  view.setUint16(offset, numberOfChannels, true);
-  offset += 2;
-  view.setUint32(offset, sampleRate, true);
-  offset += 4;
-  view.setUint32(offset, sampleRate * numberOfChannels * 2, true);
-  offset += 4;
-  view.setUint16(offset, numberOfChannels * 2, true);
-  offset += 2;
-  view.setUint16(offset, bitsPerSample, true);
-  offset += 2;
-  writeString("data");
-  view.setUint32(offset, dataLength, true);
-  offset += 4;
+  writeString("RIFF"); view.setUint32(offset, totalLength - 8, true); offset += 4;
+  writeString("WAVE"); writeString("fmt "); view.setUint32(offset, 16, true); offset += 4;
+  view.setUint16(offset, 1, true); offset += 2; view.setUint16(offset, numberOfChannels, true); offset += 2;
+  view.setUint32(offset, sampleRate, true); offset += 4; view.setUint32(offset, sampleRate * numberOfChannels * 2, true); offset += 4;
+  view.setUint16(offset, numberOfChannels * 2, true); offset += 2; view.setUint16(offset, bitsPerSample, true); offset += 2;
+  writeString("data"); view.setUint32(offset, dataLength, true); offset += 4;
 
   const channels: Float32Array[] = [];
   for (let channel = 0; channel < numberOfChannels; channel++) {
@@ -242,7 +211,5 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
     }
   }
 
-  return new Blob([arrayBuffer], {
-    type: "audio/wav",
-  });
+  return new Blob([arrayBuffer], { type: "audio/wav" });
 }

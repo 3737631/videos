@@ -1,463 +1,242 @@
 import { RenderConfig, SubtitleCue } from "@/types";
 
-const CANVAS_STYLE =
-  "position:fixed;left:-10000px;top:-10000px;width:270px;height:480px;pointer-events:none;";
+const CANVAS_CSS = "position:absolute;top:0;left:0;width:270px;height:480px;opacity:0.001;pointer-events:none;z-index:-100;";
 
-function drawWrappedText(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  x: number,
-  y: number,
-  maxWidth: number
-) {
-  const words = text.split(/\s+/).filter(Boolean);
+type ExtCanvasElement = HTMLCanvasElement & {
+  captureStream(fps?: number): MediaStream;
+  mozCaptureStream(fps?: number): MediaStream;
+  webkitCaptureStream(fps?: number): MediaStream;
+};
 
-  if (words.length === 0) return;
+// Dibuja texto con un máximo de ancho para que no se salga de la pantalla vertical
+function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number) {
+  const words = text.split(' ');
+  let line = '';
+  const lines = [];
+  const lineHeight = 30; 
 
-  const lines: string[] = [];
-  let currentLine = "";
-
-  for (const word of words) {
-    const testLine = currentLine
-      ? `${currentLine} ${word}`
-      : word;
-
-    if (
-      ctx.measureText(testLine).width > maxWidth &&
-      currentLine
-    ) {
-      lines.push(currentLine);
-      currentLine = word;
+  for (let n = 0; n < words.length; n++) {
+    const testLine = line + words[n] + ' ';
+    const metrics = ctx.measureText(testLine);
+    if (metrics.width > maxWidth && n > 0) {
+      lines.push(line.trim());
+      line = words[n] + ' ';
     } else {
-      currentLine = testLine;
+      line = testLine;
     }
   }
-
-  if (currentLine) {
-    lines.push(currentLine);
+  lines.push(line.trim());
+  
+  let currentY = y - ((lines.length - 1) * lineHeight) / 2; 
+  
+  for (let k = 0; k < lines.length; k++) {
+    ctx.strokeText(lines[k], x, currentY);
+    ctx.fillText(lines[k], x, currentY);
+    currentY += lineHeight;
   }
-
-  const lineHeight = 30;
-  const startY =
-    y - ((lines.length - 1) * lineHeight) / 2;
-
-  for (let i = 0; i < lines.length; i++) {
-    const lineY = startY + i * lineHeight;
-
-    ctx.strokeText(lines[i], x, lineY);
-    ctx.fillText(lines[i], x, lineY);
-  }
-}
-
-function getSupportedMimeType(): string {
-  const candidates = [
-    "video/webm;codecs=vp9,opus",
-    "video/webm;codecs=vp8,opus",
-    "video/webm",
-  ];
-
-  for (const mime of candidates) {
-    if (MediaRecorder.isTypeSupported(mime)) {
-      return mime;
-    }
-  }
-
-  return "";
 }
 
 function getExtensionFromMimeType(mime: string): string {
-  return mime.toLowerCase().includes("mp4")
-    ? "mp4"
-    : "webm";
+  return mime.toLowerCase().includes("mp4") ? "mp4" : "webm";
 }
 
-function createVideoElement(
-  clipUrl: string
-): HTMLVideoElement {
-  const video = document.createElement("video");
-
-  video.src = clipUrl;
-  video.muted = true;
-  video.playsInline = true;
-  video.preload = "auto";
-  video.crossOrigin = "anonymous";
-  video.style.cssText = CANVAS_STYLE;
-
-  document.body.appendChild(video);
-
-  return video;
-}
-
-async function waitForVideoReady(
-  video: HTMLVideoElement
-): Promise<void> {
-  if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
-    return;
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    let finished = false;
-
-    const cleanup = () => {
-      video.removeEventListener("loadedmetadata", onLoaded);
-      video.removeEventListener("canplay", onLoaded);
-      video.removeEventListener("error", onError);
-    };
-
-    const done = () => {
-      if (finished) return;
-      finished = true;
-      cleanup();
-      resolve();
-    };
-
-    const onLoaded = () => {
-      done();
-    };
-
-    const onError = () => {
-      if (finished) return;
-
-      finished = true;
-      cleanup();
-
-      reject(
-        new Error("No se pudo cargar uno de los vídeos.")
-      );
-    };
-
-    video.addEventListener("loadedmetadata", onLoaded);
-    video.addEventListener("canplay", onLoaded);
-    video.addEventListener("error", onError);
-
-    video.load();
-
-    setTimeout(() => {
-      if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
-        done();
-      } else {
-        onError();
-      }
-    }, 10000);
-  });
-}
-
-async function seekVideoSafely(
-  video: HTMLVideoElement,
-  position: number
-): Promise<void> {
-  if (!Number.isFinite(video.duration) || video.duration <= 0) {
-    return;
-  }
-
-  const maxPosition = Math.max(
-    0,
-    video.duration - 0.05
-  );
-
-  const safePosition = Math.max(
-    0,
-    Math.min(position, maxPosition)
-  );
-
-  if (Math.abs(video.currentTime - safePosition) < 0.03) {
-    return;
-  }
-
-  await new Promise<void>((resolve) => {
-    let finished = false;
-
-    const done = () => {
-      if (finished) return;
-
-      finished = true;
-      video.removeEventListener("seeked", done);
-      resolve();
-    };
-
-    video.addEventListener("seeked", done);
-
-    try {
-      video.currentTime = safePosition;
-    } catch {
-      done();
-    }
-
-    setTimeout(done, 1000);
-  });
-}
-
-export async function renderFinalVideo(
-  config: RenderConfig
-): Promise<{
-  url: string;
-  mimeType: string;
-  extension: string;
-}> {
-  const {
-    clips,
-    audioBlob,
-    targetDuration,
-    mode,
-    wordChunks,
-    onProgress,
-  } = config;
-
-  if (!clips.length) {
-    throw new Error(
-      "No hay vídeos para renderizar."
-    );
-  }
-
+export async function renderFinalVideo(config: RenderConfig): Promise<{ url: string, mimeType: string, extension: string }> {
+  const { clips, audioBlob, mode, wordChunks } = config;
+  
   const width = 270;
   const height = 480;
-  const FPS = 30;
+  const FPS = 30; 
+  const frameInterval = 1000 / FPS;
 
-  const canvas = document.createElement("canvas");
-
-  canvas.width = width;
-  canvas.height = height;
-  canvas.style.cssText = CANVAS_STYLE;
-
-  document.body.appendChild(canvas);
-
-  const ctx = canvas.getContext("2d", {
-    alpha: false,
-  });
-
-  if (!ctx) {
-    canvas.remove();
-    throw new Error(
-      "Tu navegador no soporta Canvas 2D."
-    );
+  if (!clips || clips.length === 0) {
+    throw new Error("No hay clips de vídeo seleccionados.");
+  }
+  if (!audioBlob) {
+    throw new Error("No hay audio válido para generar el vídeo.");
   }
 
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
+  const canvas = document.createElement("canvas") as ExtCanvasElement;
+  canvas.width = width; 
+  canvas.height = height;
+  canvas.style.cssText = CANVAS_CSS;
+  document.body.appendChild(canvas);
+  
+  const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
+  if (!ctx) throw new Error("Canvas 2D no soportado.");
 
-  let audioContext: AudioContext | null = null;
-  let audioDestination:
-    | MediaStreamAudioDestinationNode
-    | null = null;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, width, height);
 
-  let activeVideo: HTMLVideoElement | null = null;
+  let dest: MediaStreamAudioDestinationNode | null = null;
+  let audioCtx: AudioContext | null = null;
+  let actualDuration = 10;
+  let dynamicCues: SubtitleCue[] = [];
 
   try {
-    const AudioContextConstructor =
-      window.AudioContext ||
-      (
-        window as typeof window & {
-          webkitAudioContext?: typeof AudioContext;
-        }
-      ).webkitAudioContext;
+    const AudioCtxClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtxClass) throw new Error("AudioContext no soportado en tu navegador.");
+    
+    audioCtx = new AudioCtxClass();
+    if (audioCtx.state === "suspended") await audioCtx.resume();
+    dest = audioCtx.createMediaStreamDestination();
 
-    if (!AudioContextConstructor) {
-      throw new Error(
-        "Tu navegador no soporta AudioContext."
-      );
-    }
+    const ab = await audioBlob.arrayBuffer();
+    const decoded = await new Promise<AudioBuffer>((resolve, reject) => {
+      audioCtx!.decodeAudioData(ab, resolve, reject);
+    }).catch(() => {
+      throw new Error("El archivo de audio no pudo ser decodificado.");
+    });
 
-    audioContext = new AudioContextConstructor();
-
-    if (audioContext.state === "suspended") {
-      await audioContext.resume().catch(() => {});
-    }
-
-    audioDestination =
-      audioContext.createMediaStreamDestination();
-
-    let actualDuration = Math.max(
-      1,
-      targetDuration || 10
-    );
-
-    if (audioBlob) {
-      const audioArrayBuffer =
-        await audioBlob.arrayBuffer();
-
-      const decoded =
-        await audioContext.decodeAudioData(
-          audioArrayBuffer.slice(0)
-        );
-
-      if (!decoded.duration || decoded.duration <= 0) {
-        throw new Error(
-          "La voz generada no tiene una duración válida."
-        );
-      }
-
-      if (mode === "voice") {
-        actualDuration = decoded.duration;
-      }
-
-      const source =
-        audioContext.createBufferSource();
-
+    if (decoded && decoded.duration > 0) {
+      actualDuration = decoded.duration;
+      const source = audioCtx.createBufferSource();
       source.buffer = decoded;
-
-      if (mode === "music") {
+      
+      if (mode === "voice") {
+        source.playbackRate.value = 1.15; // Velocidad dinámica
+        actualDuration = actualDuration / 1.15;
+      } else {
         source.loop = true;
       }
 
-      source.connect(audioDestination);
+      source.connect(dest);
       source.start(0);
     }
 
-    const dynamicCues: SubtitleCue[] = [];
-
-    if (
-      mode === "voice" &&
-      wordChunks.length > 0
-    ) {
-      const totalWeight = wordChunks.reduce(
-        (total, chunk) =>
-          total +
-          Math.max(
-            1,
-            chunk.replace(/\s+/g, "").length
-          ),
-        0
-      );
-
-      let currentTime = 0;
-
-      for (const chunk of wordChunks) {
-        const weight = Math.max(
-          1,
-          chunk.replace(/\s+/g, "").length
-        );
-
-        const duration =
-          (weight / totalWeight) *
-          actualDuration;
-
+    // CÁLCULO REAL DE SINCRONIZACIÓN (PROPORCIONAL a la longitud de cada palabra)
+    if (mode === "voice" && wordChunks && wordChunks.length > 0) {
+      const totalChars = wordChunks.reduce((acc, chunk) => acc + chunk.length, 0);
+      let accumulatedTime = 0;
+      
+      wordChunks.forEach((chunk) => {
+        // Peso = qué porcentaje del tiempo total le corresponde a este bloque según sus letras
+        const weight = chunk.length / Math.max(1, totalChars);
+        const duration = weight * actualDuration;
+        
         dynamicCues.push({
           text: chunk,
-          start: currentTime,
-          end: currentTime + duration,
+          start: accumulatedTime,
+          end: accumulatedTime + duration
         });
+        accumulatedTime += duration;
+      });
+    }
+  } catch (e: any) {
+    if (audioCtx) { try { audioCtx.close(); } catch(err){} }
+    if (canvas.parentNode) canvas.remove();
+    throw new Error(e.message || "Error configurando el audio principal.");
+  }
 
-        currentTime += duration;
+  const captureStreamFunc = canvas.captureStream || canvas.mozCaptureStream || canvas.webkitCaptureStream;
+  if (!captureStreamFunc) throw new Error("Tu navegador no soporta grabación nativa (captureStream).");
+  
+  const stream = captureStreamFunc.call(canvas, FPS);
+  if (dest) {
+    dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
+  }
+
+  // Detectar MIME type óptimo dinámicamente
+  const possibleMimes = [
+    "video/webm;codecs=vp8,opus",
+    "video/webm",
+    "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+    "video/mp4"
+  ];
+  let selectedMime = "video/webm";
+  for (const m of possibleMimes) {
+    if (MediaRecorder.isTypeSupported(m)) {
+      selectedMime = m;
+      break;
+    }
+  }
+
+  let recorder: MediaRecorder;
+  try {
+    recorder = new MediaRecorder(stream, { mimeType: selectedMime, videoBitsPerSecond: 1500000 });
+  } catch (err) {
+    recorder = new MediaRecorder(stream);
+    selectedMime = recorder.mimeType || "video/webm";
+  }
+
+  const chunks: BlobPart[] = [];
+  recorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) {
+      chunks.push(e.data);
+    }
+  };
+
+  return new Promise<{ url: string, mimeType: string, extension: string }>((resolve, reject) => {
+    let isFinished = false;
+    let currentClipIdx = -1;
+    let activeVideo: HTMLVideoElement | null = null;
+    let lastDrawTime = performance.now();
+    let frameId = 0;
+    
+    const clipDur = actualDuration / clips.length;
+
+    const finalize = () => {
+      cancelAnimationFrame(frameId);
+      if (activeVideo) { 
+        activeVideo.pause();
+        activeVideo.removeAttribute("src"); 
+        activeVideo.remove(); 
       }
-    }
+      if (canvas.parentNode) canvas.remove();
+      try { audioCtx?.close(); } catch(e){}
 
-    const captureStream =
-      canvas.captureStream(FPS);
-
-    if (audioDestination) {
-      const audioTracks =
-        audioDestination.stream.getAudioTracks();
-
-      for (const track of audioTracks) {
-        captureStream.addTrack(track);
-      }
-    }
-
-    const selectedMime =
-      getSupportedMimeType();
-
-    if (
-      !selectedMime &&
-      typeof MediaRecorder === "undefined"
-    ) {
-      throw new Error(
-        "Tu navegador no soporta grabación de vídeo."
-      );
-    }
-
-    let recorder: MediaRecorder;
-
-    try {
-      recorder = selectedMime
-        ? new MediaRecorder(captureStream, {
-            mimeType: selectedMime,
-            videoBitsPerSecond: 2_500_000,
-          })
-        : new MediaRecorder(captureStream);
-    } catch {
-      recorder = new MediaRecorder(
-        captureStream
-      );
-    }
-
-    const chunks: Blob[] = [];
-
-    recorder.ondataavailable = (event) => {
-      if (
-        event.data &&
-        event.data.size > 0
-      ) {
-        chunks.push(event.data);
+      if (chunks.length === 0) {
+        reject(new Error("La grabación finalizó pero no se capturaron fotogramas."));
+      } else {
+        const finalBlob = new Blob(chunks, { type: selectedMime });
+        resolve({ url: URL.createObjectURL(finalBlob), mimeType: selectedMime, extension: getExtensionFromMimeType(selectedMime) });
       }
     };
 
-    const mimeType =
-      recorder.mimeType ||
-      selectedMime ||
-      "video/webm";
-
-    const clipDuration =
-      actualDuration / Math.max(1, clips.length);
-
-    let currentClipIndex = -1;
-
-    const loadClip = async (
-      index: number,
-      elapsed: number
-    ) => {
-      const clip =
-        clips[index % clips.length];
-
-      const newVideo =
-        createVideoElement(clip.url);
-
-      await waitForVideoReady(newVideo);
-
-      const startOffset = Math.max(
-        0,
-        Math.min(
-          clip.startOffset || 0,
-          Math.max(
-            0,
-            newVideo.duration - 0.05
-          )
-        )
-      );
-
-      let randomOffset = 0;
-
-      if (
-        Number.isFinite(newVideo.duration) &&
-        newVideo.duration > 0.1
-      ) {
-        const available =
-          Math.max(
-            0,
-            newVideo.duration -
-              Math.min(
-                clipDuration,
-                newVideo.duration
-              )
-          );
-
-        randomOffset =
-          Math.random() * available;
+    const stopRecording = () => {
+      if (isFinished) return;
+      isFinished = true;
+      try {
+        if (recorder.state === "recording") {
+          recorder.stop();
+        } else {
+          finalize();
+        }
+      } catch(e) {
+        finalize();
       }
+    };
 
-      await seekVideoSafely(
-        newVideo,
-        Math.max(
-          startOffset,
-          randomOffset
-        )
-      );
+    recorder.onstop = () => {
+      setTimeout(finalize, 200);
+    };
 
-      await newVideo.play().catch(() => {});
+    recorder.onerror = () => reject(new Error("Error del sistema de grabación interno."));
+
+    recorder.start();
+
+    const loadVideoAsync = async (index: number) => {
+      if (index >= clips.length) return;
+
+      const newVideo = document.createElement("video");
+      newVideo.src = clips[index].url;
+      newVideo.currentTime = Math.random() * Math.max(0, clips[index].playDuration - clipDur);
+      newVideo.muted = true;
+      newVideo.playsInline = true;
+      newVideo.style.cssText = CANVAS_CSS;
+      document.body.appendChild(newVideo);
+      
+      await new Promise<void>(res => { 
+        let resolved = false;
+        const done = () => { if (!resolved) { resolved = true; res(); } };
+        newVideo.oncanplay = done;
+        newVideo.onloadeddata = done;
+        setTimeout(done, 1200);
+      });
+      
+      newVideo.play().catch(()=>{});
 
       const oldVideo = activeVideo;
-
       activeVideo = newVideo;
-      currentClipIndex = index;
 
       if (oldVideo) {
         oldVideo.pause();
@@ -465,325 +244,66 @@ export async function renderFinalVideo(
         oldVideo.load();
         oldVideo.remove();
       }
-
-      void elapsed;
     };
 
-    await loadClip(0, 0);
+    const start = performance.now();
+    currentClipIdx = 0;
+    loadVideoAsync(0).then(() => {
+      const drawLoop = () => {
+        if (isFinished) return;
+        frameId = requestAnimationFrame(drawLoop); 
+        
+        const now = performance.now();
+        const delta = now - lastDrawTime;
 
-    let recordingStarted = false;
-    let finished = false;
-    let animationFrame = 0;
+        if (delta >= frameInterval) {
+          lastDrawTime = now - (delta % frameInterval);
+          const elapsed = (now - start) / 1000;
+          
+          config.onProgress(Math.min(100, (elapsed / actualDuration) * 100));
 
-    const startedAt =
-      performance.now();
-
-    const cleanup = () => {
-      cancelAnimationFrame(
-        animationFrame
-      );
-
-      if (activeVideo) {
-        activeVideo.pause();
-        activeVideo.removeAttribute(
-          "src"
-        );
-        activeVideo.load();
-        activeVideo.remove();
-        activeVideo = null;
-      }
-
-      for (const clip of clips) {
-        URL.revokeObjectURL(clip.url);
-      }
-
-      try {
-        captureStream
-          .getTracks()
-          .forEach((track) =>
-            track.stop()
-          );
-      } catch {}
-
-
-      canvas.remove();
-
-      if (audioContext) {
-        void audioContext
-          .close()
-          .catch(() => {});
-      }
-    };
-
-    return await new Promise<{
-      url: string;
-      mimeType: string;
-      extension: string;
-    }>((resolve, reject) => {
-      const finish = () => {
-        if (finished) return;
-
-        finished = true;
-
-        try {
-          if (
-            recorder.state === "recording"
-          ) {
-            recorder.stop();
-          }
-        } catch {}
-
-
-        setTimeout(() => {
-          if (!chunks.length) {
-            cleanup();
-
-            reject(
-              new Error(
-                "No se capturaron fotogramas del vídeo."
-              )
-            );
-
+          if (elapsed >= actualDuration) {
+            stopRecording();
             return;
           }
 
-          const finalBlob = new Blob(
-            chunks,
-            {
-              type: mimeType,
+          const activeIdx = Math.min(clips.length - 1, Math.floor(elapsed / clipDur));
+          if (activeIdx !== currentClipIdx) {
+            currentClipIdx = activeIdx;
+            loadVideoAsync(activeIdx); 
+          }
+
+          ctx.fillStyle = "#000000"; 
+          ctx.fillRect(0, 0, width, height);
+
+          if (activeVideo && activeVideo.readyState >= 2) {
+            const scale = Math.max(width / activeVideo.videoWidth, height / activeVideo.videoHeight);
+            const dw = activeVideo.videoWidth * scale;
+            const dh = activeVideo.videoHeight * scale;
+            ctx.drawImage(activeVideo, (width - dw) / 2, (height - dh) / 2, dw, dh);
+          }
+
+          // SUBTÍTULOS: Búsqueda exacta del tramo de tiempo y renderizado seguro
+          if (mode === "voice" && dynamicCues.length > 0) {
+            const cue = dynamicCues.find(c => elapsed >= c.start && elapsed < c.end);
+            if (cue && cue.text) {
+              ctx.font = '900 24px "Inter", sans-serif'; 
+              ctx.textAlign = "center"; 
+              ctx.textBaseline = "middle";
+              ctx.lineJoin = "round";
+              
+              ctx.lineWidth = 5; 
+              ctx.strokeStyle = "#000";
+              ctx.fillStyle = "#FFE600";
+              
+              // Max width = 220px para asegurar que no se salen de pantalla
+              drawWrappedText(ctx, cue.text, width / 2, height * 0.70, 220);
             }
-          );
-
-          const url =
-            URL.createObjectURL(
-              finalBlob
-            );
-
-          cleanup();
-
-          resolve({
-            url,
-            mimeType,
-            extension:
-              getExtensionFromMimeType(
-                mimeType
-              ),
-          });
-        }, 250);
-      };
-
-      recorder.onerror = () => {
-        cleanup();
-
-        reject(
-          new Error(
-            "El navegador produjo un error al grabar el vídeo."
-          )
-        );
-      };
-
-      recorder.onstop = () => {
-        if (!finished) {
-          finish();
-        }
-      };
-
-      try {
-        recorder.start(250);
-        recordingStarted = true;
-      } catch {
-        cleanup();
-
-        reject(
-          new Error(
-            "No se pudo iniciar la grabación del vídeo."
-          )
-        );
-
-        return;
-      }
-
-      const draw = () => {
-        if (finished) return;
-
-        const now =
-          performance.now();
-
-        const elapsed =
-          (now - startedAt) / 1000;
-
-        if (
-          elapsed >= actualDuration
-        ) {
-          onProgress(100);
-          finish();
-          return;
-        }
-
-        const progress =
-          Math.min(
-            99,
-            Math.round(
-              (elapsed /
-                actualDuration) *
-                100
-            )
-          );
-
-        onProgress(progress);
-
-        const desiredClipIndex =
-          Math.min(
-            clips.length - 1,
-            Math.floor(
-              elapsed /
-                clipDuration
-            )
-          );
-
-        if (
-          desiredClipIndex !==
-            currentClipIndex &&
-          desiredClipIndex <
-            clips.length
-        ) {
-          void loadClip(
-            desiredClipIndex,
-            elapsed
-          );
-        }
-
-        ctx.fillStyle = "#000";
-        ctx.fillRect(
-          0,
-          0,
-          width,
-          height
-        );
-
-        if (
-          activeVideo &&
-          activeVideo.readyState >=
-            HTMLMediaElement.HAVE_CURRENT_DATA &&
-          activeVideo.videoWidth > 0 &&
-          activeVideo.videoHeight > 0
-        ) {
-          const scale =
-            Math.max(
-              width /
-                activeVideo.videoWidth,
-              height /
-                activeVideo.videoHeight
-            );
-
-          const drawWidth =
-            activeVideo.videoWidth *
-            scale;
-
-          const drawHeight =
-            activeVideo.videoHeight *
-            scale;
-
-          ctx.drawImage(
-            activeVideo,
-            (width -
-              drawWidth) /
-              2,
-            (height -
-              drawHeight) /
-              2,
-            drawWidth,
-            drawHeight
-          );
-        }
-
-        if (
-          mode === "voice" &&
-          dynamicCues.length
-        ) {
-          const cue =
-            dynamicCues.find(
-              (item) =>
-                elapsed >=
-                  item.start &&
-                elapsed <
-                  item.end
-            );
-
-          if (cue) {
-            ctx.font =
-              '900 24px Arial, sans-serif';
-
-            ctx.textAlign =
-              "center";
-
-            ctx.textBaseline =
-              "middle";
-
-            ctx.lineJoin =
-              "round";
-
-            ctx.lineWidth = 5;
-            ctx.strokeStyle =
-              "#000";
-            ctx.fillStyle =
-              "#FFE600";
-
-            drawWrappedText(
-              ctx,
-              cue.text,
-              width / 2,
-              height * 0.7,
-              220
-            );
           }
         }
-
-        animationFrame =
-          requestAnimationFrame(
-            draw
-          );
       };
-
-      if (recordingStarted) {
-        animationFrame =
-          requestAnimationFrame(
-            draw
-          );
-      }
-
-      setTimeout(
-        () => {
-          if (!finished) {
-            finish();
-          }
-        },
-        (actualDuration + 2) *
-          1000
-      );
+      drawLoop();
+      setTimeout(stopRecording, (actualDuration + 2) * 1000);
     });
-  } catch (error) {
-    if (activeVideo) {
-      const av = activeVideo as HTMLVideoElement;
-      av.pause();
-      av.removeAttribute("src");
-      av.load();
-      av.remove();
-    }
-
-    canvas.remove();
-
-    if (audioContext) {
-      await audioContext
-        .close()
-        .catch(() => {});
-    }
-
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Error desconocido durante el renderizado.";
-
-    throw new Error(message);
-  }
+  });
 }
