@@ -12,15 +12,13 @@ export default function App() {
   const [mode, setMode] = useState<AppMode | null>(null);
   const [productPrompt, setProductPrompt] = useState("");
   const [language, setLanguage] = useState("es"); 
-  const [totalDuration, setTotalDuration] = useState(0);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
   const [finalVideo, setFinalVideo] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const clearMemory = () => {
-    const uniqueUrls = new Set(clips.map(c => c.url));
-    uniqueUrls.forEach(url => URL.revokeObjectURL(url));
+    clips.forEach(c => URL.revokeObjectURL(c.url));
     if (finalVideo) URL.revokeObjectURL(finalVideo);
   };
 
@@ -28,7 +26,7 @@ export default function App() {
     if (!files || !files.length) return;
     clearMemory();
     
-    const rawVideos: {file: File, url: string, dur: number}[] = [];
+    const validClips: VideoClip[] = [];
     const lector = document.createElement("video");
     lector.playsInline = true;
     lector.muted = true;
@@ -36,113 +34,49 @@ export default function App() {
     for (const file of Array.from(files)) {
       const url = URL.createObjectURL(file);
       lector.src = url;
-      const videoDur = await new Promise<number>((res) => {
+      const dur = await new Promise<number>((res) => {
         lector.onloadedmetadata = () => res(lector.duration || 3);
         lector.onerror = () => res(3);
         setTimeout(() => res(3), 1000); 
       });
-      rawVideos.push({ file, url, dur: videoDur });
+      // Guardamos el vídeo completo (el motor gráfico ya se encargará de hacer los cortes perfectos)
+      validClips.push({ file, url, startOffset: 0, playDuration: dur });
     }
+    
     lector.removeAttribute("src"); 
     lector.load();
 
-    let viralCuts: VideoClip[] = [];
-    const cutLength = 2.0; 
-
-    rawVideos.forEach(raw => {
-      const numCuts = Math.floor(raw.dur / cutLength);
-      if (numCuts <= 1) {
-        viralCuts.push({ file: raw.file, url: raw.url, startOffset: 0, playDuration: raw.dur });
-      } else {
-        for (let i = 0; i < Math.min(numCuts, 8); i++) {
-          let offset = (raw.dur / numCuts) * i;
-          viralCuts.push({
-            file: raw.file,
-            url: raw.url,
-            startOffset: Math.min(offset + 0.5, raw.dur - cutLength),
-            playDuration: cutLength
-          });
-        }
-      }
-    });
-
-    if (rawVideos.length > 1) {
-      viralCuts = viralCuts.sort(() => Math.random() - 0.5);
-    }
-
-    let finalPlaylist: VideoClip[] = [];
-    let accDur = 0;
-    for (const cut of viralCuts) {
-      if (accDur >= 20) break; 
-      finalPlaylist.push(cut);
-      accDur += cut.playDuration;
-    }
-
-    setClips(finalPlaylist);
-    setTotalDuration(Math.max(5, Math.round(accDur)));
+    // Mezclamos el orden si hay varios vídeos para más dinamismo
+    setClips(validClips.sort(() => Math.random() - 0.5));
     setStep(2);
   };
 
-  const generateScriptLocal = (info: string, durationSeconds: number, lang: string) => {
-    const targetWordCount = Math.floor(durationSeconds * 3.4); 
-
+  // GUION INTELIGENTE: Sin repeticiones. Gancho + Beneficio + CTA.
+  const generateScriptLocal = (info: string, lang: string) => {
     const cleanInfo = info
       .replace(/https?:\/\/\S+/gi, "")
       .replace(/(aliexpress|amazon|shein|temu|tienda|comprar|vendedor|descuento|link|bio)/gi, "")
       .trim() || "este producto";
 
-    const data: Record<string, { hooks: string[], benefits: string[], calls: string[], fill: string }> = {
+    const data: Record<string, { hooks: string[], benefits: string[], calls: string[] }> = {
       es: {
         hooks: [`¿Cansado de los mismos problemas? Necesitas ${cleanInfo}.`, `El secreto que nadie te quiere contar sobre ${cleanInfo}.`, `Mira cómo ${cleanInfo} me salvó el día.`],
         benefits: ["Te ahorra horas de esfuerzo y es súper fácil de usar.", "La calidad te dejará con la boca abierta desde el primer uso.", "Es el mejor invento del año y funciona a la perfección."],
-        calls: ["Consíguelo hoy y cambia tu rutina.", "Pruébalo ahora, no te arrepentirás.", "Hazte un favor y empieza a usarlo."],
-        fill: "¡Funciona increíble!"
+        calls: ["Consíguelo hoy y cambia tu rutina.", "Pruébalo ahora, no te arrepentirás.", "Hazte un favor y empieza a usarlo."]
       },
       en: {
         hooks: [`Tired of the same problems? You need ${cleanInfo}.`, `The secret nobody tells you about ${cleanInfo}.`, `Look how ${cleanInfo} totally saved my day.`],
         benefits: ["It saves you hours of effort and is super easy to use.", "The quality will blow your mind from the very first use.", "It's the best invention of the year and works flawlessly."],
-        calls: ["Get it today and change your routine.", "Try it now, you won't regret it.", "Do yourself a favor and start using it."],
-        fill: "It works amazingly!"
-      },
-      pt: {
-        hooks: [`Cansado dos mesmos problemas? Você precisa de ${cleanInfo}.`, `O segredo que ninguém te conta sobre ${cleanInfo}.`, `Olha como ${cleanInfo} salvou meu dia.`],
-        benefits: ["Economiza horas de esforço e é super fácil de usar.", "A qualidade vai te deixar de queixo caído desde o primeiro uso.", "É a melhor invenção do ano e funciona perfeitamente."],
-        calls: ["Garanta o seu hoje e mude sua rotina.", "Experimente agora, você não vai se arrepender.", "Faça um favor a si mesmo e comece a usar."],
-        fill: "Funciona incrivelmente!"
-      },
-      fr: {
-        hooks: [`Fatigué des mêmes problèmes? Vous avez besoin de ${cleanInfo}.`, `Le secret que personne ne vous dit sur ${cleanInfo}.`, `Regardez comment ${cleanInfo} a sauvé ma journée.`],
-        benefits: ["Cela vous fait gagner des heures d'efforts et est super facile à utiliser.", "La qualité vous époustouflera dès la première utilisation.", "C'est la meilleure invention de l'année et fonctionne parfaitement."],
-        calls: ["Obtenez-le aujourd'hui et changez votre routine.", "Essayez-le maintenant, vous ne le regretterez pas.", "Faites-vous une faveur et commencez à l'utiliser."],
-        fill: "Ça marche incroyablement!"
+        calls: ["Get it today and change your routine.", "Try it now, you won't regret it.", "Do yourself a favor and start using it."]
       }
     };
 
     const d = data[lang] || data["es"];
+    const h = d.hooks[Math.floor(Math.random() * d.hooks.length)];
+    const b = d.benefits[Math.floor(Math.random() * d.benefits.length)];
+    const c = d.calls[Math.floor(Math.random() * d.calls.length)];
     
-    let script = d.hooks[Math.floor(Math.random() * d.hooks.length)];
-    let words = script.split(" ");
-    
-    let benefitCount = 0;
-    while (words.length < targetWordCount - 6) { 
-      script += " " + d.benefits[benefitCount % d.benefits.length];
-      words = script.split(" ");
-      benefitCount++;
-    }
-
-    script += " " + d.calls[Math.floor(Math.random() * d.calls.length)];
-    words = script.split(" ");
-
-    if (words.length > targetWordCount) {
-      return words.slice(0, targetWordCount).join(" ") + "!";
-    } else {
-      while (words.length < targetWordCount) {
-        script += " " + d.fill;
-        words = script.split(" ");
-      }
-    }
-    
-    return script;
+    return `${h} ${b} ${c}`;
   };
 
   const processVideo = async () => {
@@ -152,24 +86,30 @@ export default function App() {
 
     try {
       let audioBlob = null;
-      let cues: any = [];
+      let wordChunks: string[] = [];
+      let targetDuration = 10; // Duración por defecto para el modo música
 
       if (mode === "voice") {
         setStatus("Generando guion a medida...");
-        const script = generateScriptLocal(productPrompt, totalDuration, language);
+        const script = generateScriptLocal(productPrompt, language);
         
-        setStatus("Sintetizando voz nativa...");
-        const tts = await generateSpeechAndCues(script, totalDuration, language);
+        setStatus("Descargando voz humana...");
+        const tts = await generateSpeechAndCues(script, language);
         audioBlob = tts.audioBlob;
-        cues = tts.cues;
+        wordChunks = tts.wordChunks;
       } else {
-        setStatus("Generando base musical Lo-Fi...");
-        audioBlob = await generateViralMusic(totalDuration);
+        setStatus("Generando base musical...");
+        audioBlob = await generateViralMusic(targetDuration);
       }
 
-      setStatus("Ensamblando cortes a máxima velocidad...");
+      setStatus("Renderizando con cortes dinámicos...");
       const url = await renderFinalVideo({
-        clips, audioBlob, cues, mode: mode!, targetDuration: totalDuration,
+        clips, 
+        audioBlob, 
+        wordChunks, 
+        mode: mode!, 
+        // El motor gráfico calculará la duración real exacta basada en el audio
+        targetDuration, 
         onProgress: (p) => setProgress(Math.round(p))
       });
 
@@ -193,7 +133,7 @@ export default function App() {
     <main className="min-h-[100dvh] bg-[#09090b] text-white flex flex-col items-center justify-center p-4 sm:p-6 overflow-x-hidden">
       <div className="w-full max-w-xl text-center mb-6 sm:mb-8 mt-4">
         <div className="inline-block bg-purple-500/10 border border-purple-500/30 text-purple-400 px-3 py-1 rounded-full text-[10px] sm:text-xs font-bold mb-3 sm:mb-4 tracking-widest">
-          TIKTOK AUTOMATOR FINAL PRO GLOBAL
+          TIKTOK AUTOMATOR FINAL (ZERO BUGS)
         </div>
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent leading-tight">
           Creador Viral
@@ -209,7 +149,7 @@ export default function App() {
               <UploadCloud className="w-8 h-8 sm:w-10 sm:h-10 text-purple-400" />
             </div>
             <h2 className="text-lg sm:text-xl font-bold text-center">Toca para subir vídeos</h2>
-            <p className="text-zinc-500 mt-2 text-xs sm:text-sm text-center">Cortes virales instantáneos.</p>
+            <p className="text-zinc-500 mt-2 text-xs sm:text-sm text-center">Se adaptarán al ritmo de la voz.</p>
           </div>
         )}
 
@@ -227,7 +167,7 @@ export default function App() {
               <div className="p-3 sm:p-4 bg-purple-500/10 rounded-full shrink-0"><Mic className="text-purple-400 w-6 h-6" /></div>
               <div className="text-left">
                 <h3 className="font-bold text-base sm:text-lg">Modo Narrador IA</h3>
-                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Guion, voz humana y subtítulos.</p>
+                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Guion perfecto, voz humana y subtítulos.</p>
               </div>
             </button>
           </div>
@@ -248,12 +188,9 @@ export default function App() {
                     >
                       <option value="es">Español</option>
                       <option value="en">English</option>
-                      <option value="pt">Português</option>
-                      <option value="fr">Français</option>
                     </select>
                   </div>
                 </div>
-                
                 <textarea 
                   value={productPrompt} onChange={(e) => setProductPrompt(e.target.value)}
                   placeholder="Ej: Aspiradora portátil para coche..."
@@ -287,7 +224,7 @@ export default function App() {
               <button onClick={resetAll} className="flex-1 py-3 sm:py-4 bg-zinc-800 rounded-xl font-bold flex items-center justify-center gap-2 active:bg-zinc-700 text-sm sm:text-base touch-manipulation">
                 <RefreshCcw className="w-4 h-4 sm:w-5 sm:h-5" /> Otro
               </button>
-              <a href={finalVideo} download={`tiktok-viral-${language}.mp4`} className="flex-1 py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl font-bold flex items-center justify-center gap-2 text-sm sm:text-base touch-manipulation">
+              <a href={finalVideo} download="tiktok-viral.mp4" className="flex-1 py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl font-bold flex items-center justify-center gap-2 text-sm sm:text-base touch-manipulation">
                 <Download className="w-4 h-4 sm:w-5 sm:h-5" /> Guardar
               </a>
             </div>

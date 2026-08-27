@@ -9,8 +9,8 @@ export interface SubtitleCue {
 export interface VideoClip {
   file: File;
   url: string;
-  startOffset: number;  // NUEVO: En qué segundo exacto empieza el corte
-  playDuration: number; // NUEVO: Cuánto dura este corte rápido (Ej: 2.5 seg)
+  startOffset: number;
+  playDuration: number;
 }
 
 export type AppMode = "music" | "voice";
@@ -18,7 +18,8 @@ export type AppMode = "music" | "voice";
 export interface RenderConfig {
   clips: VideoClip[];
   audioBlob: Blob | null;
-  cues: SubtitleCue[];
+  cues?: SubtitleCue[];
+  wordChunks?: string[];
   mode: AppMode;
   targetDuration: number;
   onProgress: (pct: number) => void;
