@@ -66,8 +66,9 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       if (isFallback) {
         source.playbackRate.value = 1.0;
       } else {
-        source.playbackRate.value = 1.03;
-        actualDuration = actualDuration / 1.03;
+        // Viral rápido sin silencio: 1.12 es el sweet spot tik tok
+        source.playbackRate.value = 1.12;
+        actualDuration = actualDuration / 1.12;
       }
     } else {
       source.loop = true;
@@ -155,6 +156,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       v.playsInline = true;
       v.preload = "auto";
       v.crossOrigin = "anonymous";
+      v.loop = true;
       v.style.cssText = CANVAS_CSS;
       v.setAttribute("playsinline", "");
       document.body.appendChild(v);
@@ -229,6 +231,10 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
             currentClipIdx = neededIdx;
             loadVideoAsync(neededIdx);
           }
+          // Auto-reanudar vídeo si se pausó (evita negro con varios clips)
+          if (activeVideo && activeVideo.paused && !isFinished && activeVideo.readyState >= 2) {
+            activeVideo.play().catch(() => {});
+          }
           ctx.fillStyle = "#000";
           ctx.fillRect(0, 0, width, height);
           if (activeVideo && activeVideo.readyState >= 1 && activeVideo.videoWidth > 0 && activeVideo.videoHeight > 0) {
@@ -241,10 +247,8 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
               console.warn("[DRAW] fallo", e);
             }
           } else if (activeVideo) {
-            // fallback: intentar pintar aunque no ready, evita negro absoluto si videoWidth 0
             try { ctx.drawImage(activeVideo, 0, 0, width, height); } catch {}
           } else {
-            // Sin vídeo aún, mostrar trama para debug
             ctx.fillStyle = "#111";
             ctx.fillRect(0, 0, width, height);
           }
@@ -264,7 +268,8 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
         }
       };
       drawLoop();
-      setTimeout(stopRecording, (actualDuration + 2.5) * 1000);
+      // Sin silencio extra: para justo al terminar la voz
+      setTimeout(stopRecording, (actualDuration + 0.6) * 1000);
     });
   });
 }
