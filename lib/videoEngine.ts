@@ -8,6 +8,7 @@ type ExtCanvasElement = HTMLCanvasElement & {
   webkitCaptureStream(fps?: number): MediaStream;
 };
 
+// Dibuja el texto dentro del límite de ancho
 function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number) {
   const words = text.split(' ');
   let line = '';
@@ -47,7 +48,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     throw new Error("No hay clips de vídeo seleccionados.");
   }
   if (!audioBlob) {
-    throw new Error("No hay audio válido para generar el vídeo.");
+    throw new Error("El motor no ha recibido ningún archivo de audio válido.");
   }
 
   const canvas = document.createElement("canvas") as ExtCanvasElement;
@@ -57,7 +58,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
   document.body.appendChild(canvas);
   
   const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
-  if (!ctx) throw new Error("Canvas 2D no soportado.");
+  if (!ctx) throw new Error("Tu navegador no soporta Canvas 2D.");
 
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, width, height);
@@ -79,7 +80,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     const decoded = await new Promise<AudioBuffer>((resolve, reject) => {
       audioCtx!.decodeAudioData(ab, resolve, reject);
     }).catch(() => {
-      throw new Error("El motor de vídeo no pudo procesar la voz final.");
+      throw new Error("El archivo de audio no se puede procesar en el motor de vídeo.");
     });
 
     if (decoded && decoded.duration > 0) {
@@ -88,7 +89,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       source.buffer = decoded;
       
       if (mode === "voice") {
-        source.playbackRate.value = 1.15; // Ritmo TikTok dinámico
+        source.playbackRate.value = 1.15; // Ritmo TikTok ágil
         actualDuration = actualDuration / 1.15;
       } else {
         source.loop = true;
@@ -98,13 +99,13 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       source.start(0);
     }
 
-    // SINCRONIZACIÓN REAL PROPORCIONAL
+    // SINCRONIZACIÓN DE SUBTÍTULOS PROPORCIONAL
+    // Calcula la duración en pantalla de cada frase según su número de letras
     if (mode === "voice" && wordChunks && wordChunks.length > 0) {
       const totalChars = wordChunks.reduce((acc, chunk) => acc + chunk.length, 0);
       let accumulatedTime = 0;
       
       wordChunks.forEach((chunk) => {
-        // Asignar el tiempo exacto que le corresponde a la palabra según su longitud
         const weight = chunk.length / Math.max(1, totalChars);
         const duration = weight * actualDuration;
         
@@ -117,7 +118,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       });
     }
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : "Error configurando el audio principal.";
+    const msg = e instanceof Error ? e.message : "Error al ensamblar el audio y el vídeo.";
     if (audioCtx) { try { audioCtx.close(); } catch {}
     }
     if (canvas.parentNode) canvas.remove();
@@ -125,7 +126,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
   }
 
   const captureStreamFunc = canvas.captureStream || canvas.mozCaptureStream || canvas.webkitCaptureStream;
-  if (!captureStreamFunc) throw new Error("Tu navegador no soporta grabación nativa (captureStream).");
+  if (!captureStreamFunc) throw new Error("Tu navegador no soporta captura nativa de vídeo.");
   
   const stream = captureStreamFunc.call(canvas, FPS);
   if (dest) {
@@ -181,7 +182,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       try { audioCtx?.close(); } catch {}
 
       if (chunks.length === 0) {
-        reject(new Error("La grabación finalizó pero no se capturaron fotogramas."));
+        reject(new Error("Error: Cero fotogramas capturados."));
       } else {
         const finalBlob = new Blob(chunks, { type: selectedMime });
         resolve({ url: URL.createObjectURL(finalBlob), mimeType: selectedMime });
@@ -192,22 +193,15 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       if (isFinished) return;
       isFinished = true;
       try {
-        if (recorder.state === "recording") {
-          recorder.stop();
-        } else {
-          finalize();
-        }
+        if (recorder.state === "recording") recorder.stop();
+        else finalize();
       } catch {
         finalize();
       }
     };
 
-    recorder.onstop = () => {
-      setTimeout(finalize, 200);
-    };
-
-    recorder.onerror = () => reject(new Error("Error del sistema de grabación interno."));
-
+    recorder.onstop = () => { setTimeout(finalize, 200); };
+    recorder.onerror = () => reject(new Error("Error del grabador de vídeo."));
     recorder.start();
 
     const loadVideoAsync = async (index: number) => {
@@ -279,7 +273,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
             ctx.drawImage(activeVideo, (width - dw) / 2, (height - dh) / 2, dw, dh);
           }
 
-          // Dibujo de subtítulos sincronizados, asegurando que se corten en 220px
+          // Dibuja los subtítulos perfectamente sincronizados sin rebasar el margen lateral
           if (mode === "voice" && dynamicCues.length > 0) {
             const cue = dynamicCues.find(c => elapsed >= c.start && elapsed < c.end);
             if (cue && cue.text) {

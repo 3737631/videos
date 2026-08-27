@@ -123,7 +123,7 @@ export default function App() {
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Ocurrió un error al procesar el vídeo.";
       alert("Error: " + msg);
-      setStep(3); // Vuelve atrás para que puedas probar otra vez
+      setStep(3); // Te devuelve atrás para que no tengas que subir vídeos de nuevo
     }
   };
 
@@ -140,7 +140,7 @@ export default function App() {
     <main className="min-h-[100dvh] bg-[#09090b] text-white flex flex-col items-center justify-center p-4 sm:p-6 overflow-x-hidden">
       <div className="w-full max-w-xl text-center mb-6 sm:mb-8 mt-4">
         <div className="inline-block bg-purple-500/10 border border-purple-500/30 text-purple-400 px-3 py-1 rounded-full text-[10px] sm:text-xs font-bold mb-3 sm:mb-4 tracking-widest">
-          CREADOR VIRAL GITHUB PAGES
+          CREADOR VIRAL V2 (CLIENT-SIDE)
         </div>
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent leading-tight">
           Creador Viral

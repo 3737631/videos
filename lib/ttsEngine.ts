@@ -4,7 +4,6 @@ export interface SpeechResult {
 }
 
 function cleanScript(text: string): string {
-  // Limpieza estricta conservando espacios y caracteres válidos
   return text
     .replace(/https?:\/\/\S+/gi, "")
     .replace(/[^\p{L}\p{N}\s.,!?¿¡'’"-]/gu, " ")
@@ -15,82 +14,13 @@ function cleanScript(text: string): string {
 function createWordChunks(text: string): string[] {
   const words = text.split(/\s+/).filter(Boolean);
   const chunks: string[] = [];
-  // Agrupa máximo 2 palabras para que siempre quepan en formato TikTok (270px ancho)
+  
+  // Agrupa máximo 2 palabras para garantizar que queden dentro del formato TikTok vertical (270px)
   for (let i = 0; i < words.length; i += 2) {
     const chunk = words.slice(i, i + 2).join(" ");
     if (chunk) chunks.push(chunk.toUpperCase());
   }
   return chunks;
-}
-
-// Trocea el texto en fragmentos cortos para que las APIs gratuitas no rechacen la petición
-function splitIntoShortSentences(text: string, maxLength: number): string[] {
-  const words = text.split(/\s+/);
-  const chunks: string[] = [];
-  let currentChunk = "";
-
-  for (const word of words) {
-    if ((currentChunk + " " + word).trim().length <= maxLength) {
-      currentChunk = (currentChunk + " " + word).trim();
-    } else {
-      if (currentChunk) chunks.push(currentChunk);
-      currentChunk = word;
-    }
-  }
-  if (currentChunk) chunks.push(currentChunk);
-  return chunks;
-}
-
-function base64ToBlob(dataURI: string): Blob {
-  const parts = dataURI.split(',');
-  const byteString = atob(parts[1]);
-  const mimeString = parts[0].split(':')[1].split(';')[0];
-  const ab = new ArrayBuffer(byteString.length);
-  const ia = new Uint8Array(ab);
-  for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
-  return new Blob([ab], { type: mimeString });
-}
-
-// Descargador blindado con 4 pasarelas distintas (Anti-AdBlockers y Anti-RateLimits)
-async function fetchTTSBlobWithFallbacks(text: string, lang: string): Promise<Blob> {
-  const encodedText = encodeURIComponent(text);
-  const SE_VOICES: Record<string, string> = { es: "Mia", en: "Brian", pt: "Vitoria", fr: "Celine" };
-  const voice = SE_VOICES[lang] || "Mia";
-  
-  const googleTtsUrl = `https://translate.googleapis.com/translate_tts?client=gtx&ie=UTF-8&tl=${lang}&q=${encodedText}`;
-  const rvLang = lang === 'es' ? 'es-ES' : lang === 'en' ? 'en-US' : lang === 'pt' ? 'pt-BR' : 'fr-FR';
-
-  const urls = [
-    `https://api.streamelements.com/kappa/v2/speech?voice=${voice}&text=${encodedText}`, // 1. Alta calidad (Polly)
-    `https://code.responsivevoice.org/getvoice.php?t=${encodedText}&tl=${rvLang}&sv=&vn=&pitch=0.5&rate=0.5&vol=1`, // 2. Respaldo oficial con CORS abierto
-    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(googleTtsUrl)}`, // 3. Proxy a Google
-    `https://api.allorigins.win/get?url=${encodeURIComponent(googleTtsUrl)}` // 4. Proxy de emergencia (base64)
-  ];
-
-  for (const url of urls) {
-    try {
-      const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), 10000); // 10s máximo por intento
-      const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
-      clearTimeout(id);
-
-      if (!res.ok) continue;
-
-      if (url.includes("allorigins.win/get")) {
-        const json = await res.json();
-        if (json.contents && json.contents.startsWith("data:audio")) {
-          return base64ToBlob(json.contents);
-        }
-        continue;
-      }
-
-      const blob = await res.blob();
-      if (blob.size > 200) return blob; // Audio válido
-    } catch {
-      continue; // Pasa a la siguiente pasarela si falla
-    }
-  }
-  throw new Error(`Fallo al descargar la voz para: "${text.substring(0, 20)}...". Comprueba tu conexión o pausa tu AdBlocker.`);
 }
 
 export async function generateSpeechAndCues(
@@ -100,59 +30,89 @@ export async function generateSpeechAndCues(
   const cleanText = cleanScript(text);
 
   if (!cleanText) {
-    throw new Error("El guion está vacío.");
+    throw new Error("El guion está vacío tras limpiarlo.");
   }
 
-  const wordChunks = createWordChunks(cleanText);
-  const textChunks = splitIntoShortSentences(cleanText, 150); // Troceado inteligente
+  // Límite estricto de 200 caracteres. Un solo bloque para evitar bloqueos por límite de peticiones (Rate-Limit 429)
+  const limitedText = cleanText.length > 200 ? `${cleanText.slice(0, 197).trim()}...` : cleanText;
+  const wordChunks = createWordChunks(limitedText);
 
-  const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-  if (!AudioContextClass) throw new Error("AudioContext no soportado en tu navegador.");
+  if (wordChunks.length === 0) {
+    throw new Error("No se encontraron palabras válidas.");
+  }
+
+  const SE_VOICES: Record<string, string> = { es: "Mia", en: "Brian", pt: "Vitoria", fr: "Celine" };
+  const voice = SE_VOICES[lang] || "Mia";
+  const encodedText = encodeURIComponent(limitedText);
+  const googleTtsUrl = `https://translate.googleapis.com/translate_tts?client=gtx&ie=UTF-8&tl=${lang}&q=${encodedText}`;
+
+  // Red de pasarelas con CORS abierto. El orden prioriza calidad y velocidad.
+  const urls = [
+    `https://api.streamelements.com/kappa/v2/speech?voice=${voice}&text=${encodedText}`,
+    `https://corsproxy.io/?${encodeURIComponent(googleTtsUrl)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(googleTtsUrl)}`,
+    `https://thingproxy.freeboard.io/fetch/${googleTtsUrl}`
+  ];
+
+  let validAudioBlob: Blob | null = null;
   
-  const ctx = new AudioContextClass();
-  let totalDuration = 0;
-  const decodedBuffers: AudioBuffer[] = [];
+  const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextClass) throw new Error("AudioContext no está soportado en este navegador.");
+  const testCtx = new AudioContextClass();
 
-  // Descarga y une cada frase
-  for (const tChunk of textChunks) {
-    const blob = await fetchTTSBlobWithFallbacks(tChunk, lang);
-    const arrayBuffer = await blob.arrayBuffer();
+  // Bucle a prueba de fallos y engaños HTML de los proxies
+  for (const url of urls) {
     try {
-      const decoded = await ctx.decodeAudioData(arrayBuffer);
-      decodedBuffers.push(decoded);
-      totalDuration += decoded.duration;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 segundos por intento
+      
+      const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
+      clearTimeout(timeoutId);
+
+      if (!res.ok) continue;
+
+      const blob = await res.blob();
+      
+      // Descartar inmediatamente si el proxy devolvió una web de error en vez de audio
+      if (blob.type.includes("text") || blob.type.includes("html") || blob.type.includes("json")) {
+        continue; 
+      }
+
+      const arrayBuffer = await blob.arrayBuffer();
+
+      // PRUEBA DE FUEGO: Si decodeAudioData falla, el archivo está corrupto o es HTML camuflado.
+      await new Promise<AudioBuffer>((resolve, reject) => {
+        testCtx.decodeAudioData(arrayBuffer.slice(0), resolve, reject);
+      });
+
+      // Si llegó hasta aquí, el audio es 100% válido y decodificable
+      validAudioBlob = blob;
+      break; 
+
     } catch {
-      throw new Error("El archivo de voz descargado está corrupto. Intenta de nuevo.");
+      // El audio falló la validación o hubo timeout -> salta silenciosamente al siguiente
+      continue;
     }
   }
 
-  // Mezcla de todas las frases en una sola pista fluida
-  const OfflineAudioContextClass = window.OfflineAudioContext || (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext }).webkitOfflineAudioContext;
-  const offlineCtx = new OfflineAudioContextClass(1, Math.max(1, Math.ceil(ctx.sampleRate * totalDuration)), ctx.sampleRate);
-  
-  let currentTime = 0;
-  for (const buf of decodedBuffers) {
-    const source = offlineCtx.createBufferSource();
-    source.buffer = buf;
-    source.connect(offlineCtx.destination);
-    source.start(currentTime);
-    currentTime += buf.duration;
+  // Cierre de contexto de prueba
+  await testCtx.close().catch(() => {});
+
+  if (!validAudioBlob) {
+    throw new Error("Los servidores de voz están bloqueados. Pausa tu AdBlocker o inténtalo en unos minutos.");
   }
 
-  const renderedBuffer = await offlineCtx.startRendering();
-  const finalWavBlob = audioBufferToWav(renderedBuffer);
-
-  return { audioBlob: finalWavBlob, wordChunks };
+  return { audioBlob: validAudioBlob, wordChunks };
 }
 
-// Generador de música (Local, NO depende de internet)
+// Generador Musical Offline (Funciona sin internet, no toca APIs externas)
 export async function generateViralMusic(duration: number): Promise<Blob> {
   const safeDuration = Math.max(1, Math.min(60, duration));
   const sampleRate = 44100;
   const renderDuration = safeDuration + 0.5;
 
   const AudioContextConstructor = window.OfflineAudioContext || (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext }).webkitOfflineAudioContext;
-  if (!AudioContextConstructor) throw new Error("Tu navegador no soporta generación de audio.");
+  if (!AudioContextConstructor) throw new Error("Tu navegador no soporta generación de audio offline.");
 
   const offlineCtx = new AudioContextConstructor(1, Math.ceil(sampleRate * renderDuration), sampleRate);
   const bpm = 112;
