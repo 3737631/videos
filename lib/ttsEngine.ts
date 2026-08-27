@@ -1,9 +1,11 @@
+import { SubtitleCue } from "@/types";
+
 export async function generateSpeechAndCues(
   text: string,
   lang: string = "es"
 ): Promise<{ audioBlob: Blob; wordChunks: string[] }> {
   
-  const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ.,!¿?'-]/g, "").trim();
+  const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑçãõâêîôûàèìòù.,!¿?'-]/g, "").trim();
   const rawWords = cleanText.split(/\s+/).filter(Boolean);
   if (rawWords.length === 0) throw new Error("Guion vacío");
 
@@ -29,9 +31,15 @@ export async function generateSpeechAndCues(
 
   let finalAudioBlob: Blob | null = null;
 
+  // CORTAFUEGOS DE RED: Intentamos descargar con un límite estricto de 2.5 segundos por enlace
   for (const url of apis) {
     try {
-      const res = await fetch(url, { cache: "no-store" });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
+
+      const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
+      clearTimeout(timeoutId);
+
       if (res.ok) {
         const buf = await res.arrayBuffer();
         if (buf.byteLength > 1000) {
@@ -40,10 +48,11 @@ export async function generateSpeechAndCues(
         }
       }
     } catch (e) {
-      continue;
+      continue; // Si un servidor tarda o falla, pasa al siguiente de inmediato sin bloquearnos
     }
   }
 
+  // SI LA RED FALLA O BLOQUEA, USAMOS VOZ SINTETIZADA LOCAL INSTANTÁNEA (Adiós al 5%)
   if (!finalAudioBlob) {
     finalAudioBlob = await generateOfflineVoice(rawWords.length);
   }
