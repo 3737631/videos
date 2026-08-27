@@ -49,7 +49,7 @@ function base64ToBlob(dataURI: string): Blob {
   return new Blob([ab], { type: mimeString });
 }
 
-// Voz local suave - viral ultra rápida
+// Voz local viral típica - aguda y enérgica
 async function generateAnimaleseVoice(text: string, ctx: AudioContext): Promise<AudioBuffer> {
   try {
     const chars = text.split('');
@@ -68,22 +68,22 @@ async function generateAnimaleseVoice(text: string, ctx: AudioContext): Promise<
       const osc = offlineCtx.createOscillator();
       const gain = offlineCtx.createGain();
       const filter = offlineCtx.createBiquadFilter();
-      osc.type = "sine";
+      osc.type = "triangle";
       const code = char.toLowerCase().charCodeAt(0) || 97;
       const isVowel = "aeiouáéíóú".includes(char.toLowerCase());
-      let baseFreq = 165 + ((code % 10) * 7);
-      if (isVowel) baseFreq += 14;
+      let baseFreq = 225 + ((code % 10) * 9);
+      if (isVowel) baseFreq += 22;
       if (/[,.!?]/.test(char)) {
         currentTime += charDuration * 0.5;
         continue;
       }
       osc.frequency.setValueAtTime(baseFreq, currentTime);
-      filter.type = "lowpass";
-      filter.frequency.value = 1200;
-      filter.Q.value = 0.6;
+      filter.type = "bandpass";
+      filter.frequency.value = 1850;
+      filter.Q.value = 1.1;
       gain.gain.setValueAtTime(0, currentTime);
-      gain.gain.linearRampToValueAtTime(0.09, currentTime + 0.012);
-      gain.gain.linearRampToValueAtTime(0.09, currentTime + charDuration * 0.65);
+      gain.gain.linearRampToValueAtTime(0.11, currentTime + 0.008);
+      gain.gain.linearRampToValueAtTime(0.11, currentTime + charDuration * 0.6);
       gain.gain.linearRampToValueAtTime(0, currentTime + charDuration);
       osc.connect(filter);
       filter.connect(gain);
@@ -100,8 +100,8 @@ async function generateAnimaleseVoice(text: string, ctx: AudioContext): Promise<
 }
 
 async function fetchTTSBuffer(text: string, lang: string, ctx: AudioContext, onStatus?: (msg: string) => void): Promise<AudioBuffer> {
-  const SE_VOICES: Record<string, string> = { es: "Mia", en: "Brian", pt: "Vitoria", fr: "Celine" };
-  const voice = SE_VOICES[lang] || "Mia";
+  const SE_VOICES: Record<string, string> = { es: "Lucia", en: "Brian", pt: "Vitoria", fr: "Celine" };
+  const voice = SE_VOICES[lang] || "Lucia";
   const rvMap: Record<string, string> = { es: "Spanish Female", en: "UK English Female", pt: "Portuguese Female", fr: "French Female" };
   const rvVoice = rvMap[lang] || "Spanish Female";
   const encodedText = encodeURIComponent(text);
