@@ -13,6 +13,7 @@ export async function generateSpeechAndCues(
   const timePerWord = targetDurationSec / rawWords.length;
   const cues: SubtitleCue[] = [];
   
+  // Agrupamos de 2 en 2 para ritmo viral
   for (let i = 0; i < rawWords.length; i += 2) {
     const chunk = rawWords.slice(i, i + 2);
     cues.push({
@@ -36,77 +37,45 @@ export async function generateSpeechAndCues(
   };
 
   const vConfig = voiceMap[lang] || voiceMap["es"];
-  const textChunks = cleanText.match(/.{1,150}(?:\s|$)/g) || [cleanText];
+  
+  // VERSIÓN ESTABLE: Una sola petición con todo el texto. 
+  // No satura el servidor, no da error y devuelve la voz humana perfecta.
+  const encodedFull = encodeURIComponent(cleanText);
+  const apis = [
+    `https://api.streamelements.com/kappa/v2/speech?voice=${vConfig.streamElements}&text=${encodedFull}`,
+    `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${vConfig.google}&client=tw-ob&q=${encodedFull}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${vConfig.google}&client=tw-ob&q=${encodedFull}`)}`
+  ];
 
-  // DESCARGA EN PARALELO ULTRA RÁPIDA
-  const fetchPromises = textChunks.map(async (chunk, index) => {
-    if (!chunk.trim()) return null;
-    
-    // Desfase microscópico para burlar el anti-spam (invisible para ti)
-    await new Promise(r => setTimeout(r, index * 80));
-    
-    const encoded = encodeURIComponent(chunk.trim());
-    const apis = [
-      `https://api.streamelements.com/kappa/v2/speech?voice=${vConfig.streamElements}&text=${encoded}`,
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${vConfig.google}&client=tw-ob&q=${encoded}`)}`,
-      `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${vConfig.google}&client=tw-ob&q=${encoded}`
-    ];
-
-    for (const url of apis) {
-      try {
-        // Límite de tiempo: Si el servidor tarda más de 1.5s, pasa al siguiente
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 1500);
-        
-        const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
-        clearTimeout(timeoutId);
-        
-        if (res.ok) {
-          const buf = await res.arrayBuffer();
-          if (buf.byteLength > 1000) return buf;
-        }
-      } catch (e) { continue; } // Si falla rápido, pasa al siguiente sin quejarse
-    }
-    return null;
-  });
-
-  let downloadedBuffers: (ArrayBuffer | null)[] = [];
-  try {
-    // RELOJ DE ARENA GLOBAL: Si no ha descargado todo en 3.5 segundos, corta para que no te quedes en el 5%
-    downloadedBuffers = await Promise.race([
-      Promise.all(fetchPromises),
-      new Promise<(ArrayBuffer | null)[]>((_, reject) => setTimeout(() => reject(new Error("Timeout")), 3500))
-    ]);
-  } catch (e) {
-    console.warn("La red va lenta. Pasando directo a modo offline para no congelar la pantalla.");
-  }
-
-  const validBuffers = downloadedBuffers.filter(b => b !== null) as ArrayBuffer[];
   let finalAudioBlob: Blob | null = null;
 
-  if (validBuffers.length > 0) {
-    const totalLength = validBuffers.reduce((acc, b) => acc + b.byteLength, 0);
-    const merged = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const b of validBuffers) {
-      merged.set(new Uint8Array(b), offset);
-      offset += b.byteLength;
+  for (const url of apis) {
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (res.ok) {
+        const buf = await res.arrayBuffer();
+        if (buf.byteLength > 1000) {
+          finalAudioBlob = new Blob([buf], { type: "audio/mp3" });
+          break; // Si tiene éxito, sale y usa esta voz
+        }
+      }
+    } catch (e) {
+      continue;
     }
-    finalAudioBlob = new Blob([merged], { type: "audio/mp3" });
-  } else {
-    // Si falla por completo, genera voz local al instante sin que te des cuenta
+  }
+
+  // Salvavidas absoluto por si no hay internet
+  if (!finalAudioBlob) {
     finalAudioBlob = await generateOfflineVoice(rawWords, targetDurationSec);
   }
 
   return { audioBlob: finalAudioBlob, cues };
 }
 
-// VOZ LOCAL DE EMERGENCIA INSTANTÁNEA
 async function generateOfflineVoice(words: string[], duration: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
   const sampleRate = 44100;
   const offlineCtx = new AC(1, sampleRate * duration, sampleRate);
-  
   const timePerWord = duration / words.length;
   
   for (let i = 0; i < words.length; i++) {
@@ -114,13 +83,10 @@ async function generateOfflineVoice(words: string[], duration: number): Promise<
     const gain = offlineCtx.createGain();
     osc.frequency.value = 400 + (words[i].length * 30); 
     osc.type = "sine"; 
-    
     gain.gain.setValueAtTime(0.5, i * timePerWord);
     gain.gain.exponentialRampToValueAtTime(0.01, (i * timePerWord) + (timePerWord * 0.8));
-    
     osc.connect(gain);
     gain.connect(offlineCtx.destination);
-    
     osc.start(i * timePerWord);
     osc.stop((i * timePerWord) + timePerWord);
   }
@@ -129,12 +95,10 @@ async function generateOfflineVoice(words: string[], duration: number): Promise<
   return audioBufferToWav(renderedBuffer);
 }
 
-// MÚSICA PHONK PARA EL MODO MUSICAL
 export async function generateViralMusic(duration: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
   const sampleRate = 44100;
   const offlineCtx = new AC(1, sampleRate * (duration + 2), sampleRate);
-  
   const bpm = 120;
   const beatTime = 60 / bpm; 
   
@@ -171,12 +135,10 @@ export async function generateViralMusic(duration: number): Promise<Blob> {
     bassGain.connect(offlineCtx.destination);
     bass.start(i); bass.stop(i + beatTime);
   }
-  
   const renderedBuffer = await offlineCtx.startRendering();
   return audioBufferToWav(renderedBuffer);
 }
 
-// Transformador de datos de audio
 function audioBufferToWav(buffer: AudioBuffer): Blob {
   const numOfChan = buffer.numberOfChannels;
   const length = buffer.length * numOfChan * 2 + 44;

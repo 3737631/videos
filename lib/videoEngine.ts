@@ -2,29 +2,32 @@ import { RenderConfig, SubtitleCue } from "@/types";
 
 const INVISIBLE_CSS = "position:fixed;top:0;left:-9999px;width:270px;height:480px;z-index:-100;pointer-events:none;";
 
+// CORRECCIÓN DEFINITIVA DE SUBTÍTULOS
 function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number) {
   const words = text.split(' ');
   let line = '';
   const lines = [];
-  const lineHeight = 30; 
+  const lineHeight = 34; // Espaciado entre líneas para que respiren
 
   for (let n = 0; n < words.length; n++) {
     const testLine = line + words[n] + ' ';
     const metrics = ctx.measureText(testLine);
     if (metrics.width > maxWidth && n > 0) {
-      lines.push(line);
+      lines.push(line.trim());
       line = words[n] + ' ';
     } else {
       line = testLine;
     }
   }
-  lines.push(line);
+  lines.push(line.trim());
   
+  // Centrado vertical exacto de todo el bloque
   let currentY = y - ((lines.length - 1) * lineHeight) / 2; 
   
   for (let k = 0; k < lines.length; k++) {
-    ctx.strokeText(lines[k].trim(), x, currentY);
-    ctx.fillText(lines[k].trim(), x, currentY);
+    // Al haber definido ctx.textAlign = "center", la 'x' central funciona perfectamente
+    ctx.strokeText(lines[k], x, currentY);
+    ctx.fillText(lines[k], x, currentY);
     currentY += lineHeight;
   }
 }
@@ -72,12 +75,9 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         const source = audioCtx.createBufferSource();
         source.buffer = decoded;
         
-        // CERO SILENCIOS: Fuerza a la pista a estirarse/comprimirse para cuadrar PERFECTO con el vídeo.
-        // Al haber generado muchas más palabras en la UI, el audio original dura mucho más que el vídeo.
-        // Por tanto, decoded.duration > targetDuration. 
-        // Esto hará que speedRatio sea > 1, forzando a la voz a hablar RÁPIDO y terminar en el seg 00.
         if (mode === "voice") {
           let speedRatio = decoded.duration / targetDuration;
+          speedRatio = Math.max(0.8, Math.min(speedRatio, 1.8)); 
           source.playbackRate.value = speedRatio;
         } else {
           source.loop = true;
@@ -241,14 +241,15 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
           const cue = cues.find(c => elapsed >= c.start && elapsed <= c.end);
           if (cue) {
             ctx.font = '900 24px "Inter", sans-serif'; 
-            ctx.textAlign = "center"; 
+            ctx.textAlign = "center"; // Alineación al centro perfecta
             ctx.textBaseline = "middle";
             ctx.lineJoin = "round";
             
-            ctx.lineWidth = 5; 
+            ctx.lineWidth = 6; // Borde un poco más grueso para que destaque
             ctx.strokeStyle = "#000";
             ctx.fillStyle = "#FFE600";
             
+            // width / 2 es el centro de la pantalla. maxWidth 240 deja 15px de margen a cada lado
             drawWrappedText(ctx, cue.text, width / 2, height * 0.75, 240);
           }
         }

@@ -11,7 +11,7 @@ export default function App() {
   const [clips, setClips] = useState<VideoClip[]>([]);
   const [mode, setMode] = useState<AppMode | null>(null);
   const [productPrompt, setProductPrompt] = useState("");
-  const [language, setLanguage] = useState("es"); // NUEVO: Estado del idioma
+  const [language, setLanguage] = useState("es"); 
   const [totalDuration, setTotalDuration] = useState(0);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
@@ -47,7 +47,7 @@ export default function App() {
     lector.load();
 
     let viralCuts: VideoClip[] = [];
-    const cutLength = 2.0; // Cortes un poco más rápidos para mayor dinamismo
+    const cutLength = 2.0; 
 
     rawVideos.forEach(raw => {
       const numCuts = Math.floor(raw.dur / cutLength);
@@ -83,9 +83,7 @@ export default function App() {
     setStep(2);
   };
 
-  // GENERADOR MULTI-IDIOMA Y ALTA VELOCIDAD (CERO SILENCIOS)
   const generateScriptLocal = (info: string, durationSeconds: number, lang: string) => {
-    // 3.4 palabras por segundo asegura que hable rápido y no queden huecos de silencio al final
     const targetWordCount = Math.floor(durationSeconds * 3.4); 
 
     const cleanInfo = info
@@ -135,7 +133,6 @@ export default function App() {
     script += " " + d.calls[Math.floor(Math.random() * d.calls.length)];
     words = script.split(" ");
 
-    // Forzar longitud exacta
     if (words.length > targetWordCount) {
       return words.slice(0, targetWordCount).join(" ") + "!";
     } else {
@@ -162,7 +159,6 @@ export default function App() {
         const script = generateScriptLocal(productPrompt, totalDuration, language);
         
         setStatus("Sintetizando voz nativa...");
-        // Pasamos el idioma al motor TTS
         const tts = await generateSpeechAndCues(script, totalDuration, language);
         audioBlob = tts.audioBlob;
         cues = tts.cues;
@@ -243,7 +239,6 @@ export default function App() {
               <>
                 <div className="flex items-center justify-between">
                   <label className="font-bold text-base sm:text-lg">Describe el producto</label>
-                  {/* SELECTOR DE IDIOMA */}
                   <div className="flex items-center gap-2 bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1">
                     <Globe className="w-4 h-4 text-zinc-400" />
                     <select 
