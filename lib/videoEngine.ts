@@ -64,11 +64,13 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     source.buffer = audioBuffer;
     if (mode === "voice") {
       if (isFallback) {
-        source.playbackRate.value = 1.0;
+        // Fallback también rápido viral pero sin pitido
+        source.playbackRate.value = 1.14;
+        actualDuration = actualDuration / 1.14;
       } else {
-        // Viral rápido sin silencio: 1.12 es el sweet spot tik tok
-        source.playbackRate.value = 1.12;
-        actualDuration = actualDuration / 1.12;
+        // Viral rápido sin silencio: 1.18 más rápido tik tok
+        source.playbackRate.value = 1.18;
+        actualDuration = actualDuration / 1.18;
       }
     } else {
       source.loop = true;
@@ -187,12 +189,17 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
         }
       });
       try { await v.play(); } catch {}
-      // Si el vídeo no pudo cargar, log
+      // Solo cambiar si el vídeo cargó bien, si no mantener el anterior y no dejar negro
       if (v.readyState < 2 || v.videoWidth === 0) {
-        console.warn(`[VIDEO] clip ${index} no listo readyState=${v.readyState} w=${v.videoWidth}`);
+        console.warn(`[VIDEO] clip ${index} no listo readyState=${v.readyState} w=${v.videoWidth} - manteniendo anterior`);
+        v.removeAttribute("src");
+        try { v.load(); } catch {}
+        v.remove();
+        return;
       }
       const old = activeVideo;
       activeVideo = v;
+      currentClipIdx = index;
       if (old) {
         try { old.pause(); } catch {}
         old.removeAttribute("src");
@@ -202,8 +209,9 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     };
 
     const start = performance.now();
-    currentClipIdx = 0;
+    currentClipIdx = -1;
     loadVideoAsync(0).then(() => {
+      if (currentClipIdx === -1 && activeVideo) currentClipIdx = 0;
       // Primer frame inmediato para no grabar negro inicial
       const drawOnce = () => {
         ctx.fillStyle = "#000";
@@ -228,7 +236,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
           if (elapsed >= actualDuration) { stopRecording(); return; }
           const neededIdx = Math.min(clips.length - 1, Math.floor(elapsed / clipDur));
           if (neededIdx !== currentClipIdx) {
-            currentClipIdx = neededIdx;
             loadVideoAsync(neededIdx);
           }
           // Auto-reanudar vídeo si se pausó (evita negro con varios clips)

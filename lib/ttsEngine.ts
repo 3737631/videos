@@ -49,12 +49,12 @@ function base64ToBlob(dataURI: string): Blob {
   return new Blob([ab], { type: mimeString });
 }
 
-// Voz local suave - no pitido, no canción
+// Voz local suave - no pitido, no canción, más rápida viral
 async function generateAnimaleseVoice(text: string, ctx: AudioContext): Promise<AudioBuffer> {
   try {
     const chars = text.split('');
-    const charDuration = 0.085;
-    const totalDuration = Math.max(1.2, chars.length * charDuration + 0.6);
+    const charDuration = 0.068;
+    const totalDuration = Math.max(1.0, chars.length * charDuration + 0.45);
     const OfflineAudioContextClass = window.OfflineAudioContext || (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext }).webkitOfflineAudioContext;
     if (!OfflineAudioContextClass) throw new Error("Audio Offline no soportado");
     const sampleRate = ctx.sampleRate || 44100;
