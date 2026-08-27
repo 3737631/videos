@@ -1,5 +1,6 @@
 export async function generateSpeechAndCues(
   text: string,
+  targetDurationSec: number = 10,
   lang: string = "es"
 ): Promise<{ audioBlob: Blob; wordChunks: string[] }> {
   
@@ -32,7 +33,7 @@ export async function generateSpeechAndCues(
   for (const url of apis) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2500);
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
 
       const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
       clearTimeout(timeoutId);
@@ -49,30 +50,29 @@ export async function generateSpeechAndCues(
     }
   }
 
+  // Si la red falla, usamos respaldo pero garantizando que dure lo que el vídeo
   if (!finalAudioBlob) {
-    finalAudioBlob = await generateOfflineVoice(rawWords.length);
+    finalAudioBlob = await generateOfflineVoice(targetDurationSec);
   }
 
   return { audioBlob: finalAudioBlob, wordChunks };
 }
 
-async function generateOfflineVoice(wordCount: number): Promise<Blob> {
+async function generateOfflineVoice(durationSec: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
-  const duration = wordCount * 0.35; 
-  const offlineCtx = new AC(1, 44100 * duration, 44100);
+  const offlineCtx = new AC(1, 44100 * durationSec, 44100);
   
-  for (let i = 0; i < wordCount; i++) {
-    const osc = offlineCtx.createOscillator();
-    const gain = offlineCtx.createGain();
-    osc.frequency.value = 400 + (Math.random() * 50); 
-    osc.type = "sine"; 
-    gain.gain.setValueAtTime(0.5, i * 0.35);
-    gain.gain.exponentialRampToValueAtTime(0.01, (i * 0.35) + 0.3);
-    osc.connect(gain);
-    gain.connect(offlineCtx.destination);
-    osc.start(i * 0.35);
-    osc.stop((i * 0.35) + 0.35);
-  }
+  const osc = offlineCtx.createOscillator();
+  const gain = offlineCtx.createGain();
+  osc.frequency.value = 400; 
+  osc.type = "sine"; 
+  gain.gain.setValueAtTime(0.1, 0);
+  gain.gain.setValueAtTime(0, durationSec);
+  
+  osc.connect(gain);
+  gain.connect(offlineCtx.destination);
+  osc.start(0);
+  osc.stop(durationSec);
   
   const renderedBuffer = await offlineCtx.startRendering();
   return audioBufferToWav(renderedBuffer);
@@ -94,7 +94,8 @@ export async function generateViralMusic(duration: number): Promise<Blob> {
     kickGain.gain.exponentialRampToValueAtTime(0.01, i + 0.5);
     kick.connect(kickGain);
     kickGain.connect(offlineCtx.destination);
-    kick.start(i); kick.stop(i + 0.5);
+    kick.start(i);
+    kick.stop(i + 0.5);
     
     if (i + beatTime / 2 < duration + 2) {
       const hat = offlineCtx.createOscillator();
@@ -105,7 +106,8 @@ export async function generateViralMusic(duration: number): Promise<Blob> {
       hatGain.gain.exponentialRampToValueAtTime(0.01, i + beatTime / 2 + 0.1);
       hat.connect(hatGain);
       hatGain.connect(offlineCtx.destination);
-      hat.start(i + beatTime / 2); hat.stop(i + beatTime / 2 + 0.1);
+      hat.start(i + beatTime / 2);
+      hat.stop(i + beatTime / 2 + 0.1);
     }
   }
   const renderedBuffer = await offlineCtx.startRendering();

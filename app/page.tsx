@@ -12,7 +12,7 @@ export default function App() {
   const [mode, setMode] = useState<AppMode | null>(null);
   const [productPrompt, setProductPrompt] = useState("");
   const [language, setLanguage] = useState("es"); 
-  const [totalDuration, setTotalDuration] = useState(10);
+  const [totalDuration, setTotalDuration] = useState(12);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
   const [finalVideo, setFinalVideo] = useState<string | null>(null);
@@ -48,7 +48,7 @@ export default function App() {
     lector.load();
 
     setClips(validClips.sort(() => Math.random() - 0.5));
-    setTotalDuration(Math.min(15, Math.max(6, Math.round(accDur))));
+    setTotalDuration(Math.min(15, Math.max(10, Math.round(accDur))));
     setStep(2);
   };
 
@@ -99,7 +99,7 @@ export default function App() {
         setStatus(`Generando voz en ${language.toUpperCase()}...`);
         const script = generateScriptLocal(productPrompt, language);
         
-        const tts = await generateSpeechAndCues(script, language);
+        const tts = await generateSpeechAndCues(script, totalDuration, language);
         audioBlob = tts.audioBlob;
         wordChunks = tts.wordChunks;
       } else {

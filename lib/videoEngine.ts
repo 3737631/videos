@@ -52,7 +52,9 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
 
   let dest: MediaStreamAudioDestinationNode | null = null;
   let audioCtx: AudioContext | null = null;
-  let actualDuration = targetDuration || 10;
+  
+  // GARANTÍA DE TIEMPO: Nunca bajará de 10 segundos
+  let actualDuration = Math.max(10, targetDuration || 10);
   let dynamicCues: {text: string, start: number, end: number}[] = [];
 
   try {
@@ -73,14 +75,14 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         const ab = await audioBlob.arrayBuffer();
         const decoded = await audioCtx.decodeAudioData(ab).catch(() => null);
 
-        if (decoded && decoded.duration > 0) {
-          actualDuration = decoded.duration;
+        if (decoded && decoded.duration > 2) {
+          actualDuration = Math.max(8, decoded.duration);
           const source = audioCtx.createBufferSource();
           source.buffer = decoded;
           
           if (mode === "voice") {
-            source.playbackRate.value = 1.25; // Ritmo TikTok constante
-            actualDuration = actualDuration / 1.25;
+            source.playbackRate.value = 1.20; // Ritmo ágil
+            actualDuration = actualDuration / 1.20;
           } else {
             source.loop = true;
           }
@@ -105,18 +107,17 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
     console.warn("Aviso de audio:", e);
   }
 
-  const stream = (canvas as any).captureStream ? canvas.captureStream(FPS) : (canvas as any).mozCaptureStream ? (canvas as any).mozCaptureStream(FPS) : null;
-  if (!stream) throw new Error("canvas.captureStream no está soportado en este navegador.");
-
+  const captureStreamFunc = canvas.captureStream || (canvas as any).mozCaptureStream || (canvas as any).webkitCaptureStream;
+  if (!captureStreamFunc) throw new Error("Tu navegador no soporta captura de vídeo.");
+  
+  const stream = captureStreamFunc.call(canvas, FPS);
   if (dest) {
     dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
   }
 
-  // Detector Universal de Códecs compatible con Chrome, Firefox, Safari e iOS
   const possibleMimes = [
     "video/webm;codecs=vp8,opus",
     "video/webm",
-    "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
     "video/mp4"
   ];
   let selectedMime = "";
@@ -185,10 +186,10 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
     };
 
     recorder.onstop = () => {
-      setTimeout(finalize, 150);
+      setTimeout(finalize, 200);
     };
 
-    recorder.onerror = () => reject(new Error("Error interno del grabador de vídeo."));
+    recorder.onerror = () => reject(new Error("Error interno del grabador."));
 
     recorder.start();
 
@@ -213,7 +214,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         };
         newVideo.oncanplay = done;
         newVideo.onloadeddata = done;
-        setTimeout(done, 1200); // Timeout de seguridad para evitar bloqueos
+        setTimeout(done, 1200);
       });
       
       newVideo.play().catch(()=>{});
@@ -286,6 +287,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
     };
     
     drawLoop();
-    setTimeout(stopRecording, (actualDuration + 2) * 1000);
+    setTimeout(stopRecording, (actualDuration + 3) * 1000);
   });
 }
