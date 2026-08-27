@@ -64,12 +64,15 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     source.buffer = audioBuffer;
     if (mode === "voice") {
       if (isFallback) {
-        source.playbackRate.value = 1.20;
-        actualDuration = actualDuration / 1.20;
+        const rate = 1.12;
+        source.playbackRate.value = rate;
+        if ("detune" in source && source.detune) source.detune.value = -1200 * Math.log2(rate);
+        actualDuration = actualDuration / rate;
       } else {
-        // Viral más rápido: 1.27
-        source.playbackRate.value = 1.27;
-        actualDuration = actualDuration / 1.27;
+        const rate = 1.22;
+        source.playbackRate.value = rate;
+        if ("detune" in source && source.detune) source.detune.value = -1200 * Math.log2(rate);
+        actualDuration = actualDuration / rate;
       }
     } else {
       source.loop = true;
