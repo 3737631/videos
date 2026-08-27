@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import { UploadCloud, Music, Mic, Wand2, Download, RefreshCcw, Globe } from "lucide-react";
-import { VideoClip, AppMode, CustomWindow } from "@/types";
+import { VideoClip, AppMode } from "@/types";
 import { renderFinalVideo } from "@/lib/videoEngine";
 import { generateSpeechAndCues, generateViralMusic } from "@/lib/ttsEngine";
 
@@ -18,7 +18,6 @@ export default function App() {
   const [finalVideo, setFinalVideo] = useState<string | null>(null);
   const [videoMimeType, setVideoMimeType] = useState<string>("video/webm");
   
-  // Referencia para mantener vivo el contexto desbloqueado
   const sharedAudioCtxRef = useRef<AudioContext | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -93,12 +92,11 @@ export default function App() {
   const processVideo = async () => {
     setStep(4);
     setProgress(5);
-    setStatus("Desbloqueando motor de audio...");
+    setStatus("Activando canales de audio...");
 
     try {
-      // MAGIA: Inicializar contexto exactamente en el evento de click (soluciona bug de mudo en Safari/iOS)
-      const win = window as CustomWindow;
-      const AudioContextClass = window.AudioContext || win.webkitAudioContext;
+      // MAGIA: El AudioContext DEBE crearse durante la interacción del usuario para evitar bloqueos
+      const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       if (!AudioContextClass) throw new Error("AudioContext no soportado");
       const ctx = new AudioContextClass();
       if (ctx.state === "suspended") await ctx.resume();
@@ -108,8 +106,9 @@ export default function App() {
       let wordChunks: string[] = [];
 
       if (mode === "voice") {
-        setStatus(`Generando voz real en ${language.toUpperCase()}...`);
+        setStatus(`Generando voz en ${language.toUpperCase()}...`);
         const script = generateScriptLocal(productPrompt, language);
+        
         const tts = await generateSpeechAndCues(script, language, ctx);
         audioBuffer = tts.audioBuffer;
         wordChunks = tts.wordChunks;
@@ -137,9 +136,9 @@ export default function App() {
         sharedAudioCtxRef.current.close().catch(() => {});
         sharedAudioCtxRef.current = null;
       }
-      const msg = e instanceof Error ? e.message : "Ocurrió un error al procesar el vídeo.";
+      const msg = e instanceof Error ? e.message : "Ocurrió un error en el procesado.";
       alert("Error: " + msg);
-      setStep(3);
+      setStep(3); 
     }
   };
 
@@ -160,7 +159,7 @@ export default function App() {
     <main className="min-h-[100dvh] bg-[#09090b] text-white flex flex-col items-center justify-center p-4 sm:p-6 overflow-x-hidden">
       <div className="w-full max-w-xl text-center mb-6 sm:mb-8 mt-4">
         <div className="inline-block bg-purple-500/10 border border-purple-500/30 text-purple-400 px-3 py-1 rounded-full text-[10px] sm:text-xs font-bold mb-3 sm:mb-4 tracking-widest">
-          CREADOR VIRAL (CLIENT-SIDE ESTRICTO)
+          CREADOR VIRAL V3 (ESTABILIDAD ABSOLUTA)
         </div>
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent leading-tight">
           Creador Viral
@@ -193,7 +192,7 @@ export default function App() {
               <div className="p-3 sm:p-4 bg-purple-500/10 rounded-full shrink-0"><Mic className="text-purple-400 w-6 h-6" /></div>
               <div className="text-left">
                 <h3 className="font-bold text-base sm:text-lg">Modo Narrador IA</h3>
-                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Guion, voz humana rápida y subtítulos.</p>
+                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Guion, voz y subtítulos.</p>
               </div>
             </button>
           </div>

@@ -22,8 +22,3 @@ export interface RenderConfig {
   targetDuration: number;
   onProgress: (progress: number) => void;
 }
-
-export interface CustomWindow extends Window {
-  webkitAudioContext?: typeof AudioContext;
-  webkitOfflineAudioContext?: typeof OfflineAudioContext;
-}

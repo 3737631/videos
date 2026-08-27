@@ -1,5 +1,3 @@
-import { CustomWindow } from "@/types";
-
 export interface SpeechResult {
   audioBuffer: AudioBuffer;
   wordChunks: string[];
@@ -16,7 +14,7 @@ function cleanScript(text: string): string {
 function createWordChunks(text: string): string[] {
   const words = text.split(/\s+/).filter(Boolean);
   const chunks: string[] = [];
-  // Agrupamos en bloques de 1 a 2 palabras para que quepan centradas en 270px
+  // Agrupamos en 1 o 2 palabras máximo para formato TikTok (vertical)
   for (let i = 0; i < words.length; i += 2) {
     const chunk = words.slice(i, i + 2).join(" ");
     if (chunk) chunks.push(chunk.toUpperCase());
@@ -24,41 +22,95 @@ function createWordChunks(text: string): string[] {
   return chunks;
 }
 
-function splitIntoShortSentences(text: string, maxLength: number): string[] {
-  const words = text.split(/\s+/);
-  const chunks: string[] = [];
-  let currentChunk = "";
+// ============================================================================
+// FALLBACK INVENCIBLE: Generador de voz estilo Animal Crossing (Local / Offline)
+// ============================================================================
+async function generateAnimaleseVoice(text: string, ctx: AudioContext): Promise<AudioBuffer> {
+  const chars = text.split('');
+  const charDuration = 0.06; // Velocidad rápida
+  const totalDuration = chars.length * charDuration + 0.5;
 
-  for (const word of words) {
-    if ((currentChunk + " " + word).trim().length <= maxLength) {
-      currentChunk = (currentChunk + " " + word).trim();
-    } else {
-      if (currentChunk) chunks.push(currentChunk);
-      currentChunk = word;
+  const OfflineAudioContextClass = window.OfflineAudioContext || (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext }).webkitOfflineAudioContext;
+  if (!OfflineAudioContextClass) throw new Error("Audio Offline no soportado");
+  const offlineCtx = new OfflineAudioContextClass(1, Math.ceil(ctx.sampleRate * totalDuration), ctx.sampleRate);
+  let currentTime = 0;
+
+  for (const char of chars) {
+    if (char === ' ') {
+      currentTime += charDuration * 1.5;
+      continue;
     }
+
+    const osc = offlineCtx.createOscillator();
+    const gain = offlineCtx.createGain();
+    const filter = offlineCtx.createBiquadFilter();
+
+    osc.type = "square"; // Sonido retro clásico
+
+    const charCode = char.toLowerCase().charCodeAt(0);
+    const isVowel = ['a','e','i','o','u'].includes(char.toLowerCase());
+    
+    // Tono dinámico basado en la letra
+    let baseFreq = 300 + ((charCode % 26) * 15);
+    if (isVowel) baseFreq += 150;
+
+    osc.frequency.setValueAtTime(baseFreq, currentTime);
+    osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.5, currentTime + charDuration);
+
+    filter.type = "bandpass";
+    filter.frequency.value = 1500;
+    filter.Q.value = 1.5;
+
+    gain.gain.setValueAtTime(0, currentTime);
+    gain.gain.linearRampToValueAtTime(0.15, currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.001, currentTime + charDuration);
+
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(offlineCtx.destination);
+
+    osc.start(currentTime);
+    osc.stop(currentTime + charDuration);
+
+    currentTime += charDuration;
   }
-  if (currentChunk) chunks.push(currentChunk);
-  return chunks;
+
+  return await offlineCtx.startRendering();
 }
 
-async function fetchTTSBufferWithFallbacks(text: string, lang: string, ctx: AudioContext): Promise<AudioBuffer> {
-  const encodedText = encodeURIComponent(text);
+// ============================================================================
+// GENERADOR PRINCIPAL DE VOZ (Intenta APIs, si fallan usa Animal Crossing)
+// ============================================================================
+export async function generateSpeechAndCues(
+  text: string,
+  lang: string,
+  sharedCtx: AudioContext // El contexto VIVO pasado desde el clic del botón
+): Promise<SpeechResult> {
+  const cleanText = cleanScript(text);
+
+  if (!cleanText) throw new Error("El guion está vacío.");
+
+  const limitedText = cleanText.length > 250 ? `${cleanText.slice(0, 247).trim()}...` : cleanText;
+  const wordChunks = createWordChunks(limitedText);
+
+  if (wordChunks.length === 0) throw new Error("No hay palabras en el guion.");
+
   const SE_VOICES: Record<string, string> = { es: "Mia", en: "Brian", pt: "Vitoria", fr: "Celine" };
   const voice = SE_VOICES[lang] || "Mia";
-  
-  const googleTtsUrl = `https://translate.googleapis.com/translate_tts?client=gtx&ie=UTF-8&tl=${lang}&q=${encodedText}`;
+  const encodedText = encodeURIComponent(limitedText);
+  const googleUrl = encodeURIComponent(`https://translate.googleapis.com/translate_tts?client=gtx&ie=UTF-8&tl=${lang}&q=${encodedText}`);
 
-  // 3 Pasarelas 100% seguras y compatibles con GitHub Pages (CORS Abierto)
   const urls = [
     `https://api.streamelements.com/kappa/v2/speech?voice=${voice}&text=${encodedText}`,
-    `https://api.allorigins.win/get?url=${encodeURIComponent(googleTtsUrl)}`, // JSON proxy ultraseguro
-    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(googleTtsUrl)}`
+    `https://api.allorigins.win/get?url=${googleUrl}`
   ];
+
+  let audioBuffer: AudioBuffer | null = null;
 
   for (const url of urls) {
     try {
       const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), 8000);
+      const id = setTimeout(() => controller.abort(), 6000); // 6s máximo para que no parezca colgado
       const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
       clearTimeout(id);
 
@@ -66,11 +118,9 @@ async function fetchTTSBufferWithFallbacks(text: string, lang: string, ctx: Audi
 
       let arrayBuffer: ArrayBuffer;
 
-      // Si usamos AllOrigins, decodificamos el JSON y extraemos el audio base64 puro
-      if (url.includes("allorigins.win/get")) {
+      if (url.includes("allorigins")) {
         const json = await res.json();
-        if (!json.contents || !json.contents.includes("audio")) continue; // Falso positivo (HTML de error)
-        
+        if (!json.contents || !json.contents.includes("audio")) continue; // Falso positivo
         const base64 = json.contents.split(',')[1];
         const binary = atob(base64);
         const bytes = new Uint8Array(binary.length);
@@ -78,63 +128,26 @@ async function fetchTTSBufferWithFallbacks(text: string, lang: string, ctx: Audi
         arrayBuffer = bytes.buffer;
       } else {
         const blob = await res.blob();
-        if (blob.size < 200 || blob.type.includes("text") || blob.type.includes("html")) continue; // Protege contra webs de error
+        if (blob.size < 200 || blob.type.includes("html")) continue; 
         arrayBuffer = await blob.arrayBuffer();
       }
 
-      // Validamos y decodificamos en el contexto activo
-      return await ctx.decodeAudioData(arrayBuffer);
-
+      // Decodifica usando el contexto VIVO. Jamás se congelará.
+      audioBuffer = await new Promise<AudioBuffer>((resolve, reject) => {
+        sharedCtx.decodeAudioData(arrayBuffer.slice(0), resolve, reject);
+      });
+      break; 
     } catch {
-      continue; // Falla este proxy, pasa al siguiente
+      continue;
     }
   }
 
-  throw new Error(`Los servidores de voz están saturados. Pausa el AdBlocker o reinténtalo en 1 minuto.`);
-}
-
-export async function generateSpeechAndCues(
-  text: string,
-  lang: string,
-  sharedCtx: AudioContext
-): Promise<SpeechResult> {
-  const cleanText = cleanScript(text);
-
-  if (!cleanText) throw new Error("El guion está vacío.");
-
-  const wordChunks = createWordChunks(cleanText);
-  // Dividimos en frases muy cortas (120 caracteres) para que Google no nos bloquee
-  const textChunks = splitIntoShortSentences(cleanText, 120); 
-
-  let totalDuration = 0;
-  const decodedBuffers: AudioBuffer[] = [];
-
-  // Descargamos y verificamos cada fragmento
-  for (const tChunk of textChunks) {
-    const buffer = await fetchTTSBufferWithFallbacks(tChunk, lang, sharedCtx);
-    decodedBuffers.push(buffer);
-    totalDuration += buffer.duration;
+  // Si todas las conexiones de voz fueron bloqueadas, entra el FALLBACK ANIMAL CROSSING
+  if (!audioBuffer) {
+    audioBuffer = await generateAnimaleseVoice(limitedText, sharedCtx);
   }
 
-  // Mezclamos la voz en una pista maestra
-  const win = window as CustomWindow;
-  const OfflineAudioContextClass = window.OfflineAudioContext || win.webkitOfflineAudioContext;
-  if (!OfflineAudioContextClass) throw new Error("Audio Offline no soportado.");
-
-  const offlineCtx = new OfflineAudioContextClass(1, Math.max(1, Math.ceil(sharedCtx.sampleRate * totalDuration)), sharedCtx.sampleRate);
-  
-  let currentTime = 0;
-  for (const buf of decodedBuffers) {
-    const source = offlineCtx.createBufferSource();
-    source.buffer = buf;
-    source.connect(offlineCtx.destination);
-    source.start(currentTime);
-    currentTime += buf.duration;
-  }
-
-  const finalBuffer = await offlineCtx.startRendering();
-
-  return { audioBuffer: finalBuffer, wordChunks };
+  return { audioBuffer, wordChunks };
 }
 
 export async function generateViralMusic(duration: number): Promise<AudioBuffer> {
@@ -142,10 +155,8 @@ export async function generateViralMusic(duration: number): Promise<AudioBuffer>
   const sampleRate = 44100;
   const renderDuration = safeDuration + 0.5;
 
-  const win = window as CustomWindow;
-  const OfflineAudioContextClass = window.OfflineAudioContext || win.webkitOfflineAudioContext;
-  if (!OfflineAudioContextClass) throw new Error("Audio Offline no soportado.");
-
+  const OfflineAudioContextClass = window.OfflineAudioContext || (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext }).webkitOfflineAudioContext;
+  if (!OfflineAudioContextClass) throw new Error("Audio Offline no soportado");
   const offlineCtx = new OfflineAudioContextClass(1, Math.ceil(sampleRate * renderDuration), sampleRate);
   const bpm = 112;
   const beat = 60 / bpm;
@@ -194,6 +205,5 @@ export async function generateViralMusic(duration: number): Promise<AudioBuffer>
     }
   }
 
-  // Devolvemos el AudioBuffer crudo, eliminando el fallo de conversión WAV
   return await offlineCtx.startRendering();
 }
