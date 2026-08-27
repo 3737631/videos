@@ -1,12 +1,14 @@
 export async function generateSpeechAndCues(
   text: string,
-  targetDurationSec: number = 10,
-  lang: string = "es"
+  lang: string = "es",
+  targetDurationSec: number = 10
 ): Promise<{ audioBlob: Blob; wordChunks: string[] }> {
   
   const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑçãõâêîôûàèìòù.,!¿?'-]/g, "").trim();
   const rawWords = cleanText.split(/\s+/).filter(Boolean);
-  if (rawWords.length === 0) throw new Error("Guion vacío");
+  if (rawWords.length === 0) {
+    rawWords.push("¡Increíble!", "descúbrelo", "ahora");
+  }
 
   const wordChunks: string[] = [];
   for (let i = 0; i < rawWords.length; i += 2) {
@@ -33,14 +35,14 @@ export async function generateSpeechAndCues(
   for (const url of apis) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
 
       const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
       clearTimeout(timeoutId);
 
       if (res.ok) {
         const buf = await res.arrayBuffer();
-        if (buf.byteLength > 1000) {
+        if (buf.byteLength > 500) {
           finalAudioBlob = new Blob([buf], { type: "audio/mp3" });
           break; 
         }
@@ -50,9 +52,9 @@ export async function generateSpeechAndCues(
     }
   }
 
-  // Si la red falla, usamos respaldo pero garantizando que dure lo que el vídeo
+  // Si la red falla, usamos respaldo garantizando la duración exacta del vídeo
   if (!finalAudioBlob) {
-    finalAudioBlob = await generateOfflineVoice(targetDurationSec);
+    finalAudioBlob = await generateOfflineVoice(Math.max(8, targetDurationSec));
   }
 
   return { audioBlob: finalAudioBlob, wordChunks };
@@ -64,9 +66,9 @@ async function generateOfflineVoice(durationSec: number): Promise<Blob> {
   
   const osc = offlineCtx.createOscillator();
   const gain = offlineCtx.createGain();
-  osc.frequency.value = 400; 
+  osc.frequency.value = 440; 
   osc.type = "sine"; 
-  gain.gain.setValueAtTime(0.1, 0);
+  gain.gain.setValueAtTime(0.2, 0);
   gain.gain.setValueAtTime(0, durationSec);
   
   osc.connect(gain);
@@ -96,19 +98,6 @@ export async function generateViralMusic(duration: number): Promise<Blob> {
     kickGain.connect(offlineCtx.destination);
     kick.start(i);
     kick.stop(i + 0.5);
-    
-    if (i + beatTime / 2 < duration + 2) {
-      const hat = offlineCtx.createOscillator();
-      const hatGain = offlineCtx.createGain();
-      hat.type = "square";
-      hat.frequency.setValueAtTime(8000, i + beatTime / 2);
-      hatGain.gain.setValueAtTime(0.1, i + beatTime / 2);
-      hatGain.gain.exponentialRampToValueAtTime(0.01, i + beatTime / 2 + 0.1);
-      hat.connect(hatGain);
-      hatGain.connect(offlineCtx.destination);
-      hat.start(i + beatTime / 2);
-      hat.stop(i + beatTime / 2 + 0.1);
-    }
   }
   const renderedBuffer = await offlineCtx.startRendering();
   return audioBufferToWav(renderedBuffer);
@@ -132,7 +121,8 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
   while (offset < buffer.length) {
     let sample = Math.max(-1, Math.min(1, channel[offset]));
     sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767) | 0;
-    out.setInt16(pos, sample, true); pos += 2; offset++;
+    out.setInt16(pos, sample, true); pos += 2;
+    offset++;
   }
   return new Blob([out], { type: "audio/wav" });
 }

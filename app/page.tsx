@@ -99,7 +99,8 @@ export default function App() {
         setStatus(`Generando voz en ${language.toUpperCase()}...`);
         const script = generateScriptLocal(productPrompt, language);
         
-        const tts = await generateSpeechAndCues(script, totalDuration, language);
+        // PASO CORRECTO DE ARGUMENTOS: (script, language, totalDuration)
+        const tts = await generateSpeechAndCues(script, language, totalDuration);
         audioBlob = tts.audioBlob;
         wordChunks = tts.wordChunks;
       } else {

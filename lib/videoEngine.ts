@@ -6,7 +6,7 @@ function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number,
   const words = text.split(' ');
   let line = '';
   const lines = [];
-  const lineHeight = 32; 
+  const lineHeight = 34; 
 
   for (let n = 0; n < words.length; n++) {
     const testLine = line + words[n] + ' ';
@@ -52,8 +52,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
 
   let dest: MediaStreamAudioDestinationNode | null = null;
   let audioCtx: AudioContext | null = null;
-  
-  // GARANTÍA DE TIEMPO: Nunca bajará de 10 segundos
   let actualDuration = Math.max(10, targetDuration || 10);
   let dynamicCues: {text: string, start: number, end: number}[] = [];
 
@@ -75,13 +73,13 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         const ab = await audioBlob.arrayBuffer();
         const decoded = await audioCtx.decodeAudioData(ab).catch(() => null);
 
-        if (decoded && decoded.duration > 2) {
+        if (decoded && decoded.duration > 1) {
           actualDuration = Math.max(8, decoded.duration);
           const source = audioCtx.createBufferSource();
           source.buffer = decoded;
           
           if (mode === "voice") {
-            source.playbackRate.value = 1.20; // Ritmo ágil
+            source.playbackRate.value = 1.20; // Ritmo ágil tipo TikTok
             actualDuration = actualDuration / 1.20;
           } else {
             source.loop = true;
@@ -92,16 +90,16 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         }
       }
 
-      if (mode === "voice" && wordChunks && wordChunks.length > 0) {
-        const timePerChunk = actualDuration / wordChunks.length;
-        wordChunks.forEach((text: string, i: number) => {
-          dynamicCues.push({
-            text: text.toUpperCase(),
-            start: i * timePerChunk,
-            end: (i + 1) * timePerChunk
-          });
+      // Sincronización de subtítulos con respaldo obligatorio
+      const validChunks = (wordChunks && wordChunks.length > 0) ? wordChunks : ["¡MIRA ESTO!", "NO TE LO PIERDAS", "PRUÉBALO YA"];
+      const timePerChunk = actualDuration / validChunks.length;
+      validChunks.forEach((text: string, i: number) => {
+        dynamicCues.push({
+          text: text.toUpperCase(),
+          start: i * timePerChunk,
+          end: (i + 1) * timePerChunk
         });
-      }
+      });
     }
   } catch (e) {
     console.warn("Aviso de audio:", e);
@@ -268,19 +266,20 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
           ctx.drawImage(activeVideo, (width - dw) / 2, (height - dh) / 2, dw, dh);
         }
 
+        // DIBUJADO DE SUBTÍTULOS (Modo Voz garantizado)
         if (mode === "voice") {
-          const cue = dynamicCues.find(c => elapsed >= c.start && elapsed < c.end);
+          const cue = dynamicCues.find(c => elapsed >= c.start && elapsed <= c.end);
           if (cue) {
-            ctx.font = '900 28px "Inter", sans-serif'; 
+            ctx.font = '900 30px "Inter", sans-serif'; 
             ctx.textAlign = "center"; 
             ctx.textBaseline = "middle";
             ctx.lineJoin = "round";
             
-            ctx.lineWidth = 5; 
+            ctx.lineWidth = 6; 
             ctx.strokeStyle = "#000";
             ctx.fillStyle = "#FFE600";
             
-            drawWrappedText(ctx, cue.text, width / 2, height * 0.75, width - 40);
+            drawWrappedText(ctx, cue.text, width / 2, height * 0.70, width - 40);
           }
         }
       }
