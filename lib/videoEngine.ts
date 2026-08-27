@@ -53,7 +53,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
   let dest: MediaStreamAudioDestinationNode | null = null;
   let audioCtx: AudioContext | null = null;
   let actualDuration = Math.max(10, targetDuration || 10);
-  let dynamicCues: string[] = [];
+  let dynamicCues: { text: string; start: number; end: number }[] = [];
 
   try {
     const AC = window.AudioContext || (window as any).webkitAudioContext;
@@ -90,7 +90,15 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         }
       }
 
-      dynamicCues = (wordChunks && wordChunks.length > 0) ? wordChunks : ["¡MIRA ESTO!", "DESCÚBRELO", "AHORA"];
+      const validChunks = (wordChunks && wordChunks.length > 0) ? wordChunks : ["¡MIRA ESTO!", "DESCÚBRELO", "AHORA"];
+      const timePerChunk = actualDuration / validChunks.length;
+      validChunks.forEach((text: string, i: number) => {
+        dynamicCues.push({
+          text: text,
+          start: i * timePerChunk,
+          end: (i + 1) * timePerChunk
+        });
+      });
     }
   } catch (e) {
     console.warn("Aviso de audio:", e);
@@ -259,11 +267,13 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
 
         // SUBTÍTULOS DINÁMICOS POR ÍNDICE EXACTO (Vertical 270x480, ancho máximo 200px para que nunca salgan)
         if (mode === "voice" && dynamicCues.length > 0) {
-          const progressRatio = Math.min(0.9999, elapsed / actualDuration);
-          const cueIndex = Math.floor(progressRatio * dynamicCues.length);
-          const currentText = dynamicCues[cueIndex];
+          let cue = dynamicCues.find(c => elapsed >= c.start && elapsed <= c.end);
+          if (!cue) {
+            const idx = Math.min(dynamicCues.length - 1, Math.floor((elapsed / actualDuration) * dynamicCues.length));
+            cue = dynamicCues[idx];
+          }
 
-          if (currentText) {
+          if (cue && cue.text) {
             ctx.font = '900 24px "Inter", sans-serif'; 
             ctx.textAlign = "center"; 
             ctx.textBaseline = "middle";
@@ -274,7 +284,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
             ctx.fillStyle = "#FFE600";
             
             // Ancho máximo estrictamente limitado a 200px para que encaje perfecto sin salirse
-            drawWrappedText(ctx, currentText, width / 2, height * 0.70, 200);
+            drawWrappedText(ctx, cue.text, width / 2, height * 0.70, 200);
           }
         }
       }
