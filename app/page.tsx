@@ -21,7 +21,8 @@ export default function App() {
   
   const sharedAudioCtxRef = useRef<AudioContext | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const [tiktokInput, setTiktokInput] = useState("");
+  const [tiktokDraft, setTiktokDraft] = useState("");
+  const [tiktokLinks, setTiktokLinks] = useState<string[]>([]);
   const [tiktokLoading, setTiktokLoading] = useState(false);
   const [tiktokError, setTiktokError] = useState("");
 
@@ -39,11 +40,42 @@ export default function App() {
     if (finalVideo) try { URL.revokeObjectURL(finalVideo); } catch {}
   };
 
-  const handleTikTokDownload = async () => {
-    if (!tiktokInput.trim()) {
-      setTiktokError("Pega al menos un enlace de TikTok");
+  const handleAddLink = () => {
+    const raw = tiktokDraft.trim();
+    if (!raw) return;
+    // Extraer todas las urls del texto pegado
+    const found = raw.match(/https?:\/\/[^\s]+/gi) || [];
+    const candidates = found.length > 0 ? found : [raw];
+    const valid = candidates.filter(u => /tiktok\.com|vm\.tiktok/i.test(u));
+    const toAdd = valid.length > 0 ? valid : candidates;
+    if (toAdd.length === 0) {
+      setTiktokError("Pega un enlace válido de TikTok");
       return;
     }
+    const dedup = toAdd.filter(u => !tiktokLinks.includes(u));
+    if (dedup.length === 0) {
+      setTiktokError("Ese enlace ya está añadido");
+      return;
+    }
+    if (tiktokLinks.length + dedup.length > 5) {
+      setTiktokError("Máximo 5 enlaces");
+      return;
+    }
+    setTiktokLinks(prev => [...prev, ...dedup]);
+    setTiktokDraft("");
+    setTiktokError("");
+  };
+
+  const handleRemoveLink = (idx: number) => {
+    setTiktokLinks(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleTikTokDownload = async () => {
+    if (tiktokLinks.length === 0) {
+      setTiktokError("Añade al menos un enlace de TikTok");
+      return;
+    }
+    const joined = tiktokLinks.join("\n");
     setTiktokError("");
     setTiktokLoading(true);
     setStatus("Descargando TikToks sin marca...");
@@ -53,7 +85,7 @@ export default function App() {
         try { URL.revokeObjectURL(finalVideo); } catch {}
         setFinalVideo(null);
       }
-      const { clips: tkClips, errors } = await fetchTikTokClips(tiktokInput, (msg) => setStatus(msg));
+      const { clips: tkClips, errors } = await fetchTikTokClips(joined, (msg) => setStatus(msg));
       const accDur = tkClips.reduce((s, c) => s + c.playDuration, 0);
       setClips(tkClips);
       setTotalDuration(Math.min(15, Math.max(8, Math.round(accDur))));
@@ -237,21 +269,48 @@ export default function App() {
         
         {step === 1 && (
           <div className="space-y-5">
-            {/* TikTok sin marca - misma estética */}
+            {/* TikTok sin marca - misma estética, más acorde */}
             <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-4 sm:p-5 space-y-3">
               <div className="flex items-center gap-2">
                 <div className="p-2 bg-pink-500/15 rounded-lg"><Link2 className="w-5 h-5 text-pink-400" /></div>
                 <h3 className="font-bold text-sm sm:text-base">TikTok sin marca de agua</h3>
-                <span className="ml-auto text-[10px] bg-zinc-800 border border-zinc-700 px-2 py-0.5 rounded-full">Varios</span>
+                <span className="ml-auto text-[11px] font-bold bg-pink-500/20 text-pink-300 border border-pink-500/30 px-2.5 py-1 rounded-full">
+                  {tiktokLinks.length === 0 ? "0 enlaces" : `${tiktokLinks.length} ${tiktokLinks.length === 1 ? "enlace" : "enlaces"}`}
+                </span>
               </div>
-              <p className="text-xs text-zinc-500">Pega uno o varios enlaces (uno por línea). Se descargan sin marca y luego eliges Voz o Música igual que con tus vídeos.</p>
-              <textarea
-                value={tiktokInput}
-                onChange={(e) => setTiktokInput(e.target.value)}
-                placeholder={"https://www.tiktok.com/@usuario/video/1234567890123456789\nhttps://vm.tiktok.com/XXXX"}
-                className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-sm focus:border-pink-500 outline-none min-h-[88px] resize-y"
-                rows={3}
-              />
+              <div className="flex gap-2">
+                <input
+                  value={tiktokDraft}
+                  onChange={(e) => setTiktokDraft(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddLink(); } }}
+                  placeholder="pega aqui tu enlace de tiktok"
+                  className="flex-1 bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-3 text-sm focus:border-pink-500 outline-none"
+                />
+                <button
+                  onClick={handleAddLink}
+                  disabled={!tiktokDraft.trim() || tiktokLinks.length >= 5}
+                  className="px-5 py-3 bg-zinc-800 border border-zinc-700 hover:border-pink-500 hover:bg-zinc-700 rounded-xl font-bold text-sm disabled:opacity-40 active:scale-95 transition whitespace-nowrap"
+                >
+                  Añadir
+                </button>
+              </div>
+              {tiktokLinks.length > 0 && (
+                <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
+                  {tiktokLinks.map((link, idx) => (
+                    <div key={idx} className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs">
+                      <span className="flex-1 truncate text-zinc-300">{link}</span>
+                      <button
+                        onClick={() => handleRemoveLink(idx)}
+                        className="p-1.5 bg-zinc-800 hover:bg-red-500/20 rounded-lg text-zinc-400 hover:text-red-400 transition"
+                        aria-label="Quitar"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-[11px] text-zinc-500">Añade hasta 5 enlaces. Luego descarga todos sin marca de una vez.</p>
               {tiktokError && (
                 <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300 whitespace-pre-wrap">{tiktokError}</div>
               )}
@@ -260,10 +319,10 @@ export default function App() {
               )}
               <button
                 onClick={handleTikTokDownload}
-                disabled={tiktokLoading || !tiktokInput.trim()}
+                disabled={tiktokLoading || tiktokLinks.length === 0}
                 className="w-full py-3 bg-gradient-to-r from-pink-600 to-purple-600 rounded-xl font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-50 active:scale-[0.98] transition"
               >
-                {tiktokLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Descargando...</> : <><Link2 className="w-4 h-4" /> Descargar sin marca</>}
+                {tiktokLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Descargando...</> : <><Link2 className="w-4 h-4" /> Descargar sin marca ({tiktokLinks.length})</>}
               </button>
             </div>
 
