@@ -1,5 +1,3 @@
-import { SubtitleCue } from "@/types";
-
 export async function generateSpeechAndCues(
   text: string,
   lang: string = "es"
@@ -31,7 +29,6 @@ export async function generateSpeechAndCues(
 
   let finalAudioBlob: Blob | null = null;
 
-  // CORTAFUEGOS DE RED: Intentamos descargar con un límite estricto de 2.5 segundos por enlace
   for (const url of apis) {
     try {
       const controller = new AbortController();
@@ -48,11 +45,10 @@ export async function generateSpeechAndCues(
         }
       }
     } catch (e) {
-      continue; // Si un servidor tarda o falla, pasa al siguiente de inmediato sin bloquearnos
+      continue; 
     }
   }
 
-  // SI LA RED FALLA O BLOQUEA, USAMOS VOZ SINTETIZADA LOCAL INSTANTÁNEA (Adiós al 5%)
   if (!finalAudioBlob) {
     finalAudioBlob = await generateOfflineVoice(rawWords.length);
   }
@@ -111,16 +107,6 @@ export async function generateViralMusic(duration: number): Promise<Blob> {
       hatGain.connect(offlineCtx.destination);
       hat.start(i + beatTime / 2); hat.stop(i + beatTime / 2 + 0.1);
     }
-    
-    const bass = offlineCtx.createOscillator();
-    const bassGain = offlineCtx.createGain();
-    bass.type = "triangle";
-    bass.frequency.setValueAtTime(55, i); 
-    bassGain.gain.setValueAtTime(0.6, i);
-    bassGain.gain.exponentialRampToValueAtTime(0.01, i + beatTime);
-    bass.connect(bassGain);
-    bassGain.connect(offlineCtx.destination);
-    bass.start(i); bass.stop(i + beatTime);
   }
   const renderedBuffer = await offlineCtx.startRendering();
   return audioBufferToWav(renderedBuffer);
