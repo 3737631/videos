@@ -2,7 +2,6 @@ import { RenderConfig } from "@/types";
 
 const INVISIBLE_CSS = "position:fixed;top:0;left:-9999px;width:270px;height:480px;z-index:-100;pointer-events:none;";
 
-// Añadimos wordChunks a la interfaz extendida para recibir las palabras
 interface ExtendedRenderConfig extends RenderConfig {
   wordChunks?: string[];
 }
@@ -23,58 +22,69 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
   const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
   if (!ctx) throw new Error("Tu navegador no soporta Canvas 2D.");
 
-  ctx.fillStyle = "#000";
-  ctx.fillRect(0, 0, width, height);
-
-  const AC = window.AudioContext || (window as any).webkitAudioContext;
-  const audioCtx = new AC();
-  if (audioCtx.state === "suspended") await audioCtx.resume();
-  const dest = audioCtx.createMediaStreamDestination();
-
-  // Mantenemos un sonido inaudible continuo para que el grabador nunca corte la pista de audio
-  const osc = audioCtx.createOscillator();
-  const silentGain = audioCtx.createGain();
-  silentGain.gain.value = 0.01; 
-  osc.connect(silentGain);
-  silentGain.connect(dest);
-  osc.start();
-
-  let actualDuration = config.targetDuration;
+  let dest: MediaStreamAudioDestinationNode | null = null;
+  let audioCtx: AudioContext | null = null;
+  let actualDuration = config.targetDuration || 10;
   let dynamicCues: {text: string, start: number, end: number}[] = [];
 
-  // DECODIFICAR AUDIO Y SINCRONIZAR TIEMPOS
-  if (audioBlob) {
-    try {
-      const ab = await audioBlob.arrayBuffer();
-      const decoded = await audioCtx.decodeAudioData(ab);
-      
-      // EL TRUCO MAGISTRAL: El vídeo durará EXACTAMENTE lo que dure la voz
-      actualDuration = decoded.duration; 
+  try {
+    const AC = window.AudioContext || (window as any).webkitAudioContext;
+    if (AC) {
+      audioCtx = new AC();
+      if (audioCtx.state === "suspended") await audioCtx.resume();
+      dest = audioCtx.createMediaStreamDestination();
 
-      const source = audioCtx.createBufferSource();
-      source.buffer = decoded;
-      source.connect(dest);
-      source.start(0);
+      // Oscilador de fondo (inperceptible) para forzar que el grabador de audio no se duerma
+      const osc = audioCtx.createOscillator();
+      const silentGain = audioCtx.createGain();
+      silentGain.gain.value = 0.01; 
+      osc.connect(silentGain);
+      silentGain.connect(dest);
+      osc.start();
 
-      if (mode === "voice" && wordChunks) {
-        // Repartimos los subtítulos de forma matemáticamente perfecta a lo largo del audio
-        const timePerChunk = actualDuration / wordChunks.length;
-        wordChunks.forEach((text, i) => {
-          dynamicCues.push({
-            text: text.toUpperCase(),
-            start: i * timePerChunk,
-            end: (i + 1) * timePerChunk
+      if (audioBlob) {
+        const ab = await audioBlob.arrayBuffer();
+        const decoded = await audioCtx.decodeAudioData(ab);
+        
+        // El vídeo dura exactamente lo mismo que el audio (Cero silencios)
+        if (decoded.duration > 0 && !isNaN(decoded.duration)) {
+            actualDuration = decoded.duration;
+        }
+
+        const source = audioCtx.createBufferSource();
+        source.buffer = decoded;
+        
+        if (mode === "voice" && wordChunks) {
+          // Acelerador Viral para la voz (máximo 1.25x)
+          source.playbackRate.value = 1.15;
+          actualDuration = actualDuration / 1.15;
+
+          // Repartimos los subtítulos por el audio
+          const timePerChunk = actualDuration / wordChunks.length;
+          wordChunks.forEach((text, i) => {
+            dynamicCues.push({
+              text: text.toUpperCase(),
+              start: i * timePerChunk,
+              end: (i + 1) * timePerChunk
+            });
           });
-        });
+        } else {
+          source.loop = true; // Loop para música
+        }
+
+        source.connect(dest);
+        source.start(0);
       }
-    } catch (e) {
-      console.warn("Fallo al decodificar audio, procediendo en silencio.");
     }
+  } catch (e) {
+    console.error("Audio desactivado:", e);
   }
 
   const captureStreamFunc = canvas.captureStream || (canvas as any).mozCaptureStream || (canvas as any).webkitCaptureStream;
   const canvasStream = captureStreamFunc.call(canvas, FPS);
-  const combinedStream = new MediaStream([ ...canvasStream.getVideoTracks(), ...dest.stream.getAudioTracks() ]);
+  const tracks = [...canvasStream.getVideoTracks()];
+  if (dest) tracks.push(...dest.stream.getAudioTracks());
+  const combinedStream = new MediaStream(tracks);
   
   const isApple = /iPhone|iPad|iPod|Safari/i.test(navigator.userAgent) && !/Chrome/i.test(navigator.userAgent);
   const checkMime = (t: string) => { try { return MediaRecorder.isTypeSupported?.(t); } catch { return false; } };
@@ -102,16 +112,15 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
     let lastDrawTime = performance.now();
     let frameId = 0;
     
-    // Calcular cuánto debe durar cada corte de vídeo basándonos en la duración real del audio
     const clipDur = actualDuration / clips.length;
 
     const finalize = () => {
       cancelAnimationFrame(frameId);
       if (activeVideo) { activeVideo.removeAttribute("src"); activeVideo.remove(); }
       setTimeout(() => { canvas.width = 0; canvas.remove(); }, 200);
-      try { audioCtx.close(); } catch(e){}
+      try { audioCtx?.close(); } catch(e){}
       
-      if (chunks.length === 0) reject(new Error("No se procesó vídeo."));
+      if (chunks.length === 0) reject(new Error("No se procesó el vídeo (Cero fotogramas)."));
       else resolve(URL.createObjectURL(new Blob(chunks, { type: mime || "video/mp4" })));
     };
 
@@ -126,8 +135,8 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
       if (index >= clips.length) return;
       const newVideo = document.createElement("video");
       newVideo.src = clips[index].url;
-      // Empieza a reproducir el vídeo en una parte aleatoria para que siempre haya movimiento
-      newVideo.currentTime = Math.random() * (clips[index].playDuration * 0.5); 
+      // Inicia el clip aleatoriamente para evadir partes aburridas
+      newVideo.currentTime = Math.random() * Math.max(0, clips[index].playDuration - clipDur); 
       newVideo.muted = true;
       newVideo.playsInline = true;
       newVideo.style.cssText = INVISIBLE_CSS;
@@ -142,11 +151,10 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
     };
 
     recorder.onstop = finalize;
-    recorder.onerror = () => reject(new Error("Error interno al grabar."));
+    recorder.onerror = () => reject(new Error("Error al grabar el vídeo."));
 
     recorder.start(250); 
     const start = performance.now();
-    
     currentClipIdx = 0;
     await loadVideoAsync(0);
 
@@ -173,44 +181,41 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
           loadVideoAsync(currentClipIdx); 
         }
 
+        // Pintado de pantalla
+        ctx.fillStyle = "#000000"; 
+        ctx.fillRect(0, 0, width, height);
+
         if (activeVideo && activeVideo.readyState >= 2) {
-          ctx.fillStyle = "#000000"; 
-          ctx.fillRect(0, 0, width, height);
           const scale = Math.max(width / activeVideo.videoWidth, height / activeVideo.videoHeight);
           const dw = activeVideo.videoWidth * scale;
           const dh = activeVideo.videoHeight * scale;
           ctx.drawImage(activeVideo, (width - dw) / 2, (height - dh) / 2, dw, dh);
         }
 
-        // SUBTÍTULOS 100% ESTILO TIKTOK: Centrados, grandes y con tope máximo de ancho
+        // SUBTÍTULOS PERFECTOS
         if (mode === "voice") {
           const cue = dynamicCues.find(c => elapsed >= c.start && elapsed <= c.end);
           if (cue) {
-            ctx.font = '900 36px "Inter", "Arial", sans-serif'; 
+            ctx.font = '900 34px "Inter", "Arial", sans-serif'; 
             ctx.textAlign = "center"; 
             ctx.textBaseline = "middle";
             ctx.lineWidth = 6; 
             ctx.strokeStyle = "#000000";
-            ctx.fillStyle = "#FFE600"; // Amarillo viral
+            ctx.fillStyle = "#FFE600"; 
             
-            // Sombra para dar volumen y aspecto profesional
-            ctx.shadowColor = "rgba(0,0,0,0.8)";
-            ctx.shadowBlur = 10;
-            ctx.shadowOffsetY = 4;
+            // CENTRO EXACTO
+            const textX = width / 2;
+            const textY = height / 2;
+            const maxWidth = width - 40; // 20px de margen a cada lado
             
-            // Se dibuja JUSTO EN EL CENTRO EXACTO (width / 2, height / 2)
-            // Y el maxWidth (width - 30) hace que se encojan automáticamente si son muy largos
-            ctx.strokeText(cue.text, width / 2, height / 2, width - 30);
-            
-            ctx.shadowBlur = 0; // Desactivar sombra para el relleno
-            ctx.shadowOffsetY = 0;
-            ctx.fillText(cue.text, width / 2, height / 2, width - 30);
+            ctx.strokeText(cue.text, textX, textY, maxWidth);
+            ctx.fillText(cue.text, textX, textY, maxWidth);
           }
         }
       }
     };
     
     drawLoop();
-    setTimeout(stopRecording, (actualDuration + 2) * 1000);
+    setTimeout(stopRecording, (actualDuration + 2) * 1000); // Failsafe
   });
 }

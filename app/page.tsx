@@ -12,6 +12,7 @@ export default function App() {
   const [mode, setMode] = useState<AppMode | null>(null);
   const [productPrompt, setProductPrompt] = useState("");
   const [language, setLanguage] = useState("es"); 
+  const [totalDuration, setTotalDuration] = useState(0);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
   const [finalVideo, setFinalVideo] = useState<string | null>(null);
@@ -31,6 +32,7 @@ export default function App() {
     lector.playsInline = true;
     lector.muted = true;
     
+    let accDur = 0;
     for (const file of Array.from(files)) {
       const url = URL.createObjectURL(file);
       lector.src = url;
@@ -39,35 +41,45 @@ export default function App() {
         lector.onerror = () => res(3);
         setTimeout(() => res(3), 1000); 
       });
-      // Guardamos el vídeo completo (el motor gráfico ya se encargará de hacer los cortes perfectos)
       validClips.push({ file, url, startOffset: 0, playDuration: dur });
+      accDur += dur;
     }
-    
     lector.removeAttribute("src"); 
     lector.load();
 
-    // Mezclamos el orden si hay varios vídeos para más dinamismo
     setClips(validClips.sort(() => Math.random() - 0.5));
+    // Limitamos la estimación de tiempo a 15 segundos para los guiones
+    setTotalDuration(Math.min(15, Math.max(5, Math.round(accDur))));
     setStep(2);
   };
 
-  // GUION INTELIGENTE: Sin repeticiones. Gancho + Beneficio + CTA.
+  // GUION INTELIGENTE (SIN REPETICIONES) 4 IDIOMAS
   const generateScriptLocal = (info: string, lang: string) => {
     const cleanInfo = info
       .replace(/https?:\/\/\S+/gi, "")
-      .replace(/(aliexpress|amazon|shein|temu|tienda|comprar|vendedor|descuento|link|bio)/gi, "")
+      .replace(/(aliexpress|amazon|shein|temu|tienda|comprar|vendedor|descuento)/gi, "")
       .trim() || "este producto";
 
     const data: Record<string, { hooks: string[], benefits: string[], calls: string[] }> = {
       es: {
-        hooks: [`¿Cansado de los mismos problemas? Necesitas ${cleanInfo}.`, `El secreto que nadie te quiere contar sobre ${cleanInfo}.`, `Mira cómo ${cleanInfo} me salvó el día.`],
-        benefits: ["Te ahorra horas de esfuerzo y es súper fácil de usar.", "La calidad te dejará con la boca abierta desde el primer uso.", "Es el mejor invento del año y funciona a la perfección."],
+        hooks: [`¿Cansado de los mismos problemas? Necesitas ${cleanInfo}.`, `El secreto que nadie te quiere contar sobre ${cleanInfo}.`, `Mira cómo ${cleanInfo} me salvó la vida.`],
+        benefits: ["Te ahorra horas de esfuerzo y es súper fácil de usar.", "La calidad te dejará con la boca abierta desde el primer uso.", "Es el mejor invento de este año y funciona a la perfección."],
         calls: ["Consíguelo hoy y cambia tu rutina.", "Pruébalo ahora, no te arrepentirás.", "Hazte un favor y empieza a usarlo."]
       },
       en: {
         hooks: [`Tired of the same problems? You need ${cleanInfo}.`, `The secret nobody tells you about ${cleanInfo}.`, `Look how ${cleanInfo} totally saved my day.`],
         benefits: ["It saves you hours of effort and is super easy to use.", "The quality will blow your mind from the very first use.", "It's the best invention of the year and works flawlessly."],
         calls: ["Get it today and change your routine.", "Try it now, you won't regret it.", "Do yourself a favor and start using it."]
+      },
+      pt: {
+        hooks: [`Cansado dos mesmos problemas? Você precisa de ${cleanInfo}.`, `O segredo que ninguém te conta sobre ${cleanInfo}.`, `Olha como ${cleanInfo} salvou meu dia.`],
+        benefits: ["Economiza horas de esforço e é super fácil de usar.", "A qualidade vai te deixar de queixo caído desde o primeiro uso.", "É a melhor invenção do ano e funciona perfeitamente."],
+        calls: ["Garanta o seu hoje e mude sua rotina.", "Experimente agora, você não vai se arrepender.", "Faça um favor a si mesmo e comece a usar."]
+      },
+      fr: {
+        hooks: [`Fatigué des mêmes problèmes? Vous avez besoin de ${cleanInfo}.`, `Le secret que personne ne vous dit sur ${cleanInfo}.`, `Regardez comment ${cleanInfo} a sauvé ma journée.`],
+        benefits: ["Cela vous fait gagner des heures d'efforts et est super facile à utiliser.", "La qualité vous époustouflera dès la première utilisation.", "C'est la meilleure invention de l'année et fonctionne parfaitement."],
+        calls: ["Obtenez-le aujourd'hui et changez votre routine.", "Essayez-le maintenant, vous ne le regretterez pas.", "Faites-vous une faveur et commencez à l'utiliser."]
       }
     };
 
@@ -87,10 +99,9 @@ export default function App() {
     try {
       let audioBlob = null;
       let wordChunks: string[] = [];
-      let targetDuration = 10; // Duración por defecto para el modo música
 
       if (mode === "voice") {
-        setStatus("Generando guion a medida...");
+        setStatus("Generando guion (Multi-Idioma)...");
         const script = generateScriptLocal(productPrompt, language);
         
         setStatus("Descargando voz humana...");
@@ -98,18 +109,17 @@ export default function App() {
         audioBlob = tts.audioBlob;
         wordChunks = tts.wordChunks;
       } else {
-        setStatus("Generando base musical...");
-        audioBlob = await generateViralMusic(targetDuration);
+        setStatus("Generando base musical Lo-Fi...");
+        audioBlob = await generateViralMusic(totalDuration);
       }
 
-      setStatus("Renderizando con cortes dinámicos...");
+      setStatus("Renderizando a máxima calidad...");
       const url = await renderFinalVideo({
         clips, 
         audioBlob, 
         wordChunks, 
         mode: mode!, 
-        // El motor gráfico calculará la duración real exacta basada en el audio
-        targetDuration, 
+        targetDuration: totalDuration, 
         onProgress: (p) => setProgress(Math.round(p))
       });
 
@@ -167,7 +177,7 @@ export default function App() {
               <div className="p-3 sm:p-4 bg-purple-500/10 rounded-full shrink-0"><Mic className="text-purple-400 w-6 h-6" /></div>
               <div className="text-left">
                 <h3 className="font-bold text-base sm:text-lg">Modo Narrador IA</h3>
-                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Guion perfecto, voz humana y subtítulos.</p>
+                <p className="text-zinc-500 text-xs sm:text-sm line-clamp-2">Guion, voz humana y subtítulos.</p>
               </div>
             </button>
           </div>
@@ -188,6 +198,8 @@ export default function App() {
                     >
                       <option value="es">Español</option>
                       <option value="en">English</option>
+                      <option value="pt">Português</option>
+                      <option value="fr">Français</option>
                     </select>
                   </div>
                 </div>
@@ -224,7 +236,7 @@ export default function App() {
               <button onClick={resetAll} className="flex-1 py-3 sm:py-4 bg-zinc-800 rounded-xl font-bold flex items-center justify-center gap-2 active:bg-zinc-700 text-sm sm:text-base touch-manipulation">
                 <RefreshCcw className="w-4 h-4 sm:w-5 sm:h-5" /> Otro
               </button>
-              <a href={finalVideo} download="tiktok-viral.mp4" className="flex-1 py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl font-bold flex items-center justify-center gap-2 text-sm sm:text-base touch-manipulation">
+              <a href={finalVideo} download={`tiktok-viral-${language}.mp4`} className="flex-1 py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl font-bold flex items-center justify-center gap-2 text-sm sm:text-base touch-manipulation">
                 <Download className="w-4 h-4 sm:w-5 sm:h-5" /> Guardar
               </a>
             </div>

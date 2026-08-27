@@ -1,88 +1,75 @@
+import { SubtitleCue } from "@/types";
+
 export async function generateSpeechAndCues(
   text: string,
   lang: string = "es"
 ): Promise<{ audioBlob: Blob; wordChunks: string[] }> {
   
-  const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ.,!¿?'-]/g, "").trim();
+  // Limpieza del texto
+  const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑçãõâêîôûàèìòù.,!¿?'-]/g, "").trim();
   const rawWords = cleanText.split(/\s+/).filter(Boolean);
   if (rawWords.length === 0) throw new Error("Guion vacío");
 
-  // Agrupamos las palabras de 2 en 2 para que los subtítulos sean impactantes y se lean rápido
+  // Subtítulos de 2 en 2 palabras
   const wordChunks: string[] = [];
   for (let i = 0; i < rawWords.length; i += 2) {
     wordChunks.push(rawWords.slice(i, i + 2).join(" "));
   }
 
+  // Mapa de los 4 Idiomas
   const voiceMap: Record<string, { streamElements: string, google: string }> = {
     es: { streamElements: "Mia", google: "es-ES" },
     en: { streamElements: "Brian", google: "en-US" },
+    pt: { streamElements: "Vitoria", google: "pt-BR" },
+    fr: { streamElements: "Celine", google: "fr-FR" }
   };
   const v = voiceMap[lang] || voiceMap["es"];
 
-  // Dividimos en bloques seguros para no saturar la API
-  const textChunks = cleanText.match(/.{1,150}(?:\s|$)/g) || [cleanText];
-  const audioBuffers: ArrayBuffer[] = [];
-  let success = true;
+  // UNA SOLA PETICIÓN: Rápido y sin bloqueos de Spam
+  const encoded = encodeURIComponent(cleanText);
+  const urls = [
+    `https://api.streamelements.com/kappa/v2/speech?voice=${v.streamElements}&text=${encoded}`,
+    `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`)}`
+  ];
 
-  for (const chunk of textChunks) {
-    if (!chunk.trim()) continue;
-    const encoded = encodeURIComponent(chunk.trim());
-    const url1 = `https://api.streamelements.com/kappa/v2/speech?voice=${v.streamElements}&text=${encoded}`;
-    const url2 = `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`;
+  let finalBlob: Blob | null = null;
 
-    let chunkSuccess = false;
-    for (const url of [url1, url2]) {
-      try {
-        const res = await fetch(url, { cache: "no-store" });
-        if (res.ok) {
-          const buf = await res.arrayBuffer();
-          if (buf.byteLength > 1000) { 
-            audioBuffers.push(buf);
-            chunkSuccess = true;
-            break; 
-          }
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (res.ok) {
+        const buf = await res.arrayBuffer();
+        if (buf.byteLength > 1000) { // Verifica que el audio es válido
+          finalBlob = new Blob([buf], { type: "audio/mp3" });
+          break; // Éxito, salimos del bucle
         }
-      } catch (e) { continue; }
+      }
+    } catch (e) {
+      continue; // Si falla, intenta el siguiente enlace
     }
-    
-    if (!chunkSuccess) {
-      success = false;
-      break; 
-    }
-    await new Promise(r => setTimeout(r, 200)); 
   }
 
-  let finalBlob: Blob;
-  if (success && audioBuffers.length > 0) {
-    const totalLength = audioBuffers.reduce((acc, b) => acc + b.byteLength, 0);
-    const merged = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const b of audioBuffers) {
-      merged.set(new Uint8Array(b), offset);
-      offset += b.byteLength;
-    }
-    finalBlob = new Blob([merged], { type: "audio/mp3" });
-  } else {
-    // SALVAVIDAS FINAL: Si te bloquean la IP, usa esto para que NUNCA falle el vídeo
+  // Si fallan todas las redes, crea un audio de emergencia para que el vídeo NO sea de 0 segundos
+  if (!finalBlob) {
     finalBlob = await generateOfflineVoice(rawWords.length);
   }
 
   return { audioBlob: finalBlob, wordChunks };
 }
 
-let finalAudioBlob: Blob; // internal use fallback
-
+// Generador offline de emergencia (pitidos suaves sincronizados)
 async function generateOfflineVoice(wordCount: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
-  const duration = wordCount * 0.35; // Tiempo aprox por palabra
+  const duration = wordCount * 0.35; 
   const offlineCtx = new AC(1, 44100 * duration, 44100);
   
   for (let i = 0; i < wordCount; i++) {
     const osc = offlineCtx.createOscillator();
     const gain = offlineCtx.createGain();
-    osc.frequency.value = 450; 
+    osc.frequency.value = 350; 
     osc.type = "sine"; 
-    gain.gain.setValueAtTime(0.5, i * 0.35);
+    gain.gain.setValueAtTime(0.3, i * 0.35);
     gain.gain.exponentialRampToValueAtTime(0.01, (i * 0.35) + 0.3);
     osc.connect(gain);
     gain.connect(offlineCtx.destination);
@@ -94,6 +81,7 @@ async function generateOfflineVoice(wordCount: number): Promise<Blob> {
   return audioBufferToWav(renderedBuffer);
 }
 
+// Generador de Base Phonk para el Modo Musical
 export async function generateViralMusic(duration: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
   const sampleRate = 44100;
