@@ -182,7 +182,8 @@ export async function generateSpeechAndCues(
 ): Promise<SpeechResult> {
   const cleanText = cleanScript(text);
   if (!cleanText) throw new Error("El guion generado está vacío.");
-  const limitedText = cleanText.length > 220 ? `${cleanText.slice(0, 217).trim()}...` : cleanText;
+  // Texto más largo para viral 9-10s: 280 chars en vez de 220
+  const limitedText = cleanText.length > 280 ? `${cleanText.slice(0, 277).trim()}...` : cleanText;
   const wordChunks = createWordChunks(limitedText);
   if (wordChunks.length === 0) throw new Error("No se encontraron palabras válidas.");
   const textChunks = splitIntoShortSentences(limitedText, 110);

@@ -54,6 +54,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
   ctx.fillRect(0, 0, width, height);
 
   let dest: MediaStreamAudioDestinationNode | null = null;
+  // Asegurar duración viral mínima 8s y con cola de cierre 0.35s
   let actualDuration = Math.max(1.2, audioBuffer.duration);
   const dynamicCues: SubtitleCue[] = [];
 
@@ -64,16 +65,20 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     source.buffer = audioBuffer;
     if (mode === "voice") {
       if (isFallback) {
-        const rate = 1.32;
+        const rate = 1.38;
         source.playbackRate.value = rate;
         if ("detune" in source && source.detune) source.detune.value = -1200 * Math.log2(rate);
         actualDuration = actualDuration / rate;
       } else {
-        const rate = 1.35;
+        const rate = 1.45;
         source.playbackRate.value = rate;
         if ("detune" in source && source.detune) source.detune.value = -1200 * Math.log2(rate);
         actualDuration = actualDuration / rate;
       }
+      // Cola viral de cierre para no cortar la última palabra
+      actualDuration = Math.max(7.5, actualDuration) + 0.35;
+      // Si el audio original era muy corto (<5s), estirar a viral mínimo
+      if (audioBuffer.duration < 5) actualDuration = Math.max(actualDuration, 7.5);
     } else {
       source.loop = true;
     }
