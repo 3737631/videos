@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import { UploadCloud, Music, Mic, Wand2, Download, RefreshCcw, Globe } from "lucide-react";
-import { VideoClip, AppMode } from "@/types";
+import { VideoClip, AppMode, CustomWindow } from "@/types";
 import { renderFinalVideo } from "@/lib/videoEngine";
 import { generateSpeechAndCues, generateViralMusic } from "@/lib/ttsEngine";
 
@@ -17,6 +17,9 @@ export default function App() {
   const [status, setStatus] = useState("");
   const [finalVideo, setFinalVideo] = useState<string | null>(null);
   const [videoMimeType, setVideoMimeType] = useState<string>("video/webm");
+  
+  // Referencia para mantener vivo el contexto desbloqueado
+  const sharedAudioCtxRef = useRef<AudioContext | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const clearMemory = () => {
@@ -90,27 +93,36 @@ export default function App() {
   const processVideo = async () => {
     setStep(4);
     setProgress(5);
-    setStatus("Generando guion y voz real...");
+    setStatus("Desbloqueando motor de audio...");
 
     try {
-      let audioBlob: Blob | null = null;
+      // MAGIA: Inicializar contexto exactamente en el evento de click (soluciona bug de mudo en Safari/iOS)
+      const win = window as CustomWindow;
+      const AudioContextClass = window.AudioContext || win.webkitAudioContext;
+      if (!AudioContextClass) throw new Error("AudioContext no soportado");
+      const ctx = new AudioContextClass();
+      if (ctx.state === "suspended") await ctx.resume();
+      sharedAudioCtxRef.current = ctx;
+
+      let audioBuffer: AudioBuffer | null = null;
       let wordChunks: string[] = [];
 
       if (mode === "voice") {
+        setStatus(`Generando voz real en ${language.toUpperCase()}...`);
         const script = generateScriptLocal(productPrompt, language);
-        
-        const tts = await generateSpeechAndCues(script, language);
-        audioBlob = tts.audioBlob;
+        const tts = await generateSpeechAndCues(script, language, ctx);
+        audioBuffer = tts.audioBuffer;
         wordChunks = tts.wordChunks;
       } else {
         setStatus("Generando base musical...");
-        audioBlob = await generateViralMusic(totalDuration);
+        audioBuffer = await generateViralMusic(totalDuration);
       }
 
       setStatus("Renderizando vídeo final a 30 FPS...");
       const { url, mimeType } = await renderFinalVideo({
         clips, 
-        audioBlob, 
+        audioBuffer, 
+        audioContext: ctx,
         wordChunks, 
         mode: mode!, 
         targetDuration: totalDuration, 
@@ -121,9 +133,13 @@ export default function App() {
       setFinalVideo(url);
       setStep(5);
     } catch (e: unknown) {
+      if (sharedAudioCtxRef.current) {
+        sharedAudioCtxRef.current.close().catch(() => {});
+        sharedAudioCtxRef.current = null;
+      }
       const msg = e instanceof Error ? e.message : "Ocurrió un error al procesar el vídeo.";
       alert("Error: " + msg);
-      setStep(3); // Te devuelve atrás para que no tengas que subir vídeos de nuevo
+      setStep(3);
     }
   };
 
@@ -131,6 +147,10 @@ export default function App() {
     clearMemory();
     setClips([]);
     setFinalVideo(null);
+    if (sharedAudioCtxRef.current) {
+      sharedAudioCtxRef.current.close().catch(() => {});
+      sharedAudioCtxRef.current = null;
+    }
     setStep(1);
   };
 
@@ -140,7 +160,7 @@ export default function App() {
     <main className="min-h-[100dvh] bg-[#09090b] text-white flex flex-col items-center justify-center p-4 sm:p-6 overflow-x-hidden">
       <div className="w-full max-w-xl text-center mb-6 sm:mb-8 mt-4">
         <div className="inline-block bg-purple-500/10 border border-purple-500/30 text-purple-400 px-3 py-1 rounded-full text-[10px] sm:text-xs font-bold mb-3 sm:mb-4 tracking-widest">
-          CREADOR VIRAL V2 (CLIENT-SIDE)
+          CREADOR VIRAL (CLIENT-SIDE ESTRICTO)
         </div>
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent leading-tight">
           Creador Viral

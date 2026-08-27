@@ -8,7 +8,6 @@ type ExtCanvasElement = HTMLCanvasElement & {
   webkitCaptureStream(fps?: number): MediaStream;
 };
 
-// Dibuja el texto dentro del límite de ancho
 function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number) {
   const words = text.split(' ');
   let line = '';
@@ -37,19 +36,15 @@ function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number,
 }
 
 export async function renderFinalVideo(config: RenderConfig): Promise<{ url: string, mimeType: string }> {
-  const { clips, audioBlob, mode, wordChunks } = config;
+  const { clips, audioBuffer, audioContext, mode, wordChunks } = config;
   
   const width = 270;
   const height = 480;
   const FPS = 30; 
   const frameInterval = 1000 / FPS;
 
-  if (!clips || clips.length === 0) {
-    throw new Error("No hay clips de vídeo seleccionados.");
-  }
-  if (!audioBlob) {
-    throw new Error("El motor no ha recibido ningún archivo de audio válido.");
-  }
+  if (!clips || clips.length === 0) throw new Error("No hay vídeos para procesar.");
+  if (!audioBuffer) throw new Error("No hay audio disponible.");
 
   const canvas = document.createElement("canvas") as ExtCanvasElement;
   canvas.width = width; 
@@ -58,49 +53,31 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
   document.body.appendChild(canvas);
   
   const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
-  if (!ctx) throw new Error("Tu navegador no soporta Canvas 2D.");
+  if (!ctx) throw new Error("Canvas 2D no soportado.");
 
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, width, height);
 
   let dest: MediaStreamAudioDestinationNode | null = null;
-  let audioCtx: AudioContext | null = null;
-  let actualDuration = 10;
+  let actualDuration = audioBuffer.duration;
   const dynamicCues: SubtitleCue[] = [];
 
   try {
-    const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    if (!AudioCtxClass) throw new Error("AudioContext no soportado en tu navegador.");
+    dest = audioContext.createMediaStreamDestination();
+    const source = audioContext.createBufferSource();
+    source.buffer = audioBuffer;
     
-    audioCtx = new AudioCtxClass();
-    if (audioCtx.state === "suspended") await audioCtx.resume();
-    dest = audioCtx.createMediaStreamDestination();
-
-    const ab = await audioBlob.arrayBuffer();
-    const decoded = await new Promise<AudioBuffer>((resolve, reject) => {
-      audioCtx!.decodeAudioData(ab, resolve, reject);
-    }).catch(() => {
-      throw new Error("El archivo de audio no se puede procesar en el motor de vídeo.");
-    });
-
-    if (decoded && decoded.duration > 0) {
-      actualDuration = decoded.duration;
-      const source = audioCtx.createBufferSource();
-      source.buffer = decoded;
-      
-      if (mode === "voice") {
-        source.playbackRate.value = 1.15; // Ritmo TikTok ágil
-        actualDuration = actualDuration / 1.15;
-      } else {
-        source.loop = true;
-      }
-
-      source.connect(dest);
-      source.start(0);
+    if (mode === "voice") {
+      source.playbackRate.value = 1.15; // Ritmo TikTok
+      actualDuration = actualDuration / 1.15;
+    } else {
+      source.loop = true;
     }
 
-    // SINCRONIZACIÓN DE SUBTÍTULOS PROPORCIONAL
-    // Calcula la duración en pantalla de cada frase según su número de letras
+    source.connect(dest);
+    source.start(0);
+
+    // SINCRONIZACIÓN EXACTA PROPORCIONAL
     if (mode === "voice" && wordChunks && wordChunks.length > 0) {
       const totalChars = wordChunks.reduce((acc, chunk) => acc + chunk.length, 0);
       let accumulatedTime = 0;
@@ -108,7 +85,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       wordChunks.forEach((chunk) => {
         const weight = chunk.length / Math.max(1, totalChars);
         const duration = weight * actualDuration;
-        
         dynamicCues.push({
           text: chunk,
           start: accumulatedTime,
@@ -118,27 +94,18 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       });
     }
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : "Error al ensamblar el audio y el vídeo.";
-    if (audioCtx) { try { audioCtx.close(); } catch {}
-    }
+    const msg = e instanceof Error ? e.message : "Fallo en la conexión de audio.";
     if (canvas.parentNode) canvas.remove();
     throw new Error(msg);
   }
 
   const captureStreamFunc = canvas.captureStream || canvas.mozCaptureStream || canvas.webkitCaptureStream;
-  if (!captureStreamFunc) throw new Error("Tu navegador no soporta captura nativa de vídeo.");
+  if (!captureStreamFunc) throw new Error("Tu navegador no soporta captura de canvas.");
   
   const stream = captureStreamFunc.call(canvas, FPS);
-  if (dest) {
-    dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
-  }
+  if (dest) dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
 
-  const possibleMimes = [
-    "video/webm;codecs=vp8,opus",
-    "video/webm",
-    "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
-    "video/mp4"
-  ];
+  const possibleMimes = ["video/webm;codecs=vp8,opus", "video/webm", "video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/mp4"];
   let selectedMime = "video/webm";
   for (const m of possibleMimes) {
     if (MediaRecorder.isTypeSupported(m)) {
@@ -156,11 +123,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
   }
 
   const chunks: BlobPart[] = [];
-  recorder.ondataavailable = (e) => {
-    if (e.data && e.data.size > 0) {
-      chunks.push(e.data);
-    }
-  };
+  recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
 
   return new Promise<{ url: string, mimeType: string }>((resolve, reject) => {
     let isFinished = false;
@@ -179,7 +142,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
         activeVideo.remove(); 
       }
       if (canvas.parentNode) canvas.remove();
-      try { audioCtx?.close(); } catch {}
 
       if (chunks.length === 0) {
         reject(new Error("Error: Cero fotogramas capturados."));
@@ -195,13 +157,11 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       try {
         if (recorder.state === "recording") recorder.stop();
         else finalize();
-      } catch {
-        finalize();
-      }
+      } catch { finalize(); }
     };
 
-    recorder.onstop = () => { setTimeout(finalize, 200); };
-    recorder.onerror = () => reject(new Error("Error del grabador de vídeo."));
+    recorder.onstop = () => setTimeout(finalize, 200);
+    recorder.onerror = () => reject(new Error("Grabador interno falló."));
     recorder.start();
 
     const loadVideoAsync = async (index: number) => {
@@ -238,6 +198,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
 
     const start = performance.now();
     currentClipIdx = 0;
+    
     loadVideoAsync(0).then(() => {
       const drawLoop = () => {
         if (isFinished) return;
@@ -273,7 +234,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
             ctx.drawImage(activeVideo, (width - dw) / 2, (height - dh) / 2, dw, dh);
           }
 
-          // Dibuja los subtítulos perfectamente sincronizados sin rebasar el margen lateral
+          // Renderizar los subtítulos exactos
           if (mode === "voice" && dynamicCues.length > 0) {
             const cue = dynamicCues.find(c => elapsed >= c.start && elapsed < c.end);
             if (cue && cue.text) {

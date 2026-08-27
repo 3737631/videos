@@ -15,9 +15,15 @@ export interface SubtitleCue {
 
 export interface RenderConfig {
   clips: VideoClip[];
-  audioBlob: Blob | null;
+  audioBuffer: AudioBuffer | null;
+  audioContext: AudioContext;
   wordChunks: string[];
   mode: AppMode;
   targetDuration: number;
   onProgress: (progress: number) => void;
+}
+
+export interface CustomWindow extends Window {
+  webkitAudioContext?: typeof AudioContext;
+  webkitOfflineAudioContext?: typeof OfflineAudioContext;
 }
