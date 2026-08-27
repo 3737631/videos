@@ -79,7 +79,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
           source.buffer = decoded;
           
           if (mode === "voice") {
-            source.playbackRate.value = 1.20; // Ritmo ágil tipo TikTok
+            source.playbackRate.value = 1.20;
             actualDuration = actualDuration / 1.20;
           } else {
             source.loop = true;
@@ -90,8 +90,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
         }
       }
 
-      // Sincronización de subtítulos con respaldo obligatorio
-      const validChunks = (wordChunks && wordChunks.length > 0) ? wordChunks : ["¡MIRA ESTO!", "NO TE LO PIERDAS", "PRUÉBALO YA"];
+      const validChunks = (wordChunks && wordChunks.length > 0) ? wordChunks : ["¡MIRA ESTO!", "DESCÚBRELO", "AHORA"];
       const timePerChunk = actualDuration / validChunks.length;
       validChunks.forEach((text: string, i: number) => {
         dynamicCues.push({
@@ -266,9 +265,15 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
           ctx.drawImage(activeVideo, (width - dw) / 2, (height - dh) / 2, dw, dh);
         }
 
-        // DIBUJADO DE SUBTÍTULOS (Modo Voz garantizado)
+        // SUBTÍTULOS DINÁMICOS INFALIBLES
         if (mode === "voice") {
-          const cue = dynamicCues.find(c => elapsed >= c.start && elapsed <= c.end);
+          let cue = dynamicCues.find(c => elapsed >= c.start && elapsed < c.end);
+          if (!cue && dynamicCues.length > 0) {
+            // Respaldo dinámico por índice si el tiempo exacto se desvía un milisegundo
+            const idx = Math.min(dynamicCues.length - 1, Math.floor((elapsed / actualDuration) * dynamicCues.length));
+            cue = dynamicCues[idx];
+          }
+          
           if (cue) {
             ctx.font = '900 30px "Inter", sans-serif'; 
             ctx.textAlign = "center"; 

@@ -7,7 +7,7 @@ export async function generateSpeechAndCues(
   const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑçãõâêîôûàèìòù.,!¿?'-]/g, "").trim();
   const rawWords = cleanText.split(/\s+/).filter(Boolean);
   if (rawWords.length === 0) {
-    rawWords.push("¡Increíble!", "descúbrelo", "ahora");
+    rawWords.push("Increíble", "descúbrelo", "ahora");
   }
 
   const wordChunks: string[] = [];
@@ -15,66 +15,84 @@ export async function generateSpeechAndCues(
     wordChunks.push(rawWords.slice(i, i + 2).join(" "));
   }
 
-  const voiceMap: Record<string, { streamElements: string, google: string }> = {
-    es: { streamElements: "Mia", google: "es-ES" },
-    en: { streamElements: "Brian", google: "en-US" },
-    pt: { streamElements: "Vitoria", google: "pt-BR" },
-    fr: { streamElements: "Celine", google: "fr-FR" }
-  };
-  const v = voiceMap[lang] || voiceMap["es"];
-
-  const encodedFull = encodeURIComponent(cleanText);
-  const apis = [
-    `https://api.streamelements.com/kappa/v2/speech?voice=${v.streamElements}&text=${encodedFull}`,
-    `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encodedFull}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encodedFull}`)}`
-  ];
-
   let finalAudioBlob: Blob | null = null;
 
-  for (const url of apis) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000);
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4000);
 
-      const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
-      clearTimeout(timeoutId);
+    const res = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: cleanText, lang }),
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
 
-      if (res.ok) {
-        const buf = await res.arrayBuffer();
-        if (buf.byteLength > 500) {
-          finalAudioBlob = new Blob([buf], { type: "audio/mp3" });
-          break; 
-        }
+    if (res.ok) {
+      const buf = await res.arrayBuffer();
+      if (buf.byteLength > 500) {
+        finalAudioBlob = new Blob([buf], { type: 'audio/mp3' });
       }
-    } catch (e) {
-      continue; 
     }
+  } catch (e) {
+    console.warn("Proxy TTS failed, trying direct fallback:", e);
   }
 
-  // Si la red falla, usamos respaldo garantizando la duración exacta del vídeo
+  // Respaldo directo si el servidor intermedio falla
   if (!finalAudioBlob) {
-    finalAudioBlob = await generateOfflineVoice(Math.max(8, targetDurationSec));
+    try {
+      const directUrl = `https://api.streamelements.com/kappa/v2/speech?voice=Mia&text=${encodeURIComponent(cleanText)}`;
+      const dRes = await fetch(directUrl);
+      if (dRes.ok) {
+        const buf = await dRes.arrayBuffer();
+        if (buf.byteLength > 500) {
+          finalAudioBlob = new Blob([buf], { type: 'audio/mp3' });
+        }
+      }
+    } catch (e) {}
+  }
+
+  // Respaldo rítmico definitivo (pulsos de voz simulados, cero pitidos continuos)
+  if (!finalAudioBlob) {
+    finalAudioBlob = await generateRhythmicVoice(rawWords, Math.max(8, targetDurationSec));
   }
 
   return { audioBlob: finalAudioBlob, wordChunks };
 }
 
-async function generateOfflineVoice(durationSec: number): Promise<Blob> {
+async function generateRhythmicVoice(words: string[], targetDuration: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
-  const offlineCtx = new AC(1, 44100 * durationSec, 44100);
+  const sampleRate = 44100;
+  const offlineCtx = new AC(1, sampleRate * targetDuration, sampleRate);
   
-  const osc = offlineCtx.createOscillator();
-  const gain = offlineCtx.createGain();
-  osc.frequency.value = 440; 
-  osc.type = "sine"; 
-  gain.gain.setValueAtTime(0.2, 0);
-  gain.gain.setValueAtTime(0, durationSec);
+  const timePerWord = targetDuration / Math.max(1, words.length);
   
-  osc.connect(gain);
-  gain.connect(offlineCtx.destination);
-  osc.start(0);
-  osc.stop(durationSec);
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    const start = i * timePerWord;
+    const dur = Math.min(timePerWord * 0.8, 0.3);
+    
+    const osc = offlineCtx.createOscillator();
+    const gain = offlineCtx.createGain();
+    osc.frequency.setValueAtTime(250 + (word.length * 35), start);
+    osc.type = "sawtooth";
+    
+    const filter = offlineCtx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = 800;
+
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(0.25, start + 0.05);
+    gain.gain.exponentialRampToValueAtTime(0.001, start + dur);
+
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(offlineCtx.destination);
+    
+    osc.start(start);
+    osc.stop(start + dur);
+  }
   
   const renderedBuffer = await offlineCtx.startRendering();
   return audioBufferToWav(renderedBuffer);
@@ -98,6 +116,19 @@ export async function generateViralMusic(duration: number): Promise<Blob> {
     kickGain.connect(offlineCtx.destination);
     kick.start(i);
     kick.stop(i + 0.5);
+    
+    if (i + beatTime / 2 < duration + 2) {
+      const hat = offlineCtx.createOscillator();
+      const hatGain = offlineCtx.createGain();
+      hat.type = "square";
+      hat.frequency.setValueAtTime(8000, i + beatTime / 2);
+      hatGain.gain.setValueAtTime(0.1, i + beatTime / 2);
+      hatGain.gain.exponentialRampToValueAtTime(0.01, i + beatTime / 2 + 0.1);
+      hat.connect(hatGain);
+      hatGain.connect(offlineCtx.destination);
+      hat.start(i + beatTime / 2);
+      hat.stop(i + beatTime / 2 + 0.1);
+    }
   }
   const renderedBuffer = await offlineCtx.startRendering();
   return audioBufferToWav(renderedBuffer);
