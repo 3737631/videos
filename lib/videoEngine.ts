@@ -1,7 +1,7 @@
-import { RenderConfig } from "@/types";
+import { RenderConfig, SubtitleCue } from "@/types";
 
-const CANVAS_CSS =
-  "position:absolute;top:0;left:0;width:270px;height:480px;opacity:0.001;pointer-events:none;z-index:-100;";
+const CANVAS_STYLE =
+  "position:fixed;left:-10000px;top:-10000px;width:270px;height:480px;pointer-events:none;";
 
 function drawWrappedText(
   ctx: CanvasRenderingContext2D,
@@ -9,30 +9,43 @@ function drawWrappedText(
   x: number,
   y: number,
   maxWidth: number
-): void {
-  const words = text.split(" ");
-  let line = "";
-  const lines: string[] = [];
-  const lineHeight = 30;
+) {
+  const words = text.split(/\s+/).filter(Boolean);
 
-  for (let n = 0; n < words.length; n++) {
-    const testLine = line + words[n] + " ";
-    const metrics = ctx.measureText(testLine);
-    if (metrics.width > maxWidth && n > 0) {
-      lines.push(line.trim());
-      line = words[n] + " ";
+  if (words.length === 0) return;
+
+  const lines: string[] = [];
+  let currentLine = "";
+
+  for (const word of words) {
+    const testLine = currentLine
+      ? `${currentLine} ${word}`
+      : word;
+
+    if (
+      ctx.measureText(testLine).width > maxWidth &&
+      currentLine
+    ) {
+      lines.push(currentLine);
+      currentLine = word;
     } else {
-      line = testLine;
+      currentLine = testLine;
     }
   }
-  lines.push(line.trim());
 
-  let currentY = y - ((lines.length - 1) * lineHeight) / 2;
+  if (currentLine) {
+    lines.push(currentLine);
+  }
 
-  for (let k = 0; k < lines.length; k++) {
-    ctx.strokeText(lines[k], x, currentY);
-    ctx.fillText(lines[k], x, currentY);
-    currentY += lineHeight;
+  const lineHeight = 30;
+  const startY =
+    y - ((lines.length - 1) * lineHeight) / 2;
+
+  for (let i = 0; i < lines.length; i++) {
+    const lineY = startY + i * lineHeight;
+
+    ctx.strokeText(lines[i], x, lineY);
+    ctx.fillText(lines[i], x, lineY);
   }
 }
 
@@ -41,471 +54,736 @@ function getSupportedMimeType(): string {
     "video/webm;codecs=vp9,opus",
     "video/webm;codecs=vp8,opus",
     "video/webm",
-    "video/mp4",
   ];
 
   for (const mime of candidates) {
-    try {
-      if (
-        typeof MediaRecorder !== "undefined" &&
-        MediaRecorder.isTypeSupported(mime)
-      ) {
-        return mime;
-      }
-    } catch {
-      // ignore
+    if (MediaRecorder.isTypeSupported(mime)) {
+      return mime;
     }
   }
 
   return "";
 }
 
-export async function renderFinalVideo(
-  config: RenderConfig
-): Promise<string> {
-  const { clips, audioBlob, wordChunks, mode, targetDuration, onProgress } =
-    config;
+function getExtensionFromMimeType(mime: string): string {
+  return mime.toLowerCase().includes("mp4")
+    ? "mp4"
+    : "webm";
+}
 
-  if (!clips || clips.length === 0) {
-    throw new Error("No hay clips de vídeo para renderizar.");
+function createVideoElement(
+  clipUrl: string
+): HTMLVideoElement {
+  const video = document.createElement("video");
+
+  video.src = clipUrl;
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = "auto";
+  video.crossOrigin = "anonymous";
+  video.style.cssText = CANVAS_STYLE;
+
+  document.body.appendChild(video);
+
+  return video;
+}
+
+async function waitForVideoReady(
+  video: HTMLVideoElement
+): Promise<void> {
+  if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+    return;
   }
 
-  if (typeof MediaRecorder === "undefined") {
+  await new Promise<void>((resolve, reject) => {
+    let finished = false;
+
+    const cleanup = () => {
+      video.removeEventListener("loadedmetadata", onLoaded);
+      video.removeEventListener("canplay", onLoaded);
+      video.removeEventListener("error", onError);
+    };
+
+    const done = () => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      resolve();
+    };
+
+    const onLoaded = () => {
+      done();
+    };
+
+    const onError = () => {
+      if (finished) return;
+
+      finished = true;
+      cleanup();
+
+      reject(
+        new Error("No se pudo cargar uno de los vídeos.")
+      );
+    };
+
+    video.addEventListener("loadedmetadata", onLoaded);
+    video.addEventListener("canplay", onLoaded);
+    video.addEventListener("error", onError);
+
+    video.load();
+
+    setTimeout(() => {
+      if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+        done();
+      } else {
+        onError();
+      }
+    }, 10000);
+  });
+}
+
+async function seekVideoSafely(
+  video: HTMLVideoElement,
+  position: number
+): Promise<void> {
+  if (!Number.isFinite(video.duration) || video.duration <= 0) {
+    return;
+  }
+
+  const maxPosition = Math.max(
+    0,
+    video.duration - 0.05
+  );
+
+  const safePosition = Math.max(
+    0,
+    Math.min(position, maxPosition)
+  );
+
+  if (Math.abs(video.currentTime - safePosition) < 0.03) {
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    let finished = false;
+
+    const done = () => {
+      if (finished) return;
+
+      finished = true;
+      video.removeEventListener("seeked", done);
+      resolve();
+    };
+
+    video.addEventListener("seeked", done);
+
+    try {
+      video.currentTime = safePosition;
+    } catch {
+      done();
+    }
+
+    setTimeout(done, 1000);
+  });
+}
+
+export async function renderFinalVideo(
+  config: RenderConfig
+): Promise<{
+  url: string;
+  mimeType: string;
+  extension: string;
+}> {
+  const {
+    clips,
+    audioBlob,
+    targetDuration,
+    mode,
+    wordChunks,
+    onProgress,
+  } = config;
+
+  if (!clips.length) {
     throw new Error(
-      "Tu navegador no soporta grabación de vídeo. Prueba con Chrome o Safari actualizado."
+      "No hay vídeos para renderizar."
     );
   }
 
   const width = 270;
   const height = 480;
   const FPS = 30;
-  const frameInterval = 1000 / FPS;
 
   const canvas = document.createElement("canvas");
+
   canvas.width = width;
   canvas.height = height;
-  canvas.style.cssText = CANVAS_CSS;
+  canvas.style.cssText = CANVAS_STYLE;
+
   document.body.appendChild(canvas);
 
   const ctx = canvas.getContext("2d", {
     alpha: false,
-    willReadFrequently: true,
   });
 
   if (!ctx) {
     canvas.remove();
-    throw new Error("Tu navegador no soporta Canvas 2D.");
+    throw new Error(
+      "Tu navegador no soporta Canvas 2D."
+    );
   }
 
-  ctx.fillStyle = "#000";
-  ctx.fillRect(0, 0, width, height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
 
-  let audioCtx: AudioContext | null = null;
-  let dest: MediaStreamAudioDestinationNode | null = null;
-  let audioSource: AudioBufferSourceNode | null = null;
-  let actualDuration = Math.max(1, targetDuration || 10);
-  let dynamicCues: { text: string; start: number; end: number }[] = [];
-  const createdVideos: HTMLVideoElement[] = [];
-  let finalStream: MediaStream | null = null;
-  let recorder: MediaRecorder | null = null;
+  let audioContext: AudioContext | null = null;
+  let audioDestination:
+    | MediaStreamAudioDestinationNode
+    | null = null;
 
-  const cleanup = (): void => {
-    try {
-      if (audioSource) {
-        try {
-          audioSource.stop();
-        } catch {}
-        try {
-          audioSource.disconnect();
-        } catch {}
-        audioSource = null;
-      }
-    } catch {}
-
-    for (const video of createdVideos) {
-      try {
-        video.pause();
-        video.removeAttribute("src");
-        video.load();
-        video.remove();
-      } catch {}
-    }
-    createdVideos.length = 0;
-
-    try {
-      if (finalStream) {
-        for (const track of finalStream.getTracks()) {
-          try {
-            track.stop();
-          } catch {}
-        }
-      }
-    } catch {}
-
-    try {
-      if (canvas.parentNode) canvas.remove();
-    } catch {}
-    canvas.width = 0;
-
-    try {
-      if (audioCtx && audioCtx.state !== "closed") {
-        void audioCtx.close();
-      }
-    } catch {}
-  };
+  let activeVideo: HTMLVideoElement | null = null;
 
   try {
-    const AudioContextClass =
-      (window as unknown as { AudioContext: typeof AudioContext })
-        .AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext })
-        .webkitAudioContext;
+    const AudioContextConstructor =
+      window.AudioContext ||
+      (
+        window as typeof window & {
+          webkitAudioContext?: typeof AudioContext;
+        }
+      ).webkitAudioContext;
 
-    if (!AudioContextClass) {
-      throw new Error("AudioContext no soportado en este navegador.");
+    if (!AudioContextConstructor) {
+      throw new Error(
+        "Tu navegador no soporta AudioContext."
+      );
     }
 
-    audioCtx = new AudioContextClass();
+    audioContext = new AudioContextConstructor();
 
-    if (audioCtx.state === "suspended") {
-      try {
-        await audioCtx.resume();
-      } catch {}
+    if (audioContext.state === "suspended") {
+      await audioContext.resume().catch(() => {});
     }
 
-    dest = audioCtx.createMediaStreamDestination();
+    audioDestination =
+      audioContext.createMediaStreamDestination();
 
-    const osc = audioCtx.createOscillator();
-    const silentGain = audioCtx.createGain();
-    silentGain.gain.value = 0.01;
-    osc.connect(silentGain);
-    silentGain.connect(dest);
-    osc.start();
+    let actualDuration = Math.max(
+      1,
+      targetDuration || 10
+    );
 
     if (audioBlob) {
-      const arrayBuffer = await audioBlob.arrayBuffer();
-      let decoded: AudioBuffer | null = null;
+      const audioArrayBuffer =
+        await audioBlob.arrayBuffer();
 
-      try {
-        decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
-      } catch (err) {
+      const decoded =
+        await audioContext.decodeAudioData(
+          audioArrayBuffer.slice(0)
+        );
+
+      if (!decoded.duration || decoded.duration <= 0) {
         throw new Error(
-          "Error al decodificar el audio: " +
-            ((err as Error).message || "formato no válido")
+          "La voz generada no tiene una duración válida."
         );
       }
 
-      if (decoded && decoded.duration > 0.5) {
+      if (mode === "voice") {
         actualDuration = decoded.duration;
-        const source = audioCtx.createBufferSource();
-        source.buffer = decoded;
+      }
 
-        if (mode === "voice") {
-          const rawRatio = actualDuration / Math.max(1, targetDuration);
-          const clamped = Math.max(0.8, Math.min(rawRatio, 1.8));
+      const source =
+        audioContext.createBufferSource();
 
-          if (rawRatio > 2) {
-            actualDuration = decoded.duration / 1.15;
-            source.playbackRate.value = 1.15;
-          } else {
-            source.playbackRate.value = clamped;
-            if (clamped !== 1) {
-              actualDuration = decoded.duration / clamped;
-            }
-          }
-        } else {
-          source.loop = true;
-        }
+      source.buffer = decoded;
 
-        source.connect(dest);
-        source.start(0);
-        audioSource = source;
+      if (mode === "music") {
+        source.loop = true;
+      }
+
+      source.connect(audioDestination);
+      source.start(0);
+    }
+
+    const dynamicCues: SubtitleCue[] = [];
+
+    if (
+      mode === "voice" &&
+      wordChunks.length > 0
+    ) {
+      const totalWeight = wordChunks.reduce(
+        (total, chunk) =>
+          total +
+          Math.max(
+            1,
+            chunk.replace(/\s+/g, "").length
+          ),
+        0
+      );
+
+      let currentTime = 0;
+
+      for (const chunk of wordChunks) {
+        const weight = Math.max(
+          1,
+          chunk.replace(/\s+/g, "").length
+        );
+
+        const duration =
+          (weight / totalWeight) *
+          actualDuration;
+
+        dynamicCues.push({
+          text: chunk,
+          start: currentTime,
+          end: currentTime + duration,
+        });
+
+        currentTime += duration;
       }
     }
 
-    if (mode === "voice" && wordChunks && wordChunks.length > 0) {
-      const timePerChunk = actualDuration / wordChunks.length;
-      dynamicCues = wordChunks.map((text, i) => ({
-        text: text,
-        start: i * timePerChunk,
-        end: (i + 1) * timePerChunk,
-      }));
-    } else if (mode === "voice") {
-      const fallback = ["¡MIRA ESTO!", "DESCÚBRELO", "AHORA"];
-      const timePerChunk = actualDuration / fallback.length;
-      dynamicCues = fallback.map((text, i) => ({
-        text,
-        start: i * timePerChunk,
-        end: (i + 1) * timePerChunk,
-      }));
+    const captureStream =
+      canvas.captureStream(FPS);
+
+    if (audioDestination) {
+      const audioTracks =
+        audioDestination.stream.getAudioTracks();
+
+      for (const track of audioTracks) {
+        captureStream.addTrack(track);
+      }
     }
 
-    const canvasWithCapture = canvas as HTMLCanvasElement & {
-      captureStream?: (fps: number) => MediaStream;
-      mozCaptureStream?: (fps: number) => MediaStream;
-      webkitCaptureStream?: (fps: number) => MediaStream;
-    };
+    const selectedMime =
+      getSupportedMimeType();
 
-    const captureFn =
-      canvasWithCapture.captureStream?.bind(canvasWithCapture) ||
-      canvasWithCapture.mozCaptureStream?.bind(canvasWithCapture) ||
-      canvasWithCapture.webkitCaptureStream?.bind(canvasWithCapture);
-
-    if (!captureFn) {
-      throw new Error("Tu navegador no soporta captura de vídeo en Canvas.");
+    if (
+      !selectedMime &&
+      typeof MediaRecorder === "undefined"
+    ) {
+      throw new Error(
+        "Tu navegador no soporta grabación de vídeo."
+      );
     }
 
-    const canvasStream = captureFn(FPS);
-    const tracks: MediaStreamTrack[] = [...canvasStream.getVideoTracks()];
-
-    if (dest) {
-      tracks.push(...dest.stream.getAudioTracks());
-    }
-
-    finalStream = new MediaStream(tracks);
-
-    const selectedMime = getSupportedMimeType();
+    let recorder: MediaRecorder;
 
     try {
       recorder = selectedMime
-        ? new MediaRecorder(finalStream, {
+        ? new MediaRecorder(captureStream, {
             mimeType: selectedMime,
-            videoBitsPerSecond: 1_500_000,
+            videoBitsPerSecond: 2_500_000,
           })
-        : new MediaRecorder(finalStream);
+        : new MediaRecorder(captureStream);
     } catch {
-      recorder = new MediaRecorder(finalStream);
+      recorder = new MediaRecorder(
+        captureStream
+      );
     }
 
-    const chunks: BlobPart[] = [];
+    const chunks: Blob[] = [];
 
-    recorder.ondataavailable = (event: BlobEvent) => {
-      if (event.data && event.data.size > 0) {
+    recorder.ondataavailable = (event) => {
+      if (
+        event.data &&
+        event.data.size > 0
+      ) {
         chunks.push(event.data);
       }
     };
 
-    return await new Promise<string>((resolve, reject) => {
-      if (!recorder) {
-        reject(new Error("No se pudo inicializar el grabador."));
-        return;
+    const mimeType =
+      recorder.mimeType ||
+      selectedMime ||
+      "video/webm";
+
+    const clipDuration =
+      actualDuration / Math.max(1, clips.length);
+
+    let currentClipIndex = -1;
+
+    const loadClip = async (
+      index: number,
+      elapsed: number
+    ) => {
+      const clip =
+        clips[index % clips.length];
+
+      const newVideo =
+        createVideoElement(clip.url);
+
+      await waitForVideoReady(newVideo);
+
+      const startOffset = Math.max(
+        0,
+        Math.min(
+          clip.startOffset || 0,
+          Math.max(
+            0,
+            newVideo.duration - 0.05
+          )
+        )
+      );
+
+      let randomOffset = 0;
+
+      if (
+        Number.isFinite(newVideo.duration) &&
+        newVideo.duration > 0.1
+      ) {
+        const available =
+          Math.max(
+            0,
+            newVideo.duration -
+              Math.min(
+                clipDuration,
+                newVideo.duration
+              )
+          );
+
+        randomOffset =
+          Math.random() * available;
       }
 
-      let isFinished = false;
-      let isResolved = false;
-      let currentClipIdx = -1;
-      let activeVideo: HTMLVideoElement | null = null;
-      let lastDrawTime = performance.now();
-      let frameId = 0;
-      const loadingIndices = new Set<number>();
+      await seekVideoSafely(
+        newVideo,
+        Math.max(
+          startOffset,
+          randomOffset
+        )
+      );
 
-      const clipCount = clips.length;
-      const clipDur = actualDuration / clipCount;
+      await newVideo.play().catch(() => {});
 
-      const finalize = (): void => {
-        if (isResolved) return;
-        isResolved = true;
-        cancelAnimationFrame(frameId);
-        if (activeVideo) {
-          try {
-            activeVideo.pause();
-          } catch {}
-          activeVideo = null;
-        }
-        cleanup();
+      const oldVideo = activeVideo;
 
-        if (chunks.length === 0) {
-          reject(
-            new Error("No se procesó vídeo (Cero fotogramas capturados).")
+      activeVideo = newVideo;
+      currentClipIndex = index;
+
+      if (oldVideo) {
+        oldVideo.pause();
+        oldVideo.removeAttribute("src");
+        oldVideo.load();
+        oldVideo.remove();
+      }
+
+      void elapsed;
+    };
+
+    await loadClip(0, 0);
+
+    let recordingStarted = false;
+    let finished = false;
+    let animationFrame = 0;
+
+    const startedAt =
+      performance.now();
+
+    const cleanup = () => {
+      cancelAnimationFrame(
+        animationFrame
+      );
+
+      if (activeVideo) {
+        activeVideo.pause();
+        activeVideo.removeAttribute(
+          "src"
+        );
+        activeVideo.load();
+        activeVideo.remove();
+        activeVideo = null;
+      }
+
+      for (const clip of clips) {
+        URL.revokeObjectURL(clip.url);
+      }
+
+      try {
+        captureStream
+          .getTracks()
+          .forEach((track) =>
+            track.stop()
           );
-          return;
-        }
+      } catch {}
 
-        const mimeToUse =
-          recorder?.mimeType || selectedMime || "video/webm";
-        const blob = new Blob(chunks, { type: mimeToUse });
-        resolve(URL.createObjectURL(blob));
-      };
 
-      const stopRecording = (): void => {
-        if (isFinished) return;
-        isFinished = true;
+      canvas.remove();
+
+      if (audioContext) {
+        void audioContext
+          .close()
+          .catch(() => {});
+      }
+    };
+
+    return await new Promise<{
+      url: string;
+      mimeType: string;
+      extension: string;
+    }>((resolve, reject) => {
+      const finish = () => {
+        if (finished) return;
+
+        finished = true;
+
         try {
-          if (recorder && recorder.state === "recording") {
+          if (
+            recorder.state === "recording"
+          ) {
             recorder.stop();
-          } else {
-            finalize();
           }
-        } catch {
-          finalize();
-        }
-      };
+        } catch {}
 
-      recorder.onstop = () => {
-        setTimeout(finalize, 200);
+
+        setTimeout(() => {
+          if (!chunks.length) {
+            cleanup();
+
+            reject(
+              new Error(
+                "No se capturaron fotogramas del vídeo."
+              )
+            );
+
+            return;
+          }
+
+          const finalBlob = new Blob(
+            chunks,
+            {
+              type: mimeType,
+            }
+          );
+
+          const url =
+            URL.createObjectURL(
+              finalBlob
+            );
+
+          cleanup();
+
+          resolve({
+            url,
+            mimeType,
+            extension:
+              getExtensionFromMimeType(
+                mimeType
+              ),
+          });
+        }, 250);
       };
 
       recorder.onerror = () => {
         cleanup();
-        reject(new Error("Error interno del grabador de vídeo."));
+
+        reject(
+          new Error(
+            "El navegador produjo un error al grabar el vídeo."
+          )
+        );
       };
 
-      const loadVideoAsync = async (index: number): Promise<void> => {
-        if (index < 0 || index >= clips.length) return;
-        if (loadingIndices.has(index)) return;
-        loadingIndices.add(index);
-
-        const clip = clips[index];
-        const safeDuration = Math.max(0.5, clip.playDuration || 1);
-        const safeStart = Number.isFinite(clip.startOffset)
-          ? Math.max(0, Math.min(clip.startOffset, Math.max(0, safeDuration - 0.1)))
-          : 0;
-
-        const newVideo = document.createElement("video");
-        newVideo.src = clip.url;
-        newVideo.muted = true;
-        newVideo.playsInline = true;
-        newVideo.preload = "auto";
-        newVideo.style.cssText = CANVAS_CSS;
-        newVideo.crossOrigin = "anonymous";
-
-        try {
-          newVideo.currentTime = safeStart;
-        } catch {}
-
-        document.body.appendChild(newVideo);
-        createdVideos.push(newVideo);
-
-        await new Promise<void>((res) => {
-          let resolved = false;
-          const done = () => {
-            if (resolved) return;
-            resolved = true;
-            res();
-          };
-          newVideo.oncanplay = done;
-          newVideo.onloadeddata = done;
-          newVideo.onerror = done;
-          setTimeout(done, 1200);
-        });
-
-        if (newVideo.readyState >= 1) {
-          try {
-            const target =
-              safeStart +
-              Math.random() * Math.max(0, safeDuration - clipDur - 0.1);
-            if (Number.isFinite(target)) newVideo.currentTime = target;
-          } catch {}
+      recorder.onstop = () => {
+        if (!finished) {
+          finish();
         }
-
-        try {
-          await newVideo.play();
-        } catch {}
-
-        const oldVideo = activeVideo;
-        activeVideo = newVideo;
-
-        if (oldVideo && oldVideo !== newVideo) {
-          try {
-            oldVideo.pause();
-            oldVideo.removeAttribute("src");
-            oldVideo.load();
-            oldVideo.remove();
-            const idx = createdVideos.indexOf(oldVideo);
-            if (idx !== -1) createdVideos.splice(idx, 1);
-          } catch {}
-        }
-
-        loadingIndices.delete(index);
       };
 
-      recorder.start(250);
-      const start = performance.now();
+      try {
+        recorder.start(250);
+        recordingStarted = true;
+      } catch {
+        cleanup();
 
-      void (async () => {
-        currentClipIdx = 0;
-        await loadVideoAsync(0);
-      })();
+        reject(
+          new Error(
+            "No se pudo iniciar la grabación del vídeo."
+          )
+        );
 
-      const drawLoop = (): void => {
-        if (isFinished) return;
-        frameId = requestAnimationFrame(drawLoop);
+        return;
+      }
 
-        const now = performance.now();
-        const delta = now - lastDrawTime;
-        if (delta < frameInterval) return;
-        lastDrawTime = now - (delta % frameInterval);
+      const draw = () => {
+        if (finished) return;
 
-        const elapsed = (now - start) / 1000;
-        const progress = Math.min(100, (elapsed / actualDuration) * 100);
-        try {
-          onProgress(progress);
-        } catch {}
+        const now =
+          performance.now();
 
-        if (elapsed >= actualDuration) {
-          stopRecording();
+        const elapsed =
+          (now - startedAt) / 1000;
+
+        if (
+          elapsed >= actualDuration
+        ) {
+          onProgress(100);
+          finish();
           return;
         }
 
-        const activeIdx = Math.min(
-          clipCount - 1,
-          Math.floor(elapsed / clipDur)
-        );
+        const progress =
+          Math.min(
+            99,
+            Math.round(
+              (elapsed /
+                actualDuration) *
+                100
+            )
+          );
 
-        if (activeIdx !== currentClipIdx) {
-          currentClipIdx = activeIdx;
-          void loadVideoAsync(activeIdx);
-        }
+        onProgress(progress);
 
-        ctx.fillStyle = "#000";
-        ctx.fillRect(0, 0, width, height);
+        const desiredClipIndex =
+          Math.min(
+            clips.length - 1,
+            Math.floor(
+              elapsed /
+                clipDuration
+            )
+          );
 
-        if (activeVideo && activeVideo.readyState >= 2) {
-          const vw = activeVideo.videoWidth || width;
-          const vh = activeVideo.videoHeight || height;
-          const scale = Math.max(width / vw, height / vh);
-          const dw = vw * scale;
-          const dh = vh * scale;
-          ctx.drawImage(
-            activeVideo,
-            (width - dw) / 2,
-            (height - dh) / 2,
-            dw,
-            dh
+        if (
+          desiredClipIndex !==
+            currentClipIndex &&
+          desiredClipIndex <
+            clips.length
+        ) {
+          void loadClip(
+            desiredClipIndex,
+            elapsed
           );
         }
 
-        if (mode === "voice" && dynamicCues.length > 0) {
+        ctx.fillStyle = "#000";
+        ctx.fillRect(
+          0,
+          0,
+          width,
+          height
+        );
+
+        if (
+          activeVideo &&
+          activeVideo.readyState >=
+            HTMLMediaElement.HAVE_CURRENT_DATA &&
+          activeVideo.videoWidth > 0 &&
+          activeVideo.videoHeight > 0
+        ) {
+          const scale =
+            Math.max(
+              width /
+                activeVideo.videoWidth,
+              height /
+                activeVideo.videoHeight
+            );
+
+          const drawWidth =
+            activeVideo.videoWidth *
+            scale;
+
+          const drawHeight =
+            activeVideo.videoHeight *
+            scale;
+
+          ctx.drawImage(
+            activeVideo,
+            (width -
+              drawWidth) /
+              2,
+            (height -
+              drawHeight) /
+              2,
+            drawWidth,
+            drawHeight
+          );
+        }
+
+        if (
+          mode === "voice" &&
+          dynamicCues.length
+        ) {
           const cue =
             dynamicCues.find(
-              (c) => elapsed >= c.start && elapsed < c.end
-            ) ||
-            dynamicCues[
-              Math.min(
-                dynamicCues.length - 1,
-                Math.floor((elapsed / actualDuration) * dynamicCues.length)
-              )
-            ];
+              (item) =>
+                elapsed >=
+                  item.start &&
+                elapsed <
+                  item.end
+            );
 
-          if (cue && cue.text) {
-            ctx.font = '900 24px "Inter", sans-serif';
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.lineJoin = "round";
+          if (cue) {
+            ctx.font =
+              '900 24px Arial, sans-serif';
+
+            ctx.textAlign =
+              "center";
+
+            ctx.textBaseline =
+              "middle";
+
+            ctx.lineJoin =
+              "round";
+
             ctx.lineWidth = 5;
-            ctx.strokeStyle = "#000";
-            ctx.fillStyle = "#FFE600";
-            drawWrappedText(ctx, cue.text, width / 2, height * 0.7, 200);
+            ctx.strokeStyle =
+              "#000";
+            ctx.fillStyle =
+              "#FFE600";
+
+            drawWrappedText(
+              ctx,
+              cue.text,
+              width / 2,
+              height * 0.7,
+              220
+            );
           }
         }
+
+        animationFrame =
+          requestAnimationFrame(
+            draw
+          );
       };
 
-      drawLoop();
+      if (recordingStarted) {
+        animationFrame =
+          requestAnimationFrame(
+            draw
+          );
+      }
 
-      setTimeout(stopRecording, (actualDuration + 3) * 1000);
+      setTimeout(
+        () => {
+          if (!finished) {
+            finish();
+          }
+        },
+        (actualDuration + 2) *
+          1000
+      );
     });
-  } catch (err) {
-    cleanup();
-    throw err;
+  } catch (error) {
+    if (activeVideo) {
+      const av = activeVideo as HTMLVideoElement;
+      av.pause();
+      av.removeAttribute("src");
+      av.load();
+      av.remove();
+    }
+
+    canvas.remove();
+
+    if (audioContext) {
+      await audioContext
+        .close()
+        .catch(() => {});
+    }
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Error desconocido durante el renderizado.";
+
+    throw new Error(message);
   }
 }
