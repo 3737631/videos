@@ -106,10 +106,10 @@ async function fetchTTSBuffer(text: string, lang: string, ctx: AudioContext, onS
   const rvVoice = rvMap[lang] || "Spanish Female";
   const encodedText = encodeURIComponent(text);
   const googleTtsUrl = `https://translate.googleapis.com/translate_tts?client=gtx&ie=UTF-8&tl=${lang}&q=${encodedText}`;
-  // 4 pasarelas: SE (calidad), ResponsiveVoice (anti-AdBlock), CorsProxy, AllOrigins
+  // 4 pasarelas: SE (calidad), ResponsiveVoice viral rápida, CorsProxy, AllOrigins
   const pasarelas: { name: string; url: string }[] = [
     { name: "StreamElements", url: `https://api.streamelements.com/kappa/v2/speech?voice=${voice}&text=${encodedText}` },
-    { name: "ResponsiveVoice", url: `https://code.responsivevoice.org/getvoice.php?t=${encodedText}&tl=${lang}&sv=g2&vn=${encodeURIComponent(rvVoice)}&pitch=0.5&rate=0.45&vol=1` },
+    { name: "ResponsiveVoice", url: `https://code.responsivevoice.org/getvoice.php?t=${encodedText}&tl=${lang}&sv=g2&vn=${encodeURIComponent(rvVoice)}&pitch=0.5&rate=0.92&vol=1` },
     { name: "CorsProxy", url: `https://corsproxy.io/?${encodeURIComponent(googleTtsUrl)}` },
     { name: "AllOrigins", url: `https://api.allorigins.win/get?url=${encodeURIComponent(googleTtsUrl)}` },
   ];

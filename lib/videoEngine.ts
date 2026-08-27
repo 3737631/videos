@@ -65,20 +65,19 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     source.buffer = audioBuffer;
     if (mode === "voice") {
       if (isFallback) {
-        const rate = 1.45;
+        const rate = 1.52;
         source.playbackRate.value = rate;
         if ("detune" in source && source.detune) source.detune.value = -1200 * Math.log2(rate);
         voiceDuration = actualDuration / rate;
       } else {
-        const rate = 1.58;
+        const rate = 1.62;
         source.playbackRate.value = rate;
         if ("detune" in source && source.detune) source.detune.value = -1200 * Math.log2(rate);
         voiceDuration = actualDuration / rate;
       }
-      // Viral rápido: voz acelerada + cola de cierre sin subtítulo
-      actualDuration = Math.max(7.8, voiceDuration) + 0.35;
-      if (audioBuffer.duration < 5) actualDuration = Math.max(actualDuration, 7.8);
-      voiceDuration = actualDuration - 0.35;
+      // Viral: voz y subtítulos perfectamente sincronizados, cola breve sin subtítulo
+      actualDuration = voiceDuration + 0.28;
+      voiceDuration = actualDuration - 0.28;
     } else {
       source.loop = true;
       voiceDuration = actualDuration;
