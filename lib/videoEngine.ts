@@ -265,7 +265,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<string> {
           ctx.drawImage(activeVideo, (width - dw) / 2, (height - dh) / 2, dw, dh);
         }
 
-        // SUBTÍTULOS DINÁMICOS POR TIEMPO REAL (Vertical 270x480, ancho máximo estricto de 200px)
+        // SUBTÍTULOS DINÁMICOS POR ÍNDICE EXACTO (Vertical 270x480, ancho máximo 200px para que nunca salgan)
         if (mode === "voice" && dynamicCues.length > 0) {
           let cue = dynamicCues.find(c => elapsed >= c.start && elapsed <= c.end);
           if (!cue) {
