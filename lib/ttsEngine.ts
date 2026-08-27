@@ -18,17 +18,47 @@ const SPELL_FIXES: Record<string, string> = {
   freidoraa: "freidora",
 };
 
+// Diccionario base para corrección automática (es + palabras virales)
+const DICTIONARY = new Set([
+  "naranja","manzana","platano","limpiador","aspiradora","freidora","coche","cocina","ropa","crema","producto","necesitas","secreto","vida","esfuerzo","facil","calidad","invento","perfecto","rutina","consiguelo","pruebalo","encantara","arrepentiras","cansado","problemas","salvo","secreto","nadie","contar","mira","salvo","vida","ahorra","horas","super","boca","abierta","mejor","funciona","cambia","empieza","usarlo","ya","hoy","ahora","viral","limpia","mancha","suciedad","grasa","brillante","desinfectado","potente","polvo","rincon","silenciosa","cables","tapiceria","llantas","brillo","profesional","antiadherente","tiempo","energia","suave","efectiva","radiante","comoda","resistente","estilo","combina","talla","premium",
+  "tired","problems","need","secret","nobody","tells","look","saved","saves","hours","easy","quality","blow","mind","invention","year","today","change","try","regret","start","using",
+]);
+
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++) dp[i][j] = a[i-1]===b[j-1] ? dp[i-1][j-1] : 1+Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+  return dp[m][n];
+}
+
 function correctSpelling(text: string): string {
   return text
     .split(/(\s+)/)
     .map(part => {
       if (/^\s+$/.test(part)) return part;
-      const lower = part.toLowerCase().replace(/[.,!?¿¡'’"()-]/g, "");
-      const fix = SPELL_FIXES[lower];
-      if (fix) {
-        // Mantener mayúscula inicial si la tenía
-        if (part[0] === part[0].toUpperCase()) return fix.charAt(0).toUpperCase() + fix.slice(1);
-        return fix;
+      const punct = part.match(/^[.,!?¿¡'’"()-]+|[.,!?¿¡'’"()-]+$/g);
+      const core = part.replace(/^[.,!?¿¡'’"()-]+|[.,!?¿¡'’"()-]+$/g, "");
+      if (!core) return part;
+      const lower = core.toLowerCase();
+      if (SPELL_FIXES[lower]) {
+        const fix = SPELL_FIXES[lower];
+        return part.replace(core, core[0]===core[0].toUpperCase() ? fix.charAt(0).toUpperCase()+fix.slice(1) : fix);
+      }
+      if (DICTIONARY.has(lower) || lower.length <= 3) return part;
+      // Buscar palabra cercana en diccionario (distancia <=2)
+      let best: string | null = null;
+      let bestDist = 3;
+      for (const w of DICTIONARY) {
+        if (Math.abs(w.length - lower.length) > 2) continue;
+        if (w[0] !== lower[0]) continue;
+        const d = levenshtein(lower, w);
+        if (d < bestDist) { bestDist = d; best = w; if (d===1) break; }
+      }
+      if (best && bestDist <= 2) {
+        const fix = best;
+        return part.replace(core, core[0]===core[0].toUpperCase() ? fix.charAt(0).toUpperCase()+fix.slice(1) : fix);
       }
       return part;
     })
