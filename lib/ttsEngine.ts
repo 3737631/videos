@@ -2,17 +2,31 @@ import { SubtitleCue } from "@/types";
 
 export async function generateSpeechAndCues(
   text: string,
+  targetDurationSec: number,
   lang: string = "es"
-): Promise<{ audioBlob: Blob; wordChunks: string[] }> {
+): Promise<{ audioBlob: Blob; cues: SubtitleCue[] }> {
   
   const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑçãõâêîôûàèìòù.,!¿?'-]/g, "").trim();
   const rawWords = cleanText.split(/\s+/).filter(Boolean);
   if (rawWords.length === 0) throw new Error("Guion vacío");
 
-  // Subtítulos de 2 en 2 palabras
-  const wordChunks: string[] = [];
+  const timePerWord = targetDurationSec / rawWords.length;
+  const cues: SubtitleCue[] = [];
+  
+  // Subtítulos agrupados de 2 en 2
   for (let i = 0; i < rawWords.length; i += 2) {
-    wordChunks.push(rawWords.slice(i, i + 2).join(" "));
+    const chunk = rawWords.slice(i, i + 2);
+    cues.push({
+      id: i,
+      text: chunk.join(" "),
+      start: i * timePerWord,
+      end: (i + chunk.length) * timePerWord,
+      words: chunk.map((word, idx) => ({
+        text: word,
+        start: (i + idx) * timePerWord,
+        end: (i + idx + 1) * timePerWord,
+      })),
+    });
   }
 
   const voiceMap: Record<string, { streamElements: string, google: string }> = {
@@ -23,76 +37,66 @@ export async function generateSpeechAndCues(
   };
   const v = voiceMap[lang] || voiceMap["es"];
 
-  // Cortar texto en bloques de 150 caracteres para la API
-  const textChunks = cleanText.match(/.{1,150}(?:\s|$)/g) || [cleanText];
+  // Separamos el texto en un par de trozos para que Google no lo bloquee por longitud
+  const textChunks = cleanText.match(/.{1,120}(?:\s|$)/g) || [cleanText];
+  const audioBuffers: ArrayBuffer[] = [];
 
-  // DESCARGA INSTANTÁNEA EN PARALELO (Cero tiempos de espera)
-  const fetchPromises = textChunks.map(async (chunk) => {
-    if (!chunk.trim()) return null;
+  // Peticiones ultra rápidas
+  for (const chunk of textChunks) {
+    if (!chunk.trim()) continue;
     const encoded = encodeURIComponent(chunk.trim());
+    const url = `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`)}`;
     
-    // Intenta Amazon Polly, si falla, usa Google a través de un proxy rápido
-    const urls = [
-      `https://api.streamelements.com/kappa/v2/speech?voice=${v.streamElements}&text=${encoded}`,
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`)}`
-    ];
-
-    for (const url of urls) {
-      try {
-        const res = await fetch(url, { cache: "no-store" });
-        if (res.ok) {
-          const buf = await res.arrayBuffer();
-          if (buf.byteLength > 1000) return buf;
-        }
-      } catch (e) { continue; }
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (res.ok) {
+        const buf = await res.arrayBuffer();
+        if (buf.byteLength > 1000) audioBuffers.push(buf);
+      }
+    } catch (e) {
+      continue;
     }
-    return null;
-  });
-
-  const buffers = await Promise.all(fetchPromises);
-  const validBuffers = buffers.filter(b => b !== null) as ArrayBuffer[];
+  }
 
   let finalBlob: Blob;
-  if (validBuffers.length > 0) {
-    const totalLength = validBuffers.reduce((acc, b) => acc + b.byteLength, 0);
+  if (audioBuffers.length > 0) {
+    const totalLength = audioBuffers.reduce((acc, b) => acc + b.byteLength, 0);
     const merged = new Uint8Array(totalLength);
     let offset = 0;
-    for (const b of validBuffers) {
+    for (const b of audioBuffers) {
       merged.set(new Uint8Array(b), offset);
       offset += b.byteLength;
     }
     finalBlob = new Blob([merged], { type: "audio/mp3" });
   } else {
-    // Si no hay internet en absoluto, hace un pitido rápido para no bloquearse
-    finalBlob = await generateOfflineVoice(rawWords.length);
+    // Si falla el internet, genera el audio de emergencia (para no provocar error de 0 segundos)
+    finalBlob = await generateOfflineVoice(rawWords.length, targetDurationSec);
   }
 
-  return { audioBlob: finalBlob, wordChunks };
+  return { audioBlob: finalBlob, cues };
 }
 
-// Generador offline ultra rápido
-async function generateOfflineVoice(wordCount: number): Promise<Blob> {
+async function generateOfflineVoice(wordCount: number, targetDuration: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
-  const duration = wordCount * 0.35; 
-  const offlineCtx = new AC(1, 44100 * duration, 44100);
+  const offlineCtx = new AC(1, 44100 * targetDuration, 44100);
+  const timePerWord = targetDuration / wordCount;
   
   for (let i = 0; i < wordCount; i++) {
     const osc = offlineCtx.createOscillator();
     const gain = offlineCtx.createGain();
     osc.frequency.value = 350; 
     osc.type = "sine"; 
-    gain.gain.setValueAtTime(0.3, i * 0.35);
-    gain.gain.exponentialRampToValueAtTime(0.01, (i * 0.35) + 0.3);
+    gain.gain.setValueAtTime(0.3, i * timePerWord);
+    gain.gain.exponentialRampToValueAtTime(0.01, (i * timePerWord) + (timePerWord * 0.8));
     osc.connect(gain);
     gain.connect(offlineCtx.destination);
-    osc.start(i * 0.35);
-    osc.stop((i * 0.35) + 0.35);
+    osc.start(i * timePerWord);
+    osc.stop((i * timePerWord) + timePerWord);
   }
   const renderedBuffer = await offlineCtx.startRendering();
   return audioBufferToWav(renderedBuffer);
 }
 
-// Generador de Base Phonk
 export async function generateViralMusic(duration: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
   const sampleRate = 44100;

@@ -1,17 +1,13 @@
-import { RenderConfig } from "@/types";
+import { RenderConfig, SubtitleCue } from "@/types";
 
 const INVISIBLE_CSS = "position:fixed;top:0;left:-9999px;width:270px;height:480px;z-index:-100;pointer-events:none;";
 
-interface ExtendedRenderConfig extends RenderConfig {
-  wordChunks?: string[];
-}
-
-// SISTEMA DE SALTO DE LÍNEA AUTOMÁTICO (Nunca se salen de la pantalla)
+// AUTO-AJUSTE PERFECTO DE SUBTÍTULOS (Centrado vertical y horizontal)
 function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number) {
   const words = text.split(' ');
   let line = '';
   const lines = [];
-  const lineHeight = 38; // Espaciado de líneas
+  const lineHeight = 30; 
 
   for (let n = 0; n < words.length; n++) {
     const testLine = line + words[n] + ' ';
@@ -25,20 +21,24 @@ function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number,
   }
   lines.push(line.trim());
   
+  // Calculamos el Y para que todo el bloque quede centrado perfectamente
   let currentY = y - ((lines.length - 1) * lineHeight) / 2; 
   
   for (let k = 0; k < lines.length; k++) {
+    // Al usar textAlign = "center", la x debe ser la mitad del canvas
     ctx.strokeText(lines[k], x, currentY);
     ctx.fillText(lines[k], x, currentY);
     currentY += lineHeight;
   }
 }
 
-export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<string> {
-  const { clips, audioBlob, wordChunks, mode } = config;
+export async function renderFinalVideo(config: RenderConfig): Promise<string> {
+  const { clips, audioBlob, cues, targetDuration, onProgress, mode } = config;
   
   const width = 270;
   const height = 480;
+  
+  // EL MOTOR FLUIDO Y SIN TIRONES (ESTÁNDAR TIKTOK)
   const FPS = 30; 
   const frameInterval = 1000 / FPS;
 
@@ -48,23 +48,25 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
   document.body.appendChild(canvas);
   
   const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
-  if (!ctx) throw new Error("Tu navegador no soporta Canvas 2D.");
+  if (!ctx) throw new Error("Tu navegador no permite gráficos 2D.");
+
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, width, height);
 
   let dest: MediaStreamAudioDestinationNode | null = null;
   let audioCtx: AudioContext | null = null;
-  let actualDuration = config.targetDuration || 10;
-  let dynamicCues: {text: string, start: number, end: number}[] = [];
+  let isAudioAlive = false;
 
   try {
     const AC = window.AudioContext || (window as any).webkitAudioContext;
     if (AC) {
       audioCtx = new AC();
-      if (audioCtx.state === "suspended") await audioCtx.resume();
       dest = audioCtx.createMediaStreamDestination();
+      if (audioCtx.state === "suspended") await audioCtx.resume();
 
       const osc = audioCtx.createOscillator();
       const silentGain = audioCtx.createGain();
-      silentGain.gain.value = 0.01; 
+      silentGain.gain.value = 0; 
       osc.connect(silentGain);
       silentGain.connect(dest);
       osc.start();
@@ -72,27 +74,14 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
       if (audioBlob) {
         const ab = await audioBlob.arrayBuffer();
         const decoded = await audioCtx.decodeAudioData(ab);
-        
-        if (decoded.duration > 0 && !isNaN(decoded.duration)) {
-            actualDuration = decoded.duration;
-        }
-
         const source = audioCtx.createBufferSource();
         source.buffer = decoded;
         
-        if (mode === "voice" && wordChunks) {
-          // Aceleración de voz suave (1.15x) para dinamismo
-          source.playbackRate.value = 1.15;
-          actualDuration = actualDuration / 1.15;
-
-          const timePerChunk = actualDuration / wordChunks.length;
-          wordChunks.forEach((text, i) => {
-            dynamicCues.push({
-              text: text.toUpperCase(),
-              start: i * timePerChunk,
-              end: (i + 1) * timePerChunk
-            });
-          });
+        if (mode === "voice") {
+          // Acelerador sutil para dinamismo sin romper la voz
+          let speedRatio = decoded.duration / targetDuration;
+          speedRatio = Math.max(0.8, Math.min(speedRatio, 1.3)); 
+          source.playbackRate.value = speedRatio;
         } else {
           source.loop = true;
         }
@@ -100,19 +89,30 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
         source.connect(dest);
         source.start(0);
       }
+      if (audioCtx.state === "running") isAudioAlive = true;
     }
-  } catch (e) { console.error("Audio desactivado:", e); }
+  } catch (e) {}
 
   const captureStreamFunc = canvas.captureStream || (canvas as any).mozCaptureStream || (canvas as any).webkitCaptureStream;
   const canvasStream = captureStreamFunc.call(canvas, FPS);
   const tracks = [...canvasStream.getVideoTracks()];
-  if (dest) tracks.push(...dest.stream.getAudioTracks());
+  if (dest && isAudioAlive) tracks.push(...dest.stream.getAudioTracks());
   const combinedStream = new MediaStream(tracks);
   
-  const mime = MediaRecorder.isTypeSupported?.("video/mp4") ? "video/mp4" : "video/webm";
+  const isApple = /iPhone|iPad|iPod|Safari/i.test(navigator.userAgent) && !/Chrome/i.test(navigator.userAgent);
+  const checkMime = (t: string) => { try { return MediaRecorder.isTypeSupported?.(t); } catch { return false; } };
+  
+  let mime = "";
+  if (isApple && checkMime("video/mp4")) mime = "video/mp4";
+  else if (checkMime("video/webm;codecs=vp8,opus")) mime = "video/webm;codecs=vp8,opus";
+  else if (checkMime("video/webm;codecs=vp8")) mime = "video/webm;codecs=vp8";
+  else if (checkMime("video/webm")) mime = "video/webm";
+
   let recorder: MediaRecorder;
   try {
-    recorder = new MediaRecorder(combinedStream, { mimeType: mime, videoBitsPerSecond: 1000000 });
+    recorder = mime 
+      ? new MediaRecorder(combinedStream, { mimeType: mime, videoBitsPerSecond: 1000000 }) 
+      : new MediaRecorder(combinedStream);
   } catch (err) {
     recorder = new MediaRecorder(combinedStream);
   }
@@ -122,50 +122,81 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
 
   return new Promise<string>(async (resolve, reject) => {
     let isFinished = false;
+    let isResolved = false; 
     let currentClipIdx = -1;
     let activeVideo: HTMLVideoElement | null = null;
     let lastDrawTime = performance.now();
     let frameId = 0;
     
-    const clipDur = actualDuration / clips.length;
+    // Calculamos los cortes basados en la duración garantizada
+    const clipStartTimes: number[] = [];
+    const clipDur = targetDuration / clips.length;
+    let acc = 0;
+    for (const c of clips) {
+      clipStartTimes.push(acc);
+      acc += clipDur;
+    }
 
     const finalize = () => {
+      if (isResolved) return;
+      isResolved = true; 
       cancelAnimationFrame(frameId);
-      if (activeVideo) { activeVideo.removeAttribute("src"); activeVideo.remove(); }
+      tracks.forEach(t => t.stop());
+      if (activeVideo) {
+        activeVideo.removeAttribute("src");
+        activeVideo.remove();
+      }
       setTimeout(() => { canvas.width = 0; canvas.remove(); }, 200);
       try { audioCtx?.close(); } catch(e){}
-      
-      if (chunks.length === 0) reject(new Error("No se procesó el vídeo."));
+
+      if (chunks.length === 0) reject(new Error("No se procesó vídeo."));
       else resolve(URL.createObjectURL(new Blob(chunks, { type: mime || "video/mp4" })));
     };
 
     const stopRecording = () => {
       if (isFinished) return;
       isFinished = true;
-      try { if (recorder.state !== "inactive") recorder.stop(); } catch(e){}
+      try {
+        if (recorder.state !== "inactive") {
+          try { recorder.requestData(); } catch(e){} 
+          try { recorder.stop(); } catch(e){}
+        }
+      } catch(e){}
       setTimeout(finalize, 1000); 
     };
 
+    // MAGIA ANTI-TIRONES
     const loadVideoAsync = async (index: number) => {
       if (index >= clips.length) return;
+
       const newVideo = document.createElement("video");
       newVideo.src = clips[index].url;
-      newVideo.currentTime = Math.random() * Math.max(0, clips[index].playDuration - clipDur); 
+      // Empieza en un momento aleatorio para dar dinamismo a los cortes
+      newVideo.currentTime = Math.random() * Math.max(0, clips[index].playDuration - clipDur);
       newVideo.muted = true;
       newVideo.playsInline = true;
       newVideo.style.cssText = INVISIBLE_CSS;
       document.body.appendChild(newVideo);
       
-      await new Promise<void>(res => { newVideo.oncanplay = () => res(); setTimeout(res, 400); });
+      await new Promise<void>(res => { 
+        newVideo.oncanplay = () => res(); 
+        setTimeout(res, 400); 
+      });
+      
       newVideo.play().catch(()=>{});
 
       const oldVideo = activeVideo;
       activeVideo = newVideo;
-      if (oldVideo) { oldVideo.pause(); oldVideo.removeAttribute("src"); oldVideo.remove(); }
+      if (oldVideo) {
+        oldVideo.pause();
+        oldVideo.removeAttribute("src");
+        oldVideo.load();
+        oldVideo.remove();
+      }
     };
 
     recorder.onstop = finalize;
-    recorder.onerror = () => reject(new Error("Error al grabar el vídeo."));
+    recorder.onerror = () => reject(new Error("Error interno al grabar."));
 
     recorder.start(250); 
     const start = performance.now();
@@ -182,9 +213,9 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
       if (delta >= frameInterval) {
         lastDrawTime = now - (delta % frameInterval);
         const elapsed = (now - start) / 1000;
-        config.onProgress(Math.min(100, (elapsed / actualDuration) * 100));
+        config.onProgress(Math.min(100, (elapsed / targetDuration) * 100));
 
-        if (elapsed >= actualDuration) {
+        if (elapsed >= targetDuration) {
           stopRecording();
           return;
         }
@@ -195,34 +226,37 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
           loadVideoAsync(currentClipIdx); 
         }
 
-        ctx.fillStyle = "#000000"; 
-        ctx.fillRect(0, 0, width, height);
-
         if (activeVideo && activeVideo.readyState >= 2) {
+          ctx.fillStyle = "#000000"; 
+          ctx.fillRect(0, 0, width, height);
+
           const scale = Math.max(width / activeVideo.videoWidth, height / activeVideo.videoHeight);
           const dw = activeVideo.videoWidth * scale;
           const dh = activeVideo.videoHeight * scale;
           ctx.drawImage(activeVideo, (width - dw) / 2, (height - dh) / 2, dw, dh);
         }
 
-        if (mode === "voice") {
-          const cue = dynamicCues.find(c => elapsed >= c.start && elapsed <= c.end);
+        // DIBUJADO DE SUBTÍTULOS PERFECTAMENTE CENTRADO
+        if (config.mode === "voice" && cues) {
+          const cue = cues.find(c => elapsed >= c.start && elapsed <= c.end);
           if (cue) {
-            ctx.font = '900 36px "Inter", "Arial", sans-serif'; 
+            ctx.font = '900 28px "Inter", sans-serif'; 
             ctx.textAlign = "center"; 
             ctx.textBaseline = "middle";
-            ctx.lineWidth = 6; 
-            ctx.strokeStyle = "#000000";
-            ctx.fillStyle = "#FFE600"; 
+            ctx.lineJoin = "round";
             
-            // X, Y y Ancho Máximo permitidos
-            drawWrappedText(ctx, cue.text, width / 2, height / 2, width - 20);
+            ctx.lineWidth = 5; 
+            ctx.strokeStyle = "#000";
+            ctx.fillStyle = "#FFE600";
+            
+            // X siempre en la mitad (width/2) y maxWidth ajustado para que no toque los bordes
+            drawWrappedText(ctx, cue.text.toUpperCase(), width / 2, height * 0.75, width - 40);
           }
         }
       }
     };
     
     drawLoop();
-    setTimeout(stopRecording, (actualDuration + 2) * 1000); 
+    setTimeout(stopRecording, (targetDuration + 2) * 1000);
   });
 }

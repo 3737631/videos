@@ -48,6 +48,7 @@ export default function App() {
     lector.load();
 
     setClips(validClips.sort(() => Math.random() - 0.5));
+    // Tiempo estimado seguro (entre 5 y 15 segundos)
     setTotalDuration(Math.min(15, Math.max(5, Math.round(accDur))));
     setStep(2);
   };
@@ -57,9 +58,9 @@ export default function App() {
 
     const data: Record<string, { hooks: string[], benefits: string[], calls: string[] }> = {
       es: {
-        hooks: [`¿Cansado de los mismos problemas? Necesitas ${cleanInfo}.`, `El secreto que nadie te quiere contar sobre ${cleanInfo}.`, `Mira cómo ${cleanInfo} me salvó la vida.`],
-        benefits: ["Te ahorra horas de esfuerzo y es súper fácil de usar.", "La calidad te dejará con la boca abierta.", "Es el mejor invento y funciona a la perfección."],
-        calls: ["Consíguelo hoy y cambia tu rutina.", "Pruébalo ahora, no te arrepentirás.", "Empieza a usarlo."]
+        hooks: [`¿Cansado de los mismos problemas? Necesitas ${cleanInfo}.`, `El secreto que nadie te quiere contar sobre ${cleanInfo}.`, `Mira cómo ${cleanInfo} me salvó el día.`],
+        benefits: ["Te ahorra horas de esfuerzo y es súper fácil.", "La calidad te dejará con la boca abierta.", "Es el mejor invento y funciona perfecto."],
+        calls: ["Consíguelo hoy y cambia tu rutina.", "Pruébalo ahora, no te arrepentirás.", "Empieza a usarlo ya."]
       },
       en: {
         hooks: [`Tired of the same problems? You need ${cleanInfo}.`, `The secret nobody tells you about ${cleanInfo}.`, `Look how ${cleanInfo} totally saved my day.`],
@@ -89,19 +90,19 @@ export default function App() {
   const processVideo = async () => {
     setStep(4);
     setProgress(5);
-    setStatus("Preparando motores...");
+    setStatus("Preparando archivos...");
 
     try {
       let audioBlob = null;
-      let wordChunks: string[] = [];
+      let cues: any = [];
 
       if (mode === "voice") {
         setStatus(`Generando voz en ${language.toUpperCase()}...`);
         const script = generateScriptLocal(productPrompt, language);
         
-        const tts = await generateSpeechAndCues(script, language);
+        const tts = await generateSpeechAndCues(script, totalDuration, language);
         audioBlob = tts.audioBlob;
-        wordChunks = tts.wordChunks;
+        cues = tts.cues;
       } else {
         setStatus("Generando base musical...");
         audioBlob = await generateViralMusic(totalDuration);
@@ -111,7 +112,7 @@ export default function App() {
       const url = await renderFinalVideo({
         clips, 
         audioBlob, 
-        wordChunks, 
+        cues, 
         mode: mode!, 
         targetDuration: totalDuration, 
         onProgress: (p) => setProgress(Math.round(p))
@@ -136,7 +137,7 @@ export default function App() {
     <main className="min-h-[100dvh] bg-[#09090b] text-white flex flex-col items-center justify-center p-4 sm:p-6 overflow-x-hidden">
       <div className="w-full max-w-xl text-center mb-6 sm:mb-8 mt-4">
         <div className="inline-block bg-purple-500/10 border border-purple-500/30 text-purple-400 px-3 py-1 rounded-full text-[10px] sm:text-xs font-bold mb-3 sm:mb-4 tracking-widest">
-          TIKTOK AUTOMATOR FINAL (ESTABLE)
+          TIKTOK AUTOMATOR (VERSIÓN ESTABLE 30FPS)
         </div>
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent leading-tight">
           Creador Viral
