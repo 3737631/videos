@@ -5,7 +5,6 @@ export async function generateSpeechAndCues(
   lang: string = "es"
 ): Promise<{ audioBlob: Blob; wordChunks: string[] }> {
   
-  // Limpieza del texto
   const cleanText = text.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑçãõâêîôûàèìòù.,!¿?'-]/g, "").trim();
   const rawWords = cleanText.split(/\s+/).filter(Boolean);
   if (rawWords.length === 0) throw new Error("Guion vacío");
@@ -16,7 +15,6 @@ export async function generateSpeechAndCues(
     wordChunks.push(rawWords.slice(i, i + 2).join(" "));
   }
 
-  // Mapa de los 4 Idiomas
   const voiceMap: Record<string, { streamElements: string, google: string }> = {
     es: { streamElements: "Mia", google: "es-ES" },
     en: { streamElements: "Brian", google: "en-US" },
@@ -25,40 +23,54 @@ export async function generateSpeechAndCues(
   };
   const v = voiceMap[lang] || voiceMap["es"];
 
-  // UNA SOLA PETICIÓN: Rápido y sin bloqueos de Spam
-  const encoded = encodeURIComponent(cleanText);
-  const urls = [
-    `https://api.streamelements.com/kappa/v2/speech?voice=${v.streamElements}&text=${encoded}`,
-    `https://corsproxy.io/?https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`)}`
-  ];
+  // Cortar texto en bloques de 150 caracteres para la API
+  const textChunks = cleanText.match(/.{1,150}(?:\s|$)/g) || [cleanText];
 
-  let finalBlob: Blob | null = null;
+  // DESCARGA INSTANTÁNEA EN PARALELO (Cero tiempos de espera)
+  const fetchPromises = textChunks.map(async (chunk) => {
+    if (!chunk.trim()) return null;
+    const encoded = encodeURIComponent(chunk.trim());
+    
+    // Intenta Amazon Polly, si falla, usa Google a través de un proxy rápido
+    const urls = [
+      `https://api.streamelements.com/kappa/v2/speech?voice=${v.streamElements}&text=${encoded}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${v.google}&client=tw-ob&q=${encoded}`)}`
+    ];
 
-  for (const url of urls) {
-    try {
-      const res = await fetch(url, { cache: "no-store" });
-      if (res.ok) {
-        const buf = await res.arrayBuffer();
-        if (buf.byteLength > 1000) { // Verifica que el audio es válido
-          finalBlob = new Blob([buf], { type: "audio/mp3" });
-          break; // Éxito, salimos del bucle
+    for (const url of urls) {
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        if (res.ok) {
+          const buf = await res.arrayBuffer();
+          if (buf.byteLength > 1000) return buf;
         }
-      }
-    } catch (e) {
-      continue; // Si falla, intenta el siguiente enlace
+      } catch (e) { continue; }
     }
-  }
+    return null;
+  });
 
-  // Si fallan todas las redes, crea un audio de emergencia para que el vídeo NO sea de 0 segundos
-  if (!finalBlob) {
+  const buffers = await Promise.all(fetchPromises);
+  const validBuffers = buffers.filter(b => b !== null) as ArrayBuffer[];
+
+  let finalBlob: Blob;
+  if (validBuffers.length > 0) {
+    const totalLength = validBuffers.reduce((acc, b) => acc + b.byteLength, 0);
+    const merged = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const b of validBuffers) {
+      merged.set(new Uint8Array(b), offset);
+      offset += b.byteLength;
+    }
+    finalBlob = new Blob([merged], { type: "audio/mp3" });
+  } else {
+    // Si no hay internet en absoluto, hace un pitido rápido para no bloquearse
     finalBlob = await generateOfflineVoice(rawWords.length);
   }
 
   return { audioBlob: finalBlob, wordChunks };
 }
 
-// Generador offline de emergencia (pitidos suaves sincronizados)
+// Generador offline ultra rápido
 async function generateOfflineVoice(wordCount: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
   const duration = wordCount * 0.35; 
@@ -76,12 +88,11 @@ async function generateOfflineVoice(wordCount: number): Promise<Blob> {
     osc.start(i * 0.35);
     osc.stop((i * 0.35) + 0.35);
   }
-  
   const renderedBuffer = await offlineCtx.startRendering();
   return audioBufferToWav(renderedBuffer);
 }
 
-// Generador de Base Phonk para el Modo Musical
+// Generador de Base Phonk
 export async function generateViralMusic(duration: number): Promise<Blob> {
   const AC = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
   const sampleRate = 44100;
@@ -112,7 +123,6 @@ export async function generateViralMusic(duration: number): Promise<Blob> {
       hat.start(i + beatTime / 2); hat.stop(i + beatTime / 2 + 0.1);
     }
   }
-  
   const renderedBuffer = await offlineCtx.startRendering();
   return audioBufferToWav(renderedBuffer);
 }

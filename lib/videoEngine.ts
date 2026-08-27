@@ -6,6 +6,34 @@ interface ExtendedRenderConfig extends RenderConfig {
   wordChunks?: string[];
 }
 
+// SISTEMA DE SALTO DE LÍNEA AUTOMÁTICO (Nunca se salen de la pantalla)
+function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number) {
+  const words = text.split(' ');
+  let line = '';
+  const lines = [];
+  const lineHeight = 38; // Espaciado de líneas
+
+  for (let n = 0; n < words.length; n++) {
+    const testLine = line + words[n] + ' ';
+    const metrics = ctx.measureText(testLine);
+    if (metrics.width > maxWidth && n > 0) {
+      lines.push(line.trim());
+      line = words[n] + ' ';
+    } else {
+      line = testLine;
+    }
+  }
+  lines.push(line.trim());
+  
+  let currentY = y - ((lines.length - 1) * lineHeight) / 2; 
+  
+  for (let k = 0; k < lines.length; k++) {
+    ctx.strokeText(lines[k], x, currentY);
+    ctx.fillText(lines[k], x, currentY);
+    currentY += lineHeight;
+  }
+}
+
 export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<string> {
   const { clips, audioBlob, wordChunks, mode } = config;
   
@@ -34,7 +62,6 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
       if (audioCtx.state === "suspended") await audioCtx.resume();
       dest = audioCtx.createMediaStreamDestination();
 
-      // Oscilador de fondo (inperceptible) para forzar que el grabador de audio no se duerma
       const osc = audioCtx.createOscillator();
       const silentGain = audioCtx.createGain();
       silentGain.gain.value = 0.01; 
@@ -46,7 +73,6 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
         const ab = await audioBlob.arrayBuffer();
         const decoded = await audioCtx.decodeAudioData(ab);
         
-        // El vídeo dura exactamente lo mismo que el audio (Cero silencios)
         if (decoded.duration > 0 && !isNaN(decoded.duration)) {
             actualDuration = decoded.duration;
         }
@@ -55,11 +81,10 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
         source.buffer = decoded;
         
         if (mode === "voice" && wordChunks) {
-          // Acelerador Viral para la voz (máximo 1.25x)
+          // Aceleración de voz suave (1.15x) para dinamismo
           source.playbackRate.value = 1.15;
           actualDuration = actualDuration / 1.15;
 
-          // Repartimos los subtítulos por el audio
           const timePerChunk = actualDuration / wordChunks.length;
           wordChunks.forEach((text, i) => {
             dynamicCues.push({
@@ -69,16 +94,14 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
             });
           });
         } else {
-          source.loop = true; // Loop para música
+          source.loop = true;
         }
 
         source.connect(dest);
         source.start(0);
       }
     }
-  } catch (e) {
-    console.error("Audio desactivado:", e);
-  }
+  } catch (e) { console.error("Audio desactivado:", e); }
 
   const captureStreamFunc = canvas.captureStream || (canvas as any).mozCaptureStream || (canvas as any).webkitCaptureStream;
   const canvasStream = captureStreamFunc.call(canvas, FPS);
@@ -86,18 +109,10 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
   if (dest) tracks.push(...dest.stream.getAudioTracks());
   const combinedStream = new MediaStream(tracks);
   
-  const isApple = /iPhone|iPad|iPod|Safari/i.test(navigator.userAgent) && !/Chrome/i.test(navigator.userAgent);
-  const checkMime = (t: string) => { try { return MediaRecorder.isTypeSupported?.(t); } catch { return false; } };
-  
-  let mime = "";
-  if (isApple && checkMime("video/mp4")) mime = "video/mp4";
-  else if (checkMime("video/webm;codecs=vp8,opus")) mime = "video/webm;codecs=vp8,opus";
-  else if (checkMime("video/webm;codecs=vp8")) mime = "video/webm;codecs=vp8";
-  else mime = "video/webm";
-
+  const mime = MediaRecorder.isTypeSupported?.("video/mp4") ? "video/mp4" : "video/webm";
   let recorder: MediaRecorder;
   try {
-    recorder = mime ? new MediaRecorder(combinedStream, { mimeType: mime, videoBitsPerSecond: 1000000 }) : new MediaRecorder(combinedStream);
+    recorder = new MediaRecorder(combinedStream, { mimeType: mime, videoBitsPerSecond: 1000000 });
   } catch (err) {
     recorder = new MediaRecorder(combinedStream);
   }
@@ -120,7 +135,7 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
       setTimeout(() => { canvas.width = 0; canvas.remove(); }, 200);
       try { audioCtx?.close(); } catch(e){}
       
-      if (chunks.length === 0) reject(new Error("No se procesó el vídeo (Cero fotogramas)."));
+      if (chunks.length === 0) reject(new Error("No se procesó el vídeo."));
       else resolve(URL.createObjectURL(new Blob(chunks, { type: mime || "video/mp4" })));
     };
 
@@ -135,7 +150,6 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
       if (index >= clips.length) return;
       const newVideo = document.createElement("video");
       newVideo.src = clips[index].url;
-      // Inicia el clip aleatoriamente para evadir partes aburridas
       newVideo.currentTime = Math.random() * Math.max(0, clips[index].playDuration - clipDur); 
       newVideo.muted = true;
       newVideo.playsInline = true;
@@ -181,7 +195,6 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
           loadVideoAsync(currentClipIdx); 
         }
 
-        // Pintado de pantalla
         ctx.fillStyle = "#000000"; 
         ctx.fillRect(0, 0, width, height);
 
@@ -192,30 +205,24 @@ export async function renderFinalVideo(config: ExtendedRenderConfig): Promise<st
           ctx.drawImage(activeVideo, (width - dw) / 2, (height - dh) / 2, dw, dh);
         }
 
-        // SUBTÍTULOS PERFECTOS
         if (mode === "voice") {
           const cue = dynamicCues.find(c => elapsed >= c.start && elapsed <= c.end);
           if (cue) {
-            ctx.font = '900 34px "Inter", "Arial", sans-serif'; 
+            ctx.font = '900 36px "Inter", "Arial", sans-serif'; 
             ctx.textAlign = "center"; 
             ctx.textBaseline = "middle";
             ctx.lineWidth = 6; 
             ctx.strokeStyle = "#000000";
             ctx.fillStyle = "#FFE600"; 
             
-            // CENTRO EXACTO
-            const textX = width / 2;
-            const textY = height / 2;
-            const maxWidth = width - 40; // 20px de margen a cada lado
-            
-            ctx.strokeText(cue.text, textX, textY, maxWidth);
-            ctx.fillText(cue.text, textX, textY, maxWidth);
+            // X, Y y Ancho Máximo permitidos
+            drawWrappedText(ctx, cue.text, width / 2, height / 2, width - 20);
           }
         }
       }
     };
     
     drawLoop();
-    setTimeout(stopRecording, (actualDuration + 2) * 1000); // Failsafe
+    setTimeout(stopRecording, (actualDuration + 2) * 1000); 
   });
 }

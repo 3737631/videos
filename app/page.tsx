@@ -48,38 +48,33 @@ export default function App() {
     lector.load();
 
     setClips(validClips.sort(() => Math.random() - 0.5));
-    // Limitamos la estimación de tiempo a 15 segundos para los guiones
     setTotalDuration(Math.min(15, Math.max(5, Math.round(accDur))));
     setStep(2);
   };
 
-  // GUION INTELIGENTE (SIN REPETICIONES) 4 IDIOMAS
   const generateScriptLocal = (info: string, lang: string) => {
-    const cleanInfo = info
-      .replace(/https?:\/\/\S+/gi, "")
-      .replace(/(aliexpress|amazon|shein|temu|tienda|comprar|vendedor|descuento)/gi, "")
-      .trim() || "este producto";
+    const cleanInfo = info.replace(/https?:\/\/\S+/gi, "").trim() || "este producto";
 
     const data: Record<string, { hooks: string[], benefits: string[], calls: string[] }> = {
       es: {
         hooks: [`¿Cansado de los mismos problemas? Necesitas ${cleanInfo}.`, `El secreto que nadie te quiere contar sobre ${cleanInfo}.`, `Mira cómo ${cleanInfo} me salvó la vida.`],
-        benefits: ["Te ahorra horas de esfuerzo y es súper fácil de usar.", "La calidad te dejará con la boca abierta desde el primer uso.", "Es el mejor invento de este año y funciona a la perfección."],
-        calls: ["Consíguelo hoy y cambia tu rutina.", "Pruébalo ahora, no te arrepentirás.", "Hazte un favor y empieza a usarlo."]
+        benefits: ["Te ahorra horas de esfuerzo y es súper fácil de usar.", "La calidad te dejará con la boca abierta.", "Es el mejor invento y funciona a la perfección."],
+        calls: ["Consíguelo hoy y cambia tu rutina.", "Pruébalo ahora, no te arrepentirás.", "Empieza a usarlo."]
       },
       en: {
         hooks: [`Tired of the same problems? You need ${cleanInfo}.`, `The secret nobody tells you about ${cleanInfo}.`, `Look how ${cleanInfo} totally saved my day.`],
-        benefits: ["It saves you hours of effort and is super easy to use.", "The quality will blow your mind from the very first use.", "It's the best invention of the year and works flawlessly."],
-        calls: ["Get it today and change your routine.", "Try it now, you won't regret it.", "Do yourself a favor and start using it."]
+        benefits: ["It saves you hours of effort and is super easy.", "The quality will blow your mind.", "It's the best invention of the year."],
+        calls: ["Get it today and change your routine.", "Try it now, you won't regret it.", "Start using it."]
       },
       pt: {
         hooks: [`Cansado dos mesmos problemas? Você precisa de ${cleanInfo}.`, `O segredo que ninguém te conta sobre ${cleanInfo}.`, `Olha como ${cleanInfo} salvou meu dia.`],
-        benefits: ["Economiza horas de esforço e é super fácil de usar.", "A qualidade vai te deixar de queixo caído desde o primeiro uso.", "É a melhor invenção do ano e funciona perfeitamente."],
-        calls: ["Garanta o seu hoje e mude sua rotina.", "Experimente agora, você não vai se arrepender.", "Faça um favor a si mesmo e comece a usar."]
+        benefits: ["Economiza horas de esforço e é super fácil.", "A qualidade vai te deixar de queixo caído.", "É a melhor invenção do ano."],
+        calls: ["Garanta o seu hoje.", "Experimente agora, você não vai se arrepender.", "Comece a usar."]
       },
       fr: {
         hooks: [`Fatigué des mêmes problèmes? Vous avez besoin de ${cleanInfo}.`, `Le secret que personne ne vous dit sur ${cleanInfo}.`, `Regardez comment ${cleanInfo} a sauvé ma journée.`],
-        benefits: ["Cela vous fait gagner des heures d'efforts et est super facile à utiliser.", "La qualité vous époustouflera dès la première utilisation.", "C'est la meilleure invention de l'année et fonctionne parfaitement."],
-        calls: ["Obtenez-le aujourd'hui et changez votre routine.", "Essayez-le maintenant, vous ne le regretterez pas.", "Faites-vous une faveur et commencez à l'utiliser."]
+        benefits: ["Cela vous fait gagner des heures d'efforts.", "La qualité vous époustouflera.", "C'est la meilleure invention de l'année."],
+        calls: ["Obtenez-le aujourd'hui.", "Essayez-le maintenant.", "Commencez à l'utiliser."]
       }
     };
 
@@ -101,19 +96,18 @@ export default function App() {
       let wordChunks: string[] = [];
 
       if (mode === "voice") {
-        setStatus("Generando guion (Multi-Idioma)...");
+        setStatus(`Generando voz en ${language.toUpperCase()}...`);
         const script = generateScriptLocal(productPrompt, language);
         
-        setStatus("Descargando voz humana...");
         const tts = await generateSpeechAndCues(script, language);
         audioBlob = tts.audioBlob;
         wordChunks = tts.wordChunks;
       } else {
-        setStatus("Generando base musical Lo-Fi...");
+        setStatus("Generando base musical...");
         audioBlob = await generateViralMusic(totalDuration);
       }
 
-      setStatus("Renderizando a máxima calidad...");
+      setStatus("Renderizando vídeo final...");
       const url = await renderFinalVideo({
         clips, 
         audioBlob, 
@@ -126,7 +120,6 @@ export default function App() {
       setFinalVideo(url);
       setStep(5);
     } catch (e: any) {
-      console.error(e);
       alert("Error: " + e.message);
       setStep(1);
     }
@@ -143,7 +136,7 @@ export default function App() {
     <main className="min-h-[100dvh] bg-[#09090b] text-white flex flex-col items-center justify-center p-4 sm:p-6 overflow-x-hidden">
       <div className="w-full max-w-xl text-center mb-6 sm:mb-8 mt-4">
         <div className="inline-block bg-purple-500/10 border border-purple-500/30 text-purple-400 px-3 py-1 rounded-full text-[10px] sm:text-xs font-bold mb-3 sm:mb-4 tracking-widest">
-          TIKTOK AUTOMATOR FINAL (ZERO BUGS)
+          TIKTOK AUTOMATOR FINAL (ESTABLE)
         </div>
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent leading-tight">
           Creador Viral
@@ -159,7 +152,6 @@ export default function App() {
               <UploadCloud className="w-8 h-8 sm:w-10 sm:h-10 text-purple-400" />
             </div>
             <h2 className="text-lg sm:text-xl font-bold text-center">Toca para subir vídeos</h2>
-            <p className="text-zinc-500 mt-2 text-xs sm:text-sm text-center">Se adaptarán al ritmo de la voz.</p>
           </div>
         )}
 
