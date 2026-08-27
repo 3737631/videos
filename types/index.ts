@@ -7,6 +7,12 @@ export interface VideoClip {
   playDuration: number;
 }
 
+export interface SubtitleCue {
+  text: string;
+  start: number;
+  end: number;
+}
+
 export interface RenderConfig {
   clips: VideoClip[];
   audioBlob: Blob | null;
