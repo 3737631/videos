@@ -4,8 +4,40 @@ export interface SpeechResult {
   isFallback: boolean;
 }
 
-function cleanScript(text: string): string {
+const SPELL_FIXES: Record<string, string> = {
+  narani: "naranja",
+  naranaj: "naranja",
+  naranaja: "naranja",
+  narnja: "naranja",
+  naranxa: "naranja",
+  limpiadr: "limpiador",
+  limpiadro: "limpiador",
+  aspiradra: "aspiradora",
+  aspiradoraa: "aspiradora",
+  manzna: "manzana",
+  freidoraa: "freidora",
+};
+
+function correctSpelling(text: string): string {
   return text
+    .split(/(\s+)/)
+    .map(part => {
+      if (/^\s+$/.test(part)) return part;
+      const lower = part.toLowerCase().replace(/[.,!?¿¡'’"()-]/g, "");
+      const fix = SPELL_FIXES[lower];
+      if (fix) {
+        // Mantener mayúscula inicial si la tenía
+        if (part[0] === part[0].toUpperCase()) return fix.charAt(0).toUpperCase() + fix.slice(1);
+        return fix;
+      }
+      return part;
+    })
+    .join("");
+}
+
+function cleanScript(text: string): string {
+  const corrected = correctSpelling(text);
+  return corrected
     .replace(/https?:\/\/\S+/gi, "")
     .replace(/[^\p{L}\p{N}\s.,!?¿¡'’"-]/gu, " ")
     .replace(/\s+/g, " ")
