@@ -1,11 +1,17 @@
 import { createHash, randomBytes } from "crypto";
 
+export function isTikTokConfigured(): boolean {
+  return Boolean(process.env.TIKTOK_CLIENT_KEY && process.env.TIKTOK_CLIENT_SECRET && process.env.TIKTOK_REDIRECT_URI);
+}
+
 export function getTikTokEnv() {
   const clientKey = process.env.TIKTOK_CLIENT_KEY;
   const clientSecret = process.env.TIKTOK_CLIENT_SECRET;
   const redirectUri = process.env.TIKTOK_REDIRECT_URI;
   if (!clientKey || !clientSecret || !redirectUri) {
-    throw new Error("Faltan variables TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET / TIKTOK_REDIRECT_URI");
+    throw new Error(
+      "TikTok no configurado en este deployment. Ve a Vercel → tu proyecto → Settings → Environment Variables y añade TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET y TIKTOK_REDIRECT_URI (ej: https://viralcreator.vercel.app/videos/api/tiktok/callback), luego Redeploy. En GitHub Pages (/videos en github.io) el Login siempre dará 404 porque es estático — prueba en Vercel."
+    );
   }
   return { clientKey, clientSecret, redirectUri };
 }

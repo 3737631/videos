@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { TIKTOK_COOKIES } from "@/lib/tiktokAuth";
+import { TIKTOK_COOKIES, isTikTokConfigured } from "@/lib/tiktokAuth";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
+    if (!isTikTokConfigured()) {
+      return NextResponse.json({ connected: false, reason: "not_configured" });
+    }
     const cookieStore = await cookies();
     const accessToken = cookieStore.get(TIKTOK_COOKIES.accessToken)?.value;
     const openId = cookieStore.get(TIKTOK_COOKIES.openId)?.value;
