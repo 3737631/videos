@@ -432,7 +432,7 @@ export default function App() {
   const fileExtension = videoMimeType.includes("mp4") ? "mp4" : "webm";
 
   return (
-    <main className="min-h-[100dvh] bg-[#09090b] text-white flex flex-col items-center justify-center p-4 sm:p-6 overflow-x-hidden">
+    <main className="flex-1 bg-[#09090b] text-white flex flex-col items-center justify-center p-4 sm:p-6 overflow-x-hidden py-8 sm:py-12">
       <div className="w-full max-w-xl text-center mb-6 sm:mb-8 mt-4">
         <div className="inline-block bg-purple-500/10 border border-purple-500/30 text-purple-400 px-3 py-1 rounded-full text-[10px] sm:text-xs font-bold mb-3 sm:mb-4 tracking-widest">
           CREADOR VIRAL V3 FINAL

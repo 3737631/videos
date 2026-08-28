@@ -37,8 +37,7 @@ async function loadMobilenet(): Promise<{ classify: (img: HTMLImageElement) => P
     const tf = await import("@tensorflow/tfjs");
     await tf.ready();
     const mobilenet = await import("@tensorflow-models/mobilenet");
-    // @ts-ignore
-    const model = await mobilenet.load({ version: 2, alpha: 1.0 });
+    const model = await (mobilenet as unknown as { load: (opts: unknown) => Promise<unknown> }).load({ version: 2, alpha: 1.0 });
     return model;
   })();
   return mobilenetPromise as Promise<{ classify: (img: HTMLImageElement) => Promise<{ className: string; probability: number }[]> }>;
