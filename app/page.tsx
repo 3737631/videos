@@ -7,6 +7,7 @@ import { renderFinalVideo } from "@/lib/videoEngine";
 import { generateSpeechAndCues, generateViralMusic } from "@/lib/ttsEngine";
 import { fetchTikTokClips } from "@/lib/tiktok";
 import { searchTikTokClean, TikTokSearchResult } from "@/lib/tiktokSearch";
+import { analyzeProductFromImage } from "@/lib/imageAnalyze";
 
 export default function App() {
   const [step, setStep] = useState(1);
@@ -82,22 +83,14 @@ export default function App() {
   const handleAutoSearch = async () => {
     const kw = autoProduct.trim() || productPrompt.trim();
     if (!kw || kw.length < 2) { setAutoError("Escribe el nombre del producto"); return; }
-    setAutoError(""); setAutoSearching(true); setStatus(`Buscando vídeos limpios de "${kw}"...`);
-    try {
-      const results = await searchTikTokClean(kw, 8, (m) => setStatus(m));
-      setAutoResults(results.map((r, i) => ({ ...r, selected: i < 3 })));
-      setStatus("");
-      if (results.length === 0) setAutoError("No se encontraron vídeos limpios");
-    } catch (e) {
-      setAutoError(e instanceof Error ? e.message : String(e));
-    } finally { setAutoSearching(false); setStatus(""); }
+    await handleAutoSearchWithKeyword(kw);
   };
 
   const toggleAutoSelect = (idx: number) => {
     setAutoResults(prev => prev.map((r, i) => i === idx ? { ...r, selected: !r.selected } : r));
   };
 
-  const handlePhotoSelect = (files: FileList | null) => {
+  const handlePhotoSelect = async (files: FileList | null) => {
     if (!files || !files.length) return;
     const file = files[0];
     if (!file.type.startsWith("image/")) { setAutoError("Sube una foto válida (jpg, png)"); return; }
@@ -106,11 +99,35 @@ export default function App() {
     setAutoPhoto(file);
     setAutoPhotoPreview(url);
     setAutoError("");
-    // Sugerir nombre del producto desde el nombre del archivo si está vacío
-    if (!autoProduct.trim()) {
-      const name = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").slice(0, 30);
-      if (name && name.length > 2) setAutoProduct(name);
+    setStatus("Analizando foto...");
+    try {
+      const detected = await analyzeProductFromImage(file, (m) => setStatus(m));
+      setAutoProduct(detected);
+      setProductPrompt(detected);
+      setStatus(`Detectado: ${detected}`);
+      setTimeout(() => setStatus(""), 2000);
+      // Auto-buscar tras detectar
+      setTimeout(() => handleAutoSearchWithKeyword(detected), 600);
+    } catch {
+      if (!autoProduct.trim()) {
+        const name = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").slice(0, 30);
+        if (name && name.length > 2) setAutoProduct(name);
+      }
+      setStatus("");
     }
+  };
+
+  const handleAutoSearchWithKeyword = async (kw: string) => {
+    const clean = kw.trim();
+    if (!clean || clean.length < 2) return;
+    setAutoError(""); setAutoSearching(true); setStatus(`Buscando vídeos limpios de "${clean}"...`);
+    try {
+      const results = await searchTikTokClean(clean, 8, (m) => setStatus(m));
+      setAutoResults(results.map((r, i) => ({ ...r, selected: i < 3 })));
+      setStatus("");
+    } catch (e) {
+      setAutoError(e instanceof Error ? e.message : String(e));
+    } finally { setAutoSearching(false); setStatus(""); }
   };
 
   const handleAutoUse = async () => {
