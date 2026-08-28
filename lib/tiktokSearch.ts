@@ -20,24 +20,45 @@ function correctKeyword(kw: string): string {
   return kw.toLowerCase().replace(/\s+/g, " ").replace(/d\s+emanchas/g, "de manchas").replace(/limpiador\s+d\s+/g, "limpiador de ").trim();
 }
 
+function getKeywordVariants(clean: string): string[] {
+  const variants: string[] = [clean];
+  // Singular/plural: tijera -> tijeras
+  if (clean.includes("tijera") && !clean.includes("tijeras")) variants.push(clean.replace("tijera", "tijeras"));
+  if (clean.includes("tijeras con laser")) variants.push("tijeras laser", "tijeras", "laser scissors");
+  if (clean.includes("tijera con laser")) variants.push("tijeras laser", "tijeras", "laser");
+  if (clean.includes("con")) {
+    const withoutCon = clean.replace(/\s+con\s+/g, " ").trim();
+    if (withoutCon !== clean) variants.push(withoutCon);
+  }
+  // Palabras sueltas (sin stopwords)
+  const words = clean.split(/\s+/).filter(w => w.length > 2 && !["con","para","con","de","del","la","el"].includes(w));
+  for (const w of words) if (!variants.includes(w)) variants.push(w);
+  // Inglés para tijeras
+  if (clean.includes("tijera")) variants.push("scissors");
+  // Limpiador variaciones
+  if (clean.includes("limpiador")) variants.push("limpiador", "cleaner");
+  return [...new Set(variants)].slice(0, 4);
+}
+
 export async function searchTikTokClean(keyword: string, count = 8, onStatus?: (m: string) => void): Promise<TikTokSearchResult[]> {
   const rawClean = keyword.trim().replace(/https?:\/\/\S+/g, "").slice(0, 40);
   const clean = correctKeyword(rawClean);
   if (!clean || clean.length < 2) throw new Error("Escribe el nombre del producto");
-  const encoded = encodeURIComponent(clean);
-
-  const gateways: { url: string; init?: RequestInit }[] = [
-    { url: `https://www.tikwm.com/api/feed/search?keywords=${encoded}&count=${count}&cursor=0&HD=1` },
-    { url: `https://www.tikwm.com/api/feed/search`, init: { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keywords: clean, count, cursor: 0, HD: 1 }) } },
-    { url: `https://corsproxy.io/?${encodeURIComponent(`https://www.tikwm.com/api/feed/search?keywords=${encoded}&count=${count}&cursor=0&HD=1`)}` },
-    { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://www.tikwm.com/api/feed/search?keywords=${encoded}&count=${count}&cursor=0&HD=1`)}` },
-    { url: `https://thingproxy.freeboard.io/fetch/https://www.tikwm.com/api/feed/search?keywords=${encoded}&count=${count}&cursor=0&HD=1` },
-  ];
+  const variants = getKeywordVariants(clean);
 
   let lastErr = "";
-  for (const gw of gateways) {
-    try {
-      if (onStatus) onStatus(`Buscando "${clean}"...`);
+  for (const variant of variants) {
+    const encoded = encodeURIComponent(variant);
+    const gateways: { url: string; init?: RequestInit }[] = [
+      { url: `https://www.tikwm.com/api/feed/search?keywords=${encoded}&count=${count}&cursor=0&HD=1` },
+      { url: `https://www.tikwm.com/api/feed/search`, init: { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keywords: variant, count, cursor: 0, HD: 1 }) } },
+      { url: `https://corsproxy.io/?${encodeURIComponent(`https://www.tikwm.com/api/feed/search?keywords=${encoded}&count=${count}&cursor=0&HD=1`)}` },
+      { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://www.tikwm.com/api/feed/search?keywords=${encoded}&count=${count}&cursor=0&HD=1`)}` },
+      { url: `https://thingproxy.freeboard.io/fetch/https://www.tikwm.com/api/feed/search?keywords=${encoded}&count=${count}&cursor=0&HD=1` },
+    ];
+    for (const gw of gateways) {
+      try {
+        if (onStatus) onStatus(`Buscando "${variant}"...`);
       const res = await fetchWithTimeout(gw.url, 10000, gw.init);
       if (!res.ok) {
         // Algunos proxies devuelven 403 pero con cuerpo válido
@@ -89,5 +110,6 @@ export async function searchTikTokClean(keyword: string, count = 8, onStatus?: (
       continue;
     }
   }
-  throw new Error(`No se encontraron vídeos para "${clean}" (${lastErr}). Prueba a subir tu propio vídeo o pega enlaces manualmente.`);
+  }
+  throw new Error(`No se encontraron vídeos para "${clean}" (${lastErr}). Prueba con "${variants[1] || "tijeras"}" o sube tu propio vídeo.`);
 }
