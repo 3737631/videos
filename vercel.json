@@ -6,5 +6,10 @@
     "app/api/tiktok/**/*.ts": {
       "maxDuration": 60
     }
-  }
+  },
+  "rewrites": [
+    { "source": "/tiktok-mAJGjdz5SFGMKuf3eh9uMF0Pw7YvKFZa.txt", "destination": "/videos/tiktok-mAJGjdz5SFGMKuf3eh9uMF0Pw7YvKFZa.txt" },
+    { "source": "/tiktokmAJGjdz5SFGMKuf3eh9uMF0Pw7YvKFZa.txt", "destination": "/videos/tiktokmAJGjdz5SFGMKuf3eh9uMF0Pw7YvKFZa.txt" },
+    { "source": "/tiktok-developers-site-verification", "destination": "/videos/tiktok-mAJGjdz5SFGMKuf3eh9uMF0Pw7YvKFZa.txt" }
+  ]
 }
