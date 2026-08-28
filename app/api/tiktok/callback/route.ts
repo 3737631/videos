@@ -11,9 +11,9 @@ export async function GET(req: NextRequest) {
   const error = url.searchParams.get("error");
   const errorDesc = url.searchParams.get("error_description");
 
-  // Base para redirigir de vuelta a la app (con basePath)
-  const basePath = "/videos";
-  const appUrl = new URL(basePath + "/", req.url).toString().replace(/\/$/, "/");
+  // Base para redirigir de vuelta a la app (respeta basePath configurable)
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "/videos";
+  const appUrl = new URL(`${basePath}/`, req.url).toString().replace(/\/$/, "/");
 
   if (error) {
     return NextResponse.redirect(`${appUrl}?tiktok_error=${encodeURIComponent(errorDesc || error)}`);
@@ -150,7 +150,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(`${appUrl}?tiktok=connected`);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Error callback";
-    const base = new URL("/videos/", req.url).toString().replace(/\/$/, "/");
+    const basePath2 = process.env.NEXT_PUBLIC_BASE_PATH ?? "/videos";
+    const base = new URL(`${basePath2}/`, req.url).toString().replace(/\/$/, "/");
     return NextResponse.redirect(`${base}?tiktok_error=${encodeURIComponent(msg)}`);
   }
 }

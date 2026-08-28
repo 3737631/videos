@@ -102,10 +102,11 @@ export async function POST(req: NextRequest) {
 
     // Subir el vídeo binario
     const arrayBuffer = await file.arrayBuffer();
+    const contentType = file.type || "video/mp4";
     const uploadRes = await fetch(uploadUrl, {
       method: "PUT",
       headers: {
-        "Content-Type": "video/mp4",
+        "Content-Type": contentType,
         "Content-Range": `bytes 0-${videoSize - 1}/${videoSize}`,
         "Content-Length": String(videoSize),
       },

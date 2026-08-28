@@ -9,6 +9,8 @@ import { fetchTikTokClips } from "@/lib/tiktok";
 import { searchTikTokClean, TikTokSearchResult } from "@/lib/tiktokSearch";
 import { analyzeProductFromImage } from "@/lib/imageAnalyze";
 
+const API_BASE = process.env.NEXT_PUBLIC_BASE_PATH ?? "/videos";
+
 export default function App() {
   const [step, setStep] = useState(1);
   const [clips, setClips] = useState<VideoClip[]>([]);
@@ -65,8 +67,7 @@ export default function App() {
     }
     const check = async () => {
       try {
-        const base = "/videos";
-        const res = await fetch(`${base}/api/tiktok/status`, { cache: "no-store" });
+        const res = await fetch(`${API_BASE}/api/tiktok/status`, { cache: "no-store" });
         const j = await res.json();
         if (j.connected) {
           setTiktokConnected(true);
@@ -233,12 +234,12 @@ export default function App() {
   };
 
   const handleTikTokConnect = () => {
-    window.location.assign("/videos/api/tiktok/auth");
+    window.location.assign(`${API_BASE}/api/tiktok/auth`);
   };
 
   const handleTikTokLogout = async () => {
     try {
-      await fetch("/videos/api/tiktok/logout", { method: "POST", cache: "no-store" });
+      await fetch(`${API_BASE}/api/tiktok/logout`, { method: "POST", cache: "no-store" });
     } catch {}
     setTiktokConnected(false);
     setTiktokUser(null);
@@ -262,7 +263,7 @@ export default function App() {
       form.append("title", productPrompt.slice(0, 150) || "Video viral con Creador Viral #fyp");
       form.append("mode", mode);
       form.append("privacy_level", "SELF_ONLY");
-      const apiRes = await fetch("/videos/api/tiktok/publish", { method: "POST", body: form });
+      const apiRes = await fetch(`${API_BASE}/api/tiktok/publish`, { method: "POST", body: form });
       const j = await apiRes.json();
       if (!apiRes.ok) throw new Error(j.error || "Error al publicar");
       setTiktokPublishMsg(j.message || (mode === "publish" ? "¡Publicado en TikTok!" : "¡Guardado como borrador en TikTok!"));
