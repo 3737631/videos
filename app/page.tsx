@@ -34,6 +34,11 @@ export default function App() {
   const [autoPhoto, setAutoPhoto] = useState<File | null>(null);
   const [autoPhotoPreview, setAutoPhotoPreview] = useState<string | null>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
+  const [tiktokConnected, setTiktokConnected] = useState(false);
+  const [tiktokUser, setTiktokUser] = useState<{ display_name: string; avatar_url: string; open_id: string } | null>(null);
+  const [tiktokChecking, setTiktokChecking] = useState(true);
+  const [tiktokPublishing, setTiktokPublishing] = useState(false);
+  const [tiktokPublishMsg, setTiktokPublishMsg] = useState("");
 
   // Asegurar limpieza estricta en desmontajes
   useEffect(() => {
@@ -42,6 +47,41 @@ export default function App() {
         sharedAudioCtxRef.current.close().catch(() => {});
       }
     };
+  }, []);
+
+  // TikTok: comprobar conexión y manejar callback ?tiktok=connected
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("tiktok") === "connected") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setTiktokPublishMsg("¡TikTok conectado!");
+      window.history.replaceState({}, "", window.location.pathname);
+      setTimeout(() => setTiktokPublishMsg(""), 4000);
+    }
+    if (params.get("tiktok_error")) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setTiktokError(decodeURIComponent(params.get("tiktok_error")!));
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+    const check = async () => {
+      try {
+        const base = "/videos";
+        const res = await fetch(`${base}/api/tiktok/status`, { cache: "no-store" });
+        const j = await res.json();
+        if (j.connected) {
+          setTiktokConnected(true);
+          setTiktokUser({ display_name: j.display_name || "", avatar_url: j.avatar_url || "", open_id: j.open_id || "" });
+        } else {
+          setTiktokConnected(false);
+          setTiktokUser(null);
+        }
+      } catch {
+        setTiktokConnected(false);
+      } finally {
+        setTiktokChecking(false);
+      }
+    };
+    check();
   }, []);
 
   const clearMemory = () => {
@@ -190,6 +230,48 @@ export default function App() {
       }
     } catch {}
     window.open("https://www.tiktok.com/upload", "_blank");
+  };
+
+  const handleTikTokConnect = () => {
+    window.location.assign("/videos/api/tiktok/auth");
+  };
+
+  const handleTikTokLogout = async () => {
+    try {
+      await fetch("/videos/api/tiktok/logout", { method: "POST", cache: "no-store" });
+    } catch {}
+    setTiktokConnected(false);
+    setTiktokUser(null);
+  };
+
+  const handleTikTokPublish = async (mode: "publish" | "draft") => {
+    if (!finalVideo) return;
+    if (!tiktokConnected) {
+      handleTikTokConnect();
+      return;
+    }
+    setTiktokPublishing(true);
+    setTiktokPublishMsg("");
+    try {
+      const res = await fetch(finalVideo);
+      const blob = await res.blob();
+      const ext = videoMimeType.includes("mp4") ? "mp4" : "webm";
+      const file = new File([blob], `viral-${Date.now()}.${ext}`, { type: blob.type || `video/${ext}` });
+      const form = new FormData();
+      form.append("video", file);
+      form.append("title", productPrompt.slice(0, 150) || "Video viral con Creador Viral #fyp");
+      form.append("mode", mode);
+      form.append("privacy_level", "SELF_ONLY");
+      const apiRes = await fetch("/videos/api/tiktok/publish", { method: "POST", body: form });
+      const j = await apiRes.json();
+      if (!apiRes.ok) throw new Error(j.error || "Error al publicar");
+      setTiktokPublishMsg(j.message || (mode === "publish" ? "¡Publicado en TikTok!" : "¡Guardado como borrador en TikTok!"));
+      // No simular: solo mostramos lo que realmente devolvió TikTok
+    } catch (e) {
+      setTiktokPublishMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTiktokPublishing(false);
+    }
   };
 
   const handleTikTokDownload = async () => {
@@ -440,6 +522,49 @@ export default function App() {
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent leading-tight">
           Creador Viral
         </h1>
+      </div>
+
+      {/* TikTok Login Kit - Conectar */}
+      <div className="w-full max-w-xl mb-4">
+        {tiktokChecking ? (
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl px-4 py-3 flex items-center gap-3 text-sm text-zinc-400">
+            <Loader2 className="w-4 h-4 animate-spin" /> Comprobando TikTok...
+          </div>
+        ) : tiktokConnected && tiktokUser ? (
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl px-4 py-3 flex items-center gap-3">
+            {tiktokUser.avatar_url ? (
+              <img src={tiktokUser.avatar_url} alt="" className="w-9 h-9 rounded-full object-cover border border-zinc-700" />
+            ) : (
+              <div className="w-9 h-9 rounded-full bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center text-white font-bold text-sm">
+                {(tiktokUser.display_name || "T").slice(0, 1).toUpperCase()}
+              </div>
+            )}
+            <div className="flex-1 text-left">
+              <div className="text-sm font-bold text-white flex items-center gap-1.5">
+                <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" /> {tiktokUser.display_name || tiktokUser.open_id}
+              </div>
+              <div className="text-xs text-zinc-500">TikTok conectado</div>
+            </div>
+            <button
+              onClick={handleTikTokLogout}
+              className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-full text-xs font-bold transition"
+            >
+              Desconectar
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={handleTikTokConnect}
+            className="w-full bg-black border border-zinc-800 hover:border-zinc-700 rounded-2xl px-4 py-3 flex items-center justify-center gap-3 transition"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-2.88 2.5 2.89 2.89 0 01-2.89-2.89 2.89 2.89 0 012.89-2.89c.28 0 .54.04.8.11V8.94a6.27 6.27 0 00-.8-.06 6.34 6.34 0 00-6.34 6.34 6.34 6.34 0 006.34 6.34 6.34 6.34 0 006.34-6.34V8.75a8.2 8.2 0 004.77 1.52V6.84a4.83 4.83 0 01-1.01-.15z" /></svg>
+            <span className="text-sm font-bold">Conectar TikTok</span>
+            <span className="text-xs text-zinc-500 hidden sm:inline">— para publicar directo</span>
+          </button>
+        )}
+        {tiktokPublishMsg && (
+          <div className="mt-2 rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-center text-zinc-300">{tiktokPublishMsg}</div>
+        )}
       </div>
 
       <div className="w-full max-w-xl bg-zinc-900 border border-zinc-800 rounded-3xl sm:rounded-[2rem] p-5 sm:p-8 shadow-2xl relative overflow-hidden">
@@ -728,10 +853,58 @@ export default function App() {
                 <Download className="w-4 h-4 sm:w-5 sm:h-5" /> Guardar
               </a>
             </div>
-            <button onClick={handleShareTikTok} className="w-full mt-3 py-3 bg-white text-black rounded-full font-bold text-sm flex items-center justify-center gap-2 hover:bg-zinc-100 active:scale-[0.98] transition">
-              <Link2 className="w-4 h-4" /> Subir a TikTok
-            </button>
-            <p className="text-[11px] text-zinc-500 mt-2 text-center">Se abrirá TikTok o el menú de compartir de tu móvil</p>
+
+            {/* TikTok Content Posting API - real */}
+            <div className="w-full mt-4 rounded-2xl border border-zinc-800 bg-zinc-900 p-4 space-y-3">
+              <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-2.88 2.5 2.89 2.89 0 01-2.89-2.89 2.89 2.89 0 012.89-2.89c.28 0 .54.04.8.11V8.94a6.27 6.27 0 00-.8-.06 6.34 6.34 0 00-6.34 6.34 6.34 6.34 0 006.34 6.34 6.34 6.34 0 006.34-6.34V8.75a8.2 8.2 0 004.77 1.52V6.84a4.83 4.83 0 01-1.01-.15z" /></svg>
+                Publicar en TikTok
+              </h4>
+              {!tiktokConnected ? (
+                <div className="space-y-2">
+                  <p className="text-xs text-zinc-400 text-left">Conecta tu cuenta para publicar directo sin salir de la web.</p>
+                  <button
+                    onClick={handleTikTokConnect}
+                    className="w-full py-3 bg-white text-black rounded-full font-bold text-sm flex items-center justify-center gap-2 hover:bg-zinc-100 transition"
+                  >
+                    Conectar TikTok
+                  </button>
+                  <button
+                    onClick={handleShareTikTok}
+                    className="w-full py-2.5 bg-zinc-800 border border-zinc-700 rounded-full text-xs font-medium flex items-center justify-center gap-2 hover:bg-zinc-700 transition"
+                  >
+                    <Link2 className="w-3 h-3" /> Compartir manual (sin conectar)
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleTikTokPublish("publish")}
+                      disabled={tiktokPublishing}
+                      className="flex-1 py-3 bg-white text-black rounded-full font-bold text-sm flex items-center justify-center gap-2 hover:bg-zinc-100 disabled:opacity-50 transition"
+                    >
+                      {tiktokPublishing ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Publicar directo
+                    </button>
+                    <button
+                      onClick={() => handleTikTokPublish("draft")}
+                      disabled={tiktokPublishing}
+                      className="flex-1 py-3 bg-zinc-800 border border-zinc-700 rounded-full font-bold text-sm flex items-center justify-center gap-2 hover:bg-zinc-700 disabled:opacity-50 transition"
+                    >
+                      {tiktokPublishing ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Guardar borrador
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-zinc-500 text-center">
+                    {tiktokPublishing ? "Subiendo a TikTok..." : "Usa video.publish para directo o video.upload para borrador"}
+                  </p>
+                  {tiktokPublishMsg && (
+                    <div className="rounded-xl border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs text-zinc-300 text-center whitespace-pre-wrap">
+                      {tiktokPublishMsg}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         )}
 

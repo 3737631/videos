@@ -33,8 +33,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Hide API routes for static export (GitHub Pages cannot export API)
+        run: mv app/api /tmp/api || true
+
       - name: Build static export
         run: npm run build
+        env:
+          GITHUB_PAGES: "true"
+
+      - name: Restore API routes
+        run: mv /tmp/api app/api || true
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

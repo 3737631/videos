@@ -38,7 +38,6 @@ function correctSpelling(text: string): string {
     .split(/(\s+)/)
     .map(part => {
       if (/^\s+$/.test(part)) return part;
-      const punct = part.match(/^[.,!?¿¡'’"()-]+|[.,!?¿¡'’"()-]+$/g);
       const core = part.replace(/^[.,!?¿¡'’"()-]+|[.,!?¿¡'’"()-]+$/g, "");
       if (!core) return part;
       const lower = core.toLowerCase();
