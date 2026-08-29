@@ -41,6 +41,7 @@ export default function App() {
   const [tiktokChecking, setTiktokChecking] = useState(true);
   const [tiktokPublishing, setTiktokPublishing] = useState(false);
   const [tiktokPublishMsg, setTiktokPublishMsg] = useState("");
+  const [autoUpload, setAutoUpload] = useState(false);
 
   // Asegurar limpieza estricta en desmontajes
   useEffect(() => {
@@ -75,8 +76,10 @@ export default function App() {
         } else {
           setTiktokConnected(false);
           setTiktokUser(null);
+          // No bloquear: TikTok es opcional, el vídeo se crea igual y se sube manual
           if (j.reason === "not_configured") {
-            setTiktokPublishMsg(j.hint || `TikTok no configurado. Faltan: ${j.missing?.join(", ")}. Ve a Vercel → viralcreator → Settings → Environment Variables → añade en Production o vincula Shared y Redeploy.`);
+            // Mensaje sutil, no bloquea nada - el botón "Subir a TikTok" manual siempre funciona
+            console.log("TikTok directo no configurado, modo manual activo:", j.missing);
           }
         }
       } catch {
@@ -515,6 +518,17 @@ export default function App() {
     setStep(1);
   };
 
+  // Auto-subir a TikTok si está activado y el vídeo ya está listo
+  useEffect(() => {
+    if (autoUpload && finalVideo && step === 5) {
+      const t = setTimeout(() => {
+        if (tiktokConnected) handleTikTokPublish("publish");
+        else handleShareTikTok();
+      }, 1200);
+      return () => clearTimeout(t);
+    }
+  }, [finalVideo, autoUpload, step, tiktokConnected]);
+
   const fileExtension = videoMimeType.includes("mp4") ? "mp4" : "webm";
 
   return (
@@ -825,6 +839,11 @@ export default function App() {
                   placeholder="Ej: Aspiradora portátil para coche..."
                   className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-3 sm:p-4 focus:border-purple-500 outline-none h-28 sm:h-32 resize-none text-sm sm:text-base"
                 />
+                <label className="flex items-center gap-2 text-xs text-zinc-400 bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2.5 cursor-pointer hover:border-zinc-700 transition">
+                  <input type="checkbox" checked={autoUpload} onChange={(e) => setAutoUpload(e.target.checked)} className="w-4 h-4 rounded accent-white" />
+                  <span>Subir automáticamente a TikTok al crear</span>
+                  <span className="ml-auto text-[10px] bg-zinc-800 px-2 py-0.5 rounded-full">Sin configurar</span>
+                </label>
               </>
             )}
             <button onClick={processVideo} disabled={mode === "voice" && productPrompt.length < 5} className="w-full py-3 sm:py-4 bg-white text-black rounded-xl font-bold text-base sm:text-lg flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50 touch-manipulation transition-transform">
