@@ -75,8 +75,8 @@ export default function App() {
         } else {
           setTiktokConnected(false);
           setTiktokUser(null);
-          if (j.reason === "not_configured" && j.missing) {
-            setTiktokPublishMsg(`TikTok no configurado en Vercel Production. Faltan: ${j.missing.join(", ")}. Ve a Vercel → viralcreator → Settings → Environment Variables → añade en Production y Redeploy.`);
+          if (j.reason === "not_configured") {
+            setTiktokPublishMsg(j.hint || `TikTok no configurado. Faltan: ${j.missing?.join(", ")}. Ve a Vercel → viralcreator → Settings → Environment Variables → añade en Production o vincula Shared y Redeploy.`);
           }
         }
       } catch {

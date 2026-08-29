@@ -11,7 +11,7 @@ export async function GET() {
         connected: false,
         reason: "not_configured",
         missing: getMissingTikTokVars(),
-        hint: "Ve a Vercel → viralcreator → Settings → Environment Variables → añade las 3 en Production y haz Redeploy. No pruebes en github.io (404 normal).",
+        hint: "Las pusiste en Shared pero no vinculadas. Ve a Vercel → Settings → Environment Variables → Shared → Link to Project → selecciona viralcreator, o añádelas directamente en Production para viralcreator y haz Redeploy. Luego prueba en https://viralcreator.vercel.app/videos (github.io siempre 404).",
       });
     }
     const cookieStore = await cookies();

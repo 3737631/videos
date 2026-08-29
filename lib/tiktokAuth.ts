@@ -16,7 +16,7 @@ export function getTikTokEnv() {
   const missing = getMissingTikTokVars();
   if (missing.length > 0) {
     throw new Error(
-      `TikTok no configurado en este deployment. Faltan: ${missing.join(", ")}. Ve a Vercel → tu proyecto viralcreator → Settings → Environment Variables → añade las 3 en Production (no en Preview solo) y haz Redeploy. En GitHub Pages (github.io) el Login siempre dará 404 porque es estático — prueba en https://viralcreator.vercel.app/videos`
+      `TikTok no configurado en este deployment Vercel. Faltan: ${missing.join(", ")}. Las pusiste en "Shared" pero no están vinculadas a este proyecto. Ve a Vercel → viralcreator → Settings → Environment Variables → si están en Shared, dale a "Link to Project" y selecciona viralcreator, o mejor añádelas directamente en "Production" para este proyecto y haz Redeploy. Prueba siempre en https://viralcreator.vercel.app/videos (en github.io siempre da 404).`
     );
   }
   return {
