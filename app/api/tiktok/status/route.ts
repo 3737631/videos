@@ -1,13 +1,18 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { TIKTOK_COOKIES, isTikTokConfigured } from "@/lib/tiktokAuth";
+import { TIKTOK_COOKIES, isTikTokConfigured, getMissingTikTokVars } from "@/lib/tiktokAuth";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
     if (!isTikTokConfigured()) {
-      return NextResponse.json({ connected: false, reason: "not_configured" });
+      return NextResponse.json({
+        connected: false,
+        reason: "not_configured",
+        missing: getMissingTikTokVars(),
+        hint: "Ve a Vercel → viralcreator → Settings → Environment Variables → añade las 3 en Production y haz Redeploy. No pruebes en github.io (404 normal).",
+      });
     }
     const cookieStore = await cookies();
     const accessToken = cookieStore.get(TIKTOK_COOKIES.accessToken)?.value;
