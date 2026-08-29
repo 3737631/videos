@@ -239,7 +239,17 @@ export default function App() {
     window.open("https://www.tiktok.com/upload", "_blank");
   };
 
-  const handleTikTokConnect = () => {
+  const handleTikTokConnect = async () => {
+    // Si TikTok no está configurado en Vercel, no ir a /auth (daría 500), hacer share manual directo
+    try {
+      const r = await fetch(`${API_BASE}/api/tiktok/status`, { cache: "no-store" });
+      const j = await r.json();
+      if (j.reason === "not_configured") {
+        setTiktokPublishMsg("TikTok directo no configurado en este deployment — usando modo manual. Puedes crear y subir vídeos igual con “Compartir manual”.");
+        setTimeout(() => handleShareTikTok(), 800);
+        return;
+      }
+    } catch {}
     window.location.assign(`${API_BASE}/api/tiktok/auth`);
   };
 
