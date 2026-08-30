@@ -149,12 +149,27 @@ export default function App() {
     setStatus("Analizando foto...");
     try {
       const detected = await analyzeProductFromImage(file, (m) => setStatus(m));
-      setAutoProduct(detected);
-      setProductPrompt(detected);
-      setStatus(`Detectado: ${detected}`);
-      setTimeout(() => setStatus(""), 2000);
-      // Auto-buscar tras detectar
-      setTimeout(() => handleAutoSearchWithKeyword(detected), 600);
+      // Solo usar detección si es un producto real, no "web site" genérico
+      const isGeneric = !detected || detected.toLowerCase() === "web site" || detected.toLowerCase() === "website" || detected.length < 3;
+      const finalProduct = isGeneric ? "" : detected;
+      if (finalProduct) {
+        // No sobrescribir si el usuario ya escribió algo más específico
+        const current = autoProduct.trim();
+        const shouldOverwrite = !current || current.toLowerCase() === "web site" || current.length < finalProduct.length;
+        if (shouldOverwrite) {
+          setAutoProduct(finalProduct);
+          setProductPrompt(finalProduct);
+        }
+        setStatus(`Detectado: ${finalProduct}`);
+        setTimeout(() => setStatus(""), 2000);
+        setTimeout(() => handleAutoSearchWithKeyword(finalProduct), 600);
+      } else {
+        setStatus("");
+        if (!autoProduct.trim()) {
+          const name = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").slice(0, 30);
+          if (name && name.length > 2 && !/^(image|photo|img)_\d+$/i.test(name)) setAutoProduct(name);
+        }
+      }
     } catch {
       if (!autoProduct.trim()) {
         const name = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").slice(0, 30);
@@ -167,6 +182,10 @@ export default function App() {
   const handleAutoSearchWithKeyword = async (kw: string) => {
     const clean = kw.trim();
     if (!clean || clean.length < 2) return;
+    if (clean.toLowerCase() === "web site" || clean.toLowerCase() === "website") {
+      setAutoError("No se pudo detectar el producto en la foto. Escribe el nombre manualmente (ej: tijeras con laser) y pulsa Buscar.");
+      return;
+    }
     setAutoError(""); setAutoSearching(true); setStatus(`Buscando vídeos limpios de "${clean}"...`);
     try {
       const results = await searchTikTokClean(clean, 8, (m) => setStatus(m));

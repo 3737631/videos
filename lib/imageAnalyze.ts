@@ -23,9 +23,14 @@ const LABEL_TO_PRODUCT: Record<string, string> = {
   "spray bottle": "limpiador",
 };
 
+const GENERIC_BLACKLIST = new Set(["web site", "website", "monitor", "screen", "desktop computer", "laptop", "cellular telephone", "remote control", "keyboard", "mouse", "book", "paper"]);
+
 function labelToProduct(label: string): string {
   const l = label.toLowerCase();
+  if (GENERIC_BLACKLIST.has(l) || l.includes("web site")) return "";
   for (const [k, v] of Object.entries(LABEL_TO_PRODUCT)) if (l.includes(k)) return v;
+  // Si es genérico, no devolver nada para forzar fallback a nombre de archivo
+  if (l.split(" ").length <= 2 && l.length < 15 && !l.includes("scissors") && !l.includes("cleaner")) return "";
   return l.split(",")[0].trim().slice(0, 24);
 }
 
