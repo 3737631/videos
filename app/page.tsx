@@ -76,10 +76,9 @@ export default function App() {
         } else {
           setTiktokConnected(false);
           setTiktokUser(null);
-          // No bloquear: TikTok es opcional, el vídeo se crea igual y se sube manual
+          // TikTok 100% opcional: sin tokens ni verificación, todo sigue funcionando en modo manual
           if (j.reason === "not_configured") {
-            // Mensaje sutil, no bloquea nada - el botón "Subir a TikTok" manual siempre funciona
-            console.log("TikTok directo no configurado, modo manual activo:", j.missing);
+            console.log("TikTok directo opcional no configurado, modo manual activo");
           }
         }
       } catch {
@@ -613,14 +612,17 @@ export default function App() {
             </button>
           </div>
         ) : (
-          <button
-            onClick={handleTikTokConnect}
-            className="w-full bg-black border border-zinc-800 hover:border-zinc-700 rounded-2xl px-4 py-3 flex items-center justify-center gap-3 transition"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-2.88 2.5 2.89 2.89 0 01-2.89-2.89 2.89 2.89 0 012.89-2.89c.28 0 .54.04.8.11V8.94a6.27 6.27 0 00-.8-.06 6.34 6.34 0 00-6.34 6.34 6.34 6.34 0 006.34 6.34 6.34 6.34 0 006.34-6.34V8.75a8.2 8.2 0 004.77 1.52V6.84a4.83 4.83 0 01-1.01-.15z" /></svg>
-            <span className="text-sm font-bold">Conectar TikTok</span>
-            <span className="text-xs text-zinc-500 hidden sm:inline">— para publicar directo</span>
-          </button>
+          <div className="space-y-2">
+            <button
+              onClick={handleTikTokConnect}
+              className="w-full bg-black border border-zinc-800 hover:border-zinc-700 rounded-2xl px-4 py-3 flex items-center justify-center gap-3 transition"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-2.88 2.5 2.89 2.89 0 01-2.89-2.89 2.89 2.89 0 012.89-2.89c.28 0 .54.04.8.11V8.94a6.27 6.27 0 00-.8-.06 6.34 6.34 0 00-6.34 6.34 6.34 6.34 0 006.34 6.34 6.34 6.34 0 006.34-6.34V8.75a8.2 8.2 0 004.77 1.52V6.84a4.83 4.83 0 01-1.01-.15z" /></svg>
+              <span className="text-sm font-bold">Conectar TikTok</span>
+              <span className="text-xs text-zinc-500 hidden sm:inline">— opcional</span>
+            </button>
+            <p className="text-[11px] text-zinc-500 text-center">Opcional. Sin conectar puedes crear, descargar y subir manual a TikTok igual.</p>
+          </div>
         )}
         {tiktokPublishMsg && (
           <div className="mt-2 rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-center text-zinc-300">{tiktokPublishMsg}</div>
