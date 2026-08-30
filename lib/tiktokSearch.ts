@@ -8,7 +8,7 @@ export interface TikTokSearchResult {
   desc: string;
 }
 
-async function fetchWithTimeout(url: string, ms = 9000, init?: RequestInit): Promise<Response> {
+async function fetchWithTimeout(url: string, ms = 6000, init?: RequestInit): Promise<Response> {
   const c = new AbortController();
   const id = setTimeout(() => c.abort(), ms);
   try {
@@ -21,23 +21,64 @@ function correctKeyword(kw: string): string {
 }
 
 function getKeywordVariants(clean: string): string[] {
-  const variants: string[] = [clean];
-  // Singular/plural: tijera -> tijeras
-  if (clean.includes("tijera") && !clean.includes("tijeras")) variants.push(clean.replace("tijera", "tijeras"));
-  if (clean.includes("tijeras con laser")) variants.push("tijeras laser", "tijeras", "laser scissors");
-  if (clean.includes("tijera con laser")) variants.push("tijeras laser", "tijeras", "laser");
-  if (clean.includes("con")) {
-    const withoutCon = clean.replace(/\s+con\s+/g, " ").trim();
-    if (withoutCon !== clean) variants.push(withoutCon);
+  const v: string[] = [clean];
+  if (clean.includes("tijera") && !clean.includes("tijeras")) v.push(clean.replace("tijera", "tijeras"));
+  if (clean.includes("tijeras laser") || clean.includes("tijera con laser")) v.push("tijeras laser", "tijeras", "scissors");
+  else if (clean.includes("con")) {
+    const w = clean.replace(/\s+con\s+/g, " ").trim();
+    if (w !== clean) v.push(w);
   }
-  // Palabras sueltas (sin stopwords)
-  const words = clean.split(/\s+/).filter(w => w.length > 2 && !["con","para","con","de","del","la","el"].includes(w));
-  for (const w of words) if (!variants.includes(w)) variants.push(w);
-  // Inglés para tijeras
-  if (clean.includes("tijera")) variants.push("scissors");
-  // Limpiador variaciones
-  if (clean.includes("limpiador")) variants.push("limpiador", "cleaner");
-  return [...new Set(variants)].slice(0, 4);
+  const words = clean.split(/\s+/).filter(w => w.length > 2 && !["con","para","de","del","la","el"].includes(w));
+  for (const w of words) if (!v.includes(w)) v.push(w);
+  if (clean.includes("tijera")) v.push("scissors");
+  if (clean.includes("limpiador")) v.push("cleaner");
+  return [...new Set(v)].slice(0, 3);
+}
+
+async function tryFetchVariant(variant: string, count: number): Promise<TikTokSearchResult[]> {
+  const encoded = encodeURIComponent(variant);
+  const urls = [
+    `https://www.tikwm.com/api/feed/search?keywords=${encoded}&count=${count}&cursor=0&HD=1`,
+    `https://corsproxy.io/?${encodeURIComponent(`https://www.tikwm.com/api/feed/search?keywords=${encoded}&count=${count}&cursor=0&HD=1`)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://www.tikwm.com/api/feed/search?keywords=${encoded}&count=${count}&cursor=0&HD=1`)}`,
+  ];
+  // Lanzar las 3 en paralelo, gana la primera que devuelva vídeos
+  const promises = urls.map(async (url) => {
+    const res = await fetchWithTimeout(url, 6000);
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    const text = await res.text();
+    let json: unknown;
+    try { json = JSON.parse(text); } catch {
+      try { json = JSON.parse((JSON.parse(text) as { contents: string }).contents); } catch { throw new Error("json"); }
+    }
+    if (json && typeof (json as { contents?: unknown }).contents === "string") {
+      try { json = JSON.parse((json as { contents: string }).contents); } catch {}
+    }
+    const data = (json as { data?: { videos?: unknown[] }; videos?: unknown[] })?.data?.videos || (json as { videos?: unknown[] })?.videos || (json as { data?: unknown[] })?.data;
+    const arr = Array.isArray(data) ? data : Array.isArray(json) ? json as unknown[] : [];
+    if (!Array.isArray(arr) || arr.length === 0) throw new Error("sin resultados");
+    const mapped: TikTokSearchResult[] = [];
+    for (const v of arr) {
+      const o = v as Record<string, unknown>;
+      const play = (o.play as string) || (o.hdplay as string) || (o.downloadAddr as string) || (o.video as Record<string, unknown> | undefined)?.downloadAddr as string;
+      if (!play || !play.startsWith("http")) continue;
+      const id = String(o.video_id || o.id || o.aweme_id || (o.video as Record<string, unknown> | undefined)?.id || Math.random().toString(36).slice(2));
+      const cover = String(o.cover || o.origin_cover || o.ai_dynamic_cover || (o.video as Record<string, unknown> | undefined)?.cover || "");
+      const authorObj = o.author as Record<string, unknown> | string | undefined;
+      const author = String(typeof authorObj === "object" && authorObj ? (authorObj.unique_id as string) || "" : (authorObj as string) || "@tiktok");
+      const duration = Number(o.duration || (o.video as Record<string, unknown> | undefined)?.duration || 0) || 7;
+      const likes = Number(o.digg_count || (o.stats as Record<string, unknown> | undefined)?.digg_count || 0);
+      const desc = String(o.title || o.desc || (o.video as Record<string, unknown> | undefined)?.desc || "");
+      if (duration < 4 || duration > 18) continue;
+      if (desc.length > 140) continue;
+      mapped.push({ id, play, cover: cover || `https://picsum.photos/seed/${id}/270/480`, author, duration, likes, desc });
+    }
+    if (mapped.length === 0) throw new Error("ningún vídeo limpio");
+    mapped.sort((a, b) => b.likes - a.likes);
+    return mapped.slice(0, 6);
+  });
+  // Usar any para que el primero que tenga éxito gane, si todos fallan lanza el último error
+  return Promise.any(promises);
 }
 
 export async function searchTikTokClean(keyword: string, count = 8, onStatus?: (m: string) => void): Promise<TikTokSearchResult[]> {
@@ -45,71 +86,13 @@ export async function searchTikTokClean(keyword: string, count = 8, onStatus?: (
   const clean = correctKeyword(rawClean);
   if (!clean || clean.length < 2) throw new Error("Escribe el nombre del producto");
   const variants = getKeywordVariants(clean);
-
-  let lastErr = "";
+  // Probar variantes en orden, pero cada variante en paralelo entre gateways (rápido, sin permisos)
   for (const variant of variants) {
-    const encoded = encodeURIComponent(variant);
-    const gateways: { url: string; init?: RequestInit }[] = [
-      { url: `https://www.tikwm.com/api/feed/search?keywords=${encoded}&count=${count}&cursor=0&HD=1` },
-      { url: `https://www.tikwm.com/api/feed/search`, init: { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keywords: variant, count, cursor: 0, HD: 1 }) } },
-      { url: `https://corsproxy.io/?${encodeURIComponent(`https://www.tikwm.com/api/feed/search?keywords=${encoded}&count=${count}&cursor=0&HD=1`)}` },
-      { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://www.tikwm.com/api/feed/search?keywords=${encoded}&count=${count}&cursor=0&HD=1`)}` },
-      { url: `https://thingproxy.freeboard.io/fetch/https://www.tikwm.com/api/feed/search?keywords=${encoded}&count=${count}&cursor=0&HD=1` },
-    ];
-    for (const gw of gateways) {
-      try {
-        if (onStatus) onStatus(`Buscando "${variant}"...`);
-      const res = await fetchWithTimeout(gw.url, 10000, gw.init);
-      if (!res.ok) {
-        // Algunos proxies devuelven 403 pero con cuerpo válido
-        const t = await res.text().catch(() => "");
-        if (!t || !t.includes("play")) { lastErr = `status ${res.status}`; continue; }
-        // Si hay play dentro, intentar parsear aunque status !=200
-        try {
-          const j = JSON.parse(t);
-          const d = (j as { data?: { videos?: unknown[] } })?.data?.videos;
-          if (Array.isArray(d) && d.length > 0) {
-            // tratar como éxito
-          } else { lastErr = `status ${res.status}`; continue; }
-        } catch { lastErr = `status ${res.status}`; continue; }
-      }
-      const text = await res.text();
-      let json: unknown;
-      try { json = JSON.parse(text); } catch {
-        // allorigins/raw puede devolver ya el JSON interior
-        try { json = JSON.parse((JSON.parse(text) as { contents: string }).contents); } catch { continue; }
-      }
-      // allorigins/get devuelve {contents: "..."}
-      if (json && typeof (json as { contents?: unknown }).contents === "string") {
-        try { json = JSON.parse((json as { contents: string }).contents); } catch {}
-      }
-      const data = (json as { data?: { videos?: unknown[] }; videos?: unknown[] })?.data?.videos || (json as { videos?: unknown[] })?.videos || (json as { data?: unknown[] })?.data;
-      const arr = Array.isArray(data) ? data : Array.isArray(json) ? json as unknown[] : [];
-      if (!Array.isArray(arr) || arr.length === 0) { lastErr = "sin resultados"; continue; }
-      const mapped: TikTokSearchResult[] = [];
-      for (const v of arr) {
-        const o = v as Record<string, unknown>;
-        const play = (o.play as string) || (o.hdplay as string) || (o.downloadAddr as string) || (o.video as Record<string, unknown> | undefined)?.downloadAddr as string;
-        if (!play || typeof play !== "string" || !play.startsWith("http")) continue;
-        const id = String(o.video_id || o.id || o.aweme_id || (o.video as Record<string, unknown> | undefined)?.id || Math.random().toString(36).slice(2));
-        const cover = String(o.cover || o.origin_cover || o.ai_dynamic_cover || (o.video as Record<string, unknown> | undefined)?.cover || "");
-        const authorObj = o.author as Record<string, unknown> | string | undefined;
-        const author = String(typeof authorObj === "object" && authorObj ? (authorObj.unique_id as string) || "" : (authorObj as string) || "@tiktok");
-        const duration = Number(o.duration || (o.video as Record<string, unknown> | undefined)?.duration || 0) || 7;
-        const likes = Number(o.digg_count || (o.stats as Record<string, unknown> | undefined)?.digg_count || 0);
-        const desc = String(o.title || o.desc || (o.video as Record<string, unknown> | undefined)?.desc || "");
-        if (duration < 4 || duration > 18) continue;
-        if (desc.length > 140) continue;
-        mapped.push({ id, play, cover: cover || `https://picsum.photos/seed/${id}/270/480`, author, duration, likes, desc });
-      }
-      if (mapped.length === 0) { lastErr = "ningún vídeo limpio"; continue; }
-      mapped.sort((a, b) => b.likes - a.likes);
-      return mapped.slice(0, 6);
-    } catch (e) {
-      lastErr = e instanceof Error ? e.message : String(e);
-      continue;
-    }
+    if (onStatus) onStatus(`Buscando "${variant}" en todo TikTok...`);
+    try {
+      const res = await tryFetchVariant(variant, count);
+      if (res.length > 0) return res;
+    } catch {}
   }
-  }
-  throw new Error(`No se encontraron vídeos para "${clean}" (${lastErr}). Prueba con "${variants[1] || "tijeras"}" o sube tu propio vídeo.`);
+  throw new Error(`No se encontraron vídeos para "${clean}". Prueba con "${variants[1] || "tijeras"}" o sube tu propio vídeo.`);
 }
