@@ -70,8 +70,10 @@ async function searchPexelsFallback(keyword: string, onStatus?: (m: string) => v
 async function tryFetchVariant(variant: string, count: number): Promise<TikTokSearchResult[]> {
   const encoded = encodeURIComponent(variant);
   const base = typeof window !== "undefined" ? "/videos/api/tiktok/search" : "/api/tiktok/search";
+  const webBase = typeof window !== "undefined" ? "/videos/api/tiktok/search-web" : "/api/tiktok/search-web";
   const urls = [
     `${base}?keywords=${encoded}&count=${count}`,
+    `${webBase}?q=${encoded}&count=${count}`,
     `https://www.tikwm.com/api/feed/search?keywords=${encoded}&count=${count}&cursor=0&HD=1`,
     `https://corsproxy.io/?${encodeURIComponent(`https://www.tikwm.com/api/feed/search?keywords=${encoded}&count=${count}&cursor=0&HD=1`)}`,
   ];
