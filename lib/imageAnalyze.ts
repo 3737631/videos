@@ -52,7 +52,7 @@ export async function analyzeProductFromImage(file: File, onStatus?: (m: string)
   if (onStatus) onStatus("Analizando foto del producto...");
   const url = URL.createObjectURL(file);
   const fileNameFallback = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim().slice(0, 24) || "producto";
-  const fileHasLaser = /laser/i.test(file.name);
+  const fileHasLaser = /laser/i.test(file.name) || /laser/i.test(file.type);
   try {
     const img = new Image();
     img.src = url;
@@ -61,6 +61,20 @@ export async function analyzeProductFromImage(file: File, onStatus?: (m: string)
       img.onerror = () => rej(new Error("No se pudo leer la imagen"));
       setTimeout(() => rej(new Error("Timeout imagen")), 8000);
     });
+    // Detectar punto rojo laser en la imagen (móvil)
+    let hasRedLaser = fileHasLaser;
+    try {
+      const canvas = document.createElement("canvas");
+      const c = canvas.getContext("2d", { willReadFrequently: true });
+      if (c) {
+        canvas.width = 64; canvas.height = 64;
+        c.drawImage(img, 0, 0, 64, 64);
+        const d = c.getImageData(0, 0, 64, 64).data;
+        let reds = 0;
+        for (let i = 0; i < d.length; i += 4) if (d[i] > 200 && d[i+1] < 80 && d[i+2] < 80) reds++;
+        if (reds > 12) hasRedLaser = true;
+      }
+    } catch {}
     try {
       const modelPromise = loadMobilenet();
       const timeout = new Promise<never>((_, rej) => setTimeout(() => rej(new Error("Timeout modelo")), 12000));
@@ -68,12 +82,13 @@ export async function analyzeProductFromImage(file: File, onStatus?: (m: string)
       const preds = await model.classify(img);
       const top = preds?.[0]?.className || "";
       let product = labelToProduct(top);
-      // Si la foto es de tijeras y el archivo menciona laser, priorizar "tijeras laser"
-      if (fileHasLaser && product === "tijeras") product = "tijeras laser";
-      if (product && product.length > 2 && !product.includes("unknown")) return product;
+      if (hasRedLaser && product === "tijeras") product = "tijeras laser";
+      if (hasRedLaser && product === "tijeras laser") return product;
+      if (product && product.length > 2 && !product.includes("unknown") && product !== "web site") return product;
     } catch (e) {
       console.warn("[VISION] mobilenet no disponible, usando nombre archivo", e);
     }
+    if (hasRedLaser) return "tijeras laser";
     if (fileHasLaser && fileNameFallback.toLowerCase().includes("tijera")) return "tijeras laser";
     if (fileNameFallback.length > 2 && fileNameFallback.toLowerCase() !== "image" && fileNameFallback.toLowerCase() !== "photo") return fileNameFallback;
     return fileNameFallback;

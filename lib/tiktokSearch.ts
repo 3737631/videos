@@ -106,9 +106,15 @@ async function tryFetchVariant(variant: string, count: number): Promise<TikTokSe
       // Relevancia: priorizar vídeos que mencionen el producto
       const lowerDesc = desc.toLowerCase();
       const lowerAuthor = author.toLowerCase();
-      const variantWords = variant.toLowerCase().split(/\s+/);
-      const isRelevant = variantWords.some(w => lowerDesc.includes(w) || lowerAuthor.includes(w)) || lowerDesc.includes("tijera") || lowerAuthor.includes("tijera") || lowerDesc.includes("laser");
-      // Para la variante exacta (foto), exigir relevancia estricta: debe mencionar el producto
+      const variantLower = variant.toLowerCase();
+      // Para "tijeras laser" exigir ambas palabras, no solo una
+      let isRelevant = false;
+      if (variantLower.includes("tijeras laser") || variantLower.includes("tijera con laser")) {
+        isRelevant = (lowerDesc.includes("tijera") || lowerAuthor.includes("tijera")) && (lowerDesc.includes("laser") || lowerDesc.includes("láser"));
+      } else {
+        const variantWords = variantLower.split(/\s+/);
+        isRelevant = variantWords.some(w => lowerDesc.includes(w) || lowerAuthor.includes(w));
+      }
       if (!isRelevant) continue;
       mapped.push({ id, play, cover: cover || `https://picsum.photos/seed/${id}/270/480`, author, duration, likes, desc, webUrl: `https://www.tiktok.com/@${author}/video/${id}` });
     }
