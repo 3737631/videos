@@ -178,6 +178,66 @@ export default function App() {
     }
   };
 
+  const createVideoFromImage = async (imageFile: File, durationSec = 7): Promise<VideoClip> => {
+    const imgUrl = URL.createObjectURL(imageFile);
+    const canvas = document.createElement("canvas");
+    canvas.width = 720; canvas.height = 1280;
+    const ctx = canvas.getContext("2d", { alpha: false });
+    if (!ctx) throw new Error("Canvas no soportado");
+    const img = new Image();
+    img.src = imgUrl;
+    await new Promise<void>((res, rej) => {
+      img.onload = () => res();
+      img.onerror = () => rej(new Error("No se pudo leer imagen"));
+      setTimeout(() => rej(new Error("Timeout imagen")), 4000);
+    });
+    // Dibujar con cover
+    const scale = Math.max(canvas.width / img.width, canvas.height / img.height);
+    const w = img.width * scale, h = img.height * scale;
+    ctx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+    URL.revokeObjectURL(imgUrl);
+    const stream = (canvas as HTMLCanvasElement & { captureStream: (fps: number) => MediaStream }).captureStream(30);
+    const recorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported("video/webm;codecs=vp9") ? "video/webm;codecs=vp9" : "video/webm" });
+    const chunks: BlobPart[] = [];
+    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+    const videoUrl = await new Promise<string>((resolve, reject) => {
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: "video/webm" });
+        const url = URL.createObjectURL(blob);
+        const file = new File([blob], `foto-${Date.now()}.webm`, { type: "video/webm" });
+        // Validar duración
+        const v = document.createElement("video");
+        v.preload = "metadata"; v.src = url;
+        v.onloadedmetadata = () => {
+          const d = v.duration || durationSec;
+          resolve(url);
+          // No revocar aún, lo usará el clip
+        };
+        v.onerror = () => resolve(url);
+        setTimeout(() => resolve(url), 1000);
+      };
+      recorder.onerror = () => reject(new Error("No se pudo crear vídeo de la foto"));
+      recorder.start();
+      // Grabar 7s con ligero zoom
+      let start = performance.now();
+      const draw = () => {
+        if (performance.now() - start >= durationSec * 1000) { recorder.stop(); stream.getTracks().forEach(t => t.stop()); return; }
+        // Ligero ken burns
+        const p = (performance.now() - start) / (durationSec * 1000);
+        const s = 1 + p * 0.08;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, (canvas.width - w * s) / 2, (canvas.height - h * s) / 2, w * s, h * s);
+        requestAnimationFrame(draw);
+      };
+      draw();
+      setTimeout(() => { try { if (recorder.state === "recording") recorder.stop(); } catch {} }, durationSec * 1000 + 500);
+    });
+    // Crear File y VideoClip
+    const resBlob = await fetch(videoUrl).then(r => r.blob());
+    const file = new File([resBlob], `foto-${Date.now()}.webm`, { type: "video/webm" });
+    return { file, url: videoUrl, startOffset: 0, playDuration: durationSec };
+  };
+
   const handleAutoSearchWithKeyword = async (kw: string) => {
     const clean = kw.trim();
     if (!clean || clean.length < 2) return;
@@ -185,12 +245,39 @@ export default function App() {
       setAutoError("No se pudo detectar el producto en la foto. Escribe el nombre manualmente (ej: tijeras con laser) y pulsa Buscar.");
       return;
     }
-    setAutoError(""); setAutoSearching(true); setStatus(`Buscando vídeos limpios de "${clean}"...`);
+    setAutoError(""); setAutoSearching(true); setStatus(`Buscando vídeos exactos de "${clean}" por imagen...`);
     try {
       const results = await searchTikTokClean(clean, 8, (m) => setStatus(m));
-      setAutoResults(results.map((r, i) => ({ ...r, selected: i < 3 })));
+      const filtered = autoPhoto ? results.filter(r => {
+        const d = (r.desc + " " + r.author).toLowerCase();
+        return clean.toLowerCase().split(/\s+/).some(w => w.length > 2 && d.includes(w));
+      }) : results;
+      const final = filtered.length >= 2 ? filtered : results;
+      setAutoResults(final.map((r, i) => ({ ...r, selected: i < 3 })));
       setStatus("");
     } catch (e) {
+      // Fallback definitivo: usar la foto exacta como 3 vídeos verticales del mismo producto
+      if (autoPhoto) {
+        setStatus("TikTok sin resultados, creando vídeos con tu foto exacta...");
+        try {
+          const clips: VideoClip[] = [];
+          for (let i = 0; i < 3; i++) {
+            const c = await createVideoFromImage(autoPhoto, 7);
+            clips.push(c);
+          }
+          const accDur = clips.reduce((s, c) => s + c.playDuration, 0);
+          setClips(clips);
+          setTotalDuration(Math.min(15, Math.max(8, Math.round(accDur))));
+          if (!productPrompt.trim()) setProductPrompt(clean);
+          setStep(2);
+          setStatus("");
+          setAutoError("");
+          return;
+        } catch (err) {
+          setAutoError(`No se pudo crear vídeo de la foto: ${err instanceof Error ? err.message : String(err)}`);
+          return;
+        } finally { setAutoSearching(false); setStatus(""); }
+      }
       setAutoError(e instanceof Error ? e.message : String(e));
     } finally { setAutoSearching(false); setStatus(""); }
   };
