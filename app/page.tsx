@@ -195,6 +195,19 @@ export default function App() {
             const r = await fetch(play, { cache: "no-store" });
             if (r.ok) { const b = await r.blob(); if (b.size > 10000) return b; }
           } catch {}
+          // Refrescar URL si expiró (tikwm lookup con webUrl)
+          try {
+            const web = (selected[i] as { webUrl?: string }).webUrl || `https://www.tiktok.com/@${selected[i].author}/video/${selected[i].id}`;
+            const freshRes = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(web)}`, { cache: "no-store" });
+            if (freshRes.ok) {
+              const j = await freshRes.json();
+              const fresh = j?.data?.play || j?.data?.hdplay;
+              if (fresh) {
+                const r3 = await fetch(fresh, { cache: "no-store" });
+                if (r3.ok) { const b3 = await r3.blob(); if (b3.size > 10000) return b3; }
+              }
+            }
+          } catch {}
           const prox = `https://corsproxy.io/?${encodeURIComponent(play)}`;
           const r2 = await fetch(prox, { cache: "no-store" });
           if (!r2.ok) throw new Error("descarga falló");

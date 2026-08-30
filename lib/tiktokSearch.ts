@@ -6,6 +6,7 @@ export interface TikTokSearchResult {
   duration: number;
   likes: number;
   desc: string;
+  webUrl?: string;
 }
 
 async function fetchWithTimeout(url: string, ms = 6000, init?: RequestInit): Promise<Response> {
@@ -78,9 +79,17 @@ async function tryFetchVariant(variant: string, count: number): Promise<TikTokSe
         const duration = Number(o.duration || (o.video as Record<string, unknown> | undefined)?.duration || 0) || 7;
         const likes = Number(o.digg_count || (o.stats as Record<string, unknown> | undefined)?.digg_count || 0);
         const desc = String(o.title || o.desc || (o.video as Record<string, unknown> | undefined)?.desc || "");
+        const webUrl = String((o.video as Record<string, unknown> | undefined)?.id ? `https://www.tiktok.com/@${author}/video/${(o.video as Record<string, unknown>).id}` : o.webVideoUrl || o.url || `https://www.tiktok.com/@${author}/video/${id}`);
+        // Relevancia: el vídeo debe mencionar la búsqueda (no solo el usuario)
+        const lowerDesc = desc.toLowerCase();
+        const lowerAuthor = author.toLowerCase();
+        const variantWords = variant.toLowerCase().split(/\s+/);
+        const isRelevant = variantWords.some(w => lowerDesc.includes(w) || lowerAuthor.includes(w)) || lowerDesc.includes("tijera") || lowerDesc.includes("laser") || lowerDesc.includes("scissors");
+        // Solo descartar si es totalmente irrelevante y ya tenemos al menos 2 relevantes
+        if (!isRelevant && mapped.length >= 2 && lowerDesc.length > 5) continue;
         if (duration < 2 || duration > 30) continue;
         if (desc.length > 220) continue;
-        mapped.push({ id, play, cover: cover || `https://picsum.photos/seed/${id}/270/480`, author, duration, likes, desc });
+        mapped.push({ id, play, cover: cover || `https://picsum.photos/seed/${id}/270/480`, author, duration, likes, desc, webUrl } as TikTokSearchResult & { webUrl: string });
       }
       if (mapped.length === 0) throw new Error("ningún vídeo limpio");
       mapped.sort((a, b) => b.likes - a.likes);

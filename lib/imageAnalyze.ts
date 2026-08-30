@@ -46,29 +46,30 @@ async function loadMobilenet(): Promise<{ classify: (img: HTMLImageElement) => P
 export async function analyzeProductFromImage(file: File, onStatus?: (m: string) => void): Promise<string> {
   if (onStatus) onStatus("Analizando foto del producto...");
   const url = URL.createObjectURL(file);
-  // Fallback inmediato por nombre de archivo (rápido y siempre funciona)
   const fileNameFallback = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim().slice(0, 24) || "producto";
+  const fileHasLaser = /laser/i.test(file.name);
   try {
     const img = new Image();
-    // No poner crossOrigin para blob: evita taint en Safari/iOS
     img.src = url;
     await new Promise<void>((res, rej) => {
       img.onload = () => res();
       img.onerror = () => rej(new Error("No se pudo leer la imagen"));
       setTimeout(() => rej(new Error("Timeout imagen")), 8000);
     });
-    // Intentar MobileNet, pero con timeout de 12s para no bloquear
     try {
       const modelPromise = loadMobilenet();
       const timeout = new Promise<never>((_, rej) => setTimeout(() => rej(new Error("Timeout modelo")), 12000));
       const model = (await Promise.race([modelPromise, timeout])) as { classify: (img: HTMLImageElement) => Promise<{ className: string; probability: number }[]> };
       const preds = await model.classify(img);
       const top = preds?.[0]?.className || "";
-      const product = labelToProduct(top);
+      let product = labelToProduct(top);
+      // Si la foto es de tijeras y el archivo menciona laser, priorizar "tijeras laser"
+      if (fileHasLaser && product === "tijeras") product = "tijeras laser";
       if (product && product.length > 2 && !product.includes("unknown")) return product;
     } catch (e) {
       console.warn("[VISION] mobilenet no disponible, usando nombre archivo", e);
     }
+    if (fileHasLaser && fileNameFallback.toLowerCase().includes("tijera")) return "tijeras laser";
     if (fileNameFallback.length > 2 && fileNameFallback.toLowerCase() !== "image" && fileNameFallback.toLowerCase() !== "photo") return fileNameFallback;
     return fileNameFallback;
   } catch (e) {
