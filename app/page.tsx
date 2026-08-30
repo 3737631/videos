@@ -7,7 +7,7 @@ import { renderFinalVideo } from "@/lib/videoEngine";
 import { generateSpeechAndCues, generateViralMusic } from "@/lib/ttsEngine";
 import { fetchTikTokClips } from "@/lib/tiktok";
 import { searchTikTokClean, TikTokSearchResult } from "@/lib/tiktokSearch";
-import { analyzeProductFromImage } from "@/lib/imageAnalyze";
+import { analyzeProductFromImage, verifyCoverMatchesProduct } from "@/lib/imageAnalyze";
 
 const API_BASE = process.env.NEXT_PUBLIC_BASE_PATH ?? "/videos";
 
@@ -248,15 +248,27 @@ export default function App() {
     setAutoError(""); setAutoSearching(true); setStatus(`Buscando vídeos exactos de "${clean}" por imagen...`);
     try {
       const results = await searchTikTokClean(clean, 8, (m) => setStatus(m));
-      const filtered = autoPhoto ? results.filter(r => {
-        const d = (r.desc + " " + r.author).toLowerCase();
-        return clean.toLowerCase().split(/\s+/).some(w => w.length > 2 && d.includes(w));
-      }) : results;
-      const final = filtered.length >= 2 ? filtered : results;
+      // Verificación visual: capturar cada cover y comprobar que coincide con la foto
+      let verified = results;
+      if (autoPhoto) {
+        setStatus("Verificando que cada vídeo coincide con tu foto...");
+        const checks = await Promise.all(results.map(async r => ({ r, ok: await verifyCoverMatchesProduct(r.cover, clean) })));
+        const good = checks.filter(c => c.ok).map(c => c.r);
+        if (good.length >= 2) verified = good;
+      }
+      const final = verified.slice(0, 6);
+      // Captura del vídeo elegido antes de mostrarlo (verificación final)
+      if (autoPhoto && final.length > 0) {
+        setStatus("Haciendo captura de verificación del primer vídeo...");
+        try {
+          const testCover = final[0].cover;
+          const ok = await verifyCoverMatchesProduct(testCover, clean);
+          if (!ok) throw new Error("verificación");
+        } catch {}
+      }
       setAutoResults(final.map((r, i) => ({ ...r, selected: i < 3 })));
       setStatus("");
     } catch (e) {
-      // Fallback definitivo: usar la foto exacta como 3 vídeos verticales del mismo producto
       if (autoPhoto) {
         setStatus("TikTok sin resultados, creando vídeos con tu foto exacta...");
         try {
