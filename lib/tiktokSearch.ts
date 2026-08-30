@@ -104,9 +104,11 @@ async function tryFetchVariant(variant: string, count: number): Promise<TikTokSe
       if (desc.length > 220) continue;
       // Relevancia: priorizar vídeos que mencionen el producto
       const lowerDesc = desc.toLowerCase();
+      const lowerAuthor = author.toLowerCase();
       const variantWords = variant.toLowerCase().split(/\s+/);
-      const isRelevant = variantWords.some(w => lowerDesc.includes(w)) || lowerDesc.includes("tijera") || lowerDesc.includes("laser");
-      if (!isRelevant && mapped.length >= 2) continue;
+      const isRelevant = variantWords.some(w => lowerDesc.includes(w) || lowerAuthor.includes(w)) || lowerDesc.includes("tijera") || lowerAuthor.includes("tijera") || lowerDesc.includes("laser");
+      // Para la variante exacta (foto), exigir relevancia estricta: debe mencionar el producto
+      if (!isRelevant) continue;
       mapped.push({ id, play, cover: cover || `https://picsum.photos/seed/${id}/270/480`, author, duration, likes, desc, webUrl: `https://www.tiktok.com/@${author}/video/${id}` });
     }
     if (mapped.length === 0) throw new Error("ningún vídeo limpio");

@@ -665,10 +665,20 @@ export default function App() {
                         onClick={() => toggleAutoSelect(idx)}
                         className={`relative rounded-2xl overflow-hidden border-2 aspect-[9/16] bg-black ${r.selected ? "border-purple-500" : "border-zinc-800"}`}
                       >
-                        <img src={r.cover} alt="" className="w-full h-full object-cover opacity-80" />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
+                        <video
+                          src={r.play}
+                          poster={r.cover}
+                          autoPlay
+                          muted
+                          loop
+                          playsInline
+                          className="w-full h-full object-cover opacity-90"
+                          onError={(e) => { const v = e.currentTarget; v.style.display = "none"; const img = v.nextElementSibling as HTMLElement; if (img) img.style.display = "block"; }}
+                        />
+                        <img src={r.cover} alt="" className="w-full h-full object-cover opacity-80 hidden" style={{ display: "none" }} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent pointer-events-none" />
                         <div className={`absolute top-2 right-2 w-5 h-5 rounded-full border flex items-center justify-center text-[10px] ${r.selected ? "bg-purple-500 border-purple-500 text-white" : "bg-black/50 border-white/50 text-white"}`}>{r.selected ? "✓" : ""}</div>
-                        <div className="absolute bottom-1 left-1 right-1 text-[10px] text-white text-left leading-tight">
+                        <div className="absolute bottom-1 left-1 right-1 text-[10px] text-white text-left leading-tight pointer-events-none">
                           <div className="truncate">{r.author}</div>
                           <div className="text-[9px] opacity-70">{r.duration.toFixed(1)}s · ♥{r.likes > 1000 ? `${(r.likes/1000).toFixed(1)}k` : r.likes}</div>
                         </div>
