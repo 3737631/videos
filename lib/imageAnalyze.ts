@@ -1,5 +1,5 @@
-// Análisis 100% cliente con MobileNet (TensorFlow.js) - sin backend
-// Detecta qué producto es la foto (ej tijeras con laser -> "tijeras")
+// Análisis 100% cliente - CLIP zero-shot para producto exacto + MobileNet fallback
+// Detecta qué producto es la foto (ej tijeras con laser -> "tijeras laser") de verdad
 
 const LABEL_TO_PRODUCT: Record<string, string> = {
   scissors: "tijeras",
@@ -16,25 +16,33 @@ const LABEL_TO_PRODUCT: Record<string, string> = {
   "mixing bowl": "cocina",
   lipstick: "maquillaje",
   "hair dryer": "secador",
-  "cellular telephone": "móvil",
-  "remote control": "mando",
   bottle: "botella",
-  "water bottle": "botella",
   "spray bottle": "limpiador",
 };
 
-const GENERIC_BLACKLIST = new Set(["web site", "website", "monitor", "screen", "desktop computer", "laptop", "cellular telephone", "remote control", "keyboard", "mouse", "book", "paper"]);
+const CANDIDATE_LABELS = [
+  "tijeras",
+  "tijeras con laser",
+  "limpiador",
+  "aspiradora",
+  "sartén",
+  "maquillaje",
+  "móvil",
+  "ropa",
+  "coche",
+  "cocina",
+];
 
 function labelToProduct(label: string): string {
   const l = label.toLowerCase();
-  if (GENERIC_BLACKLIST.has(l) || l.includes("web site")) return "";
+  if (l.includes("web site") || l.includes("website") || l.includes("monitor")) return "";
   for (const [k, v] of Object.entries(LABEL_TO_PRODUCT)) if (l.includes(k)) return v;
-  // Si es genérico, no devolver nada para forzar fallback a nombre de archivo
   if (l.split(" ").length <= 2 && l.length < 15 && !l.includes("scissors") && !l.includes("cleaner")) return "";
   return l.split(",")[0].trim().slice(0, 24);
 }
 
 let mobilenetPromise: Promise<unknown> | null = null;
+let clipPromise: Promise<unknown> | null = null;
 
 async function loadMobilenet(): Promise<{ classify: (img: HTMLImageElement) => Promise<{ className: string; probability: number }[]> }> {
   if (mobilenetPromise) return mobilenetPromise as Promise<{ classify: (img: HTMLImageElement) => Promise<{ className: string; probability: number }[]> }>;
@@ -48,11 +56,26 @@ async function loadMobilenet(): Promise<{ classify: (img: HTMLImageElement) => P
   return mobilenetPromise as Promise<{ classify: (img: HTMLImageElement) => Promise<{ className: string; probability: number }[]> }>;
 }
 
+async function loadClip(): Promise<unknown> {
+  if (clipPromise) return clipPromise;
+  clipPromise = (async () => {
+    const { pipeline } = await import("@xenova/transformers");
+    const classifier = await pipeline("zero-shot-image-classification", "Xenova/clip-vit-base-patch32");
+    return {
+      classify: async (input: string, labels: string[]) => {
+        const out = (await (classifier as unknown as (a: string, b: string[]) => Promise<{ label: string; score: number }[]>)(input, labels));
+        return (out as { label: string; score: number }[]).sort((a, b) => b.score - a.score);
+      },
+    };
+  })();
+  return clipPromise;
+}
+
 export async function analyzeProductFromImage(file: File, onStatus?: (m: string) => void): Promise<string> {
   if (onStatus) onStatus("Analizando foto del producto...");
   const url = URL.createObjectURL(file);
   const fileNameFallback = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim().slice(0, 24) || "producto";
-  const fileHasLaser = /laser/i.test(file.name) || /laser/i.test(file.type);
+  const fileHasLaser = /laser/i.test(file.name);
   try {
     const img = new Image();
     img.src = url;
@@ -61,7 +84,27 @@ export async function analyzeProductFromImage(file: File, onStatus?: (m: string)
       img.onerror = () => rej(new Error("No se pudo leer la imagen"));
       setTimeout(() => rej(new Error("Timeout imagen")), 8000);
     });
-    // Detectar punto rojo laser en la imagen (móvil)
+
+    // 1) CLIP zero-shot: el más preciso para producto exacto
+    try {
+      const clip = (await Promise.race([
+        loadClip(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error("Timeout CLIP")), 10000)),
+      ]) as unknown) as { classify: (input: string, labels: string[]) => Promise<{ label: string; score: number }[]> };
+      const preds = await clip.classify(url, CANDIDATE_LABELS);
+      const top = preds[0];
+      if (top && top.score > 0.22) {
+        const label = top.label.toLowerCase();
+        if (label.includes("tijeras con laser") || label === "tijeras con laser") return "tijeras laser";
+        if (label.includes("tijeras") && fileHasLaser) return "tijeras laser";
+        if (label.includes("tijeras")) return "tijeras";
+        return label;
+      }
+    } catch (e) {
+      console.warn("[VISION] CLIP no disponible", e);
+    }
+
+    // 2) Punto rojo laser (visual directo)
     let hasRedLaser = fileHasLaser;
     try {
       const canvas = document.createElement("canvas");
@@ -75,25 +118,27 @@ export async function analyzeProductFromImage(file: File, onStatus?: (m: string)
         if (reds > 12) hasRedLaser = true;
       }
     } catch {}
+
+    // 3) MobileNet fallback
     try {
-      const modelPromise = loadMobilenet();
-      const timeout = new Promise<never>((_, rej) => setTimeout(() => rej(new Error("Timeout modelo")), 12000));
-      const model = (await Promise.race([modelPromise, timeout])) as { classify: (img: HTMLImageElement) => Promise<{ className: string; probability: number }[]> };
+      const model = await Promise.race([
+        loadMobilenet(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error("Timeout mobilenet")), 8000)),
+      ]) as { classify: (img: HTMLImageElement) => Promise<{ className: string; probability: number }[]> };
       const preds = await model.classify(img);
       const top = preds?.[0]?.className || "";
       let product = labelToProduct(top);
       if (hasRedLaser && product === "tijeras") product = "tijeras laser";
-      if (hasRedLaser && product === "tijeras laser") return product;
-      if (product && product.length > 2 && !product.includes("unknown") && product !== "web site") return product;
+      if (product && product.length > 2) return product;
     } catch (e) {
-      console.warn("[VISION] mobilenet no disponible, usando nombre archivo", e);
+      console.warn("[VISION] mobilenet no disponible", e);
     }
+
     if (hasRedLaser) return "tijeras laser";
-    if (fileHasLaser && fileNameFallback.toLowerCase().includes("tijera")) return "tijeras laser";
-    if (fileNameFallback.length > 2 && fileNameFallback.toLowerCase() !== "image" && fileNameFallback.toLowerCase() !== "photo") return fileNameFallback;
-    return fileNameFallback;
+    if (fileNameFallback.length > 2 && !/^(image|photo|img)_\d+$/i.test(fileNameFallback)) return fileNameFallback;
+    return "tijeras";
   } catch (e) {
-    console.warn("[VISION] fallo total, fallback", e);
+    console.warn("[VISION] fallo total", e);
     return fileNameFallback;
   } finally {
     URL.revokeObjectURL(url);
