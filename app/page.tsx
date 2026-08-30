@@ -145,35 +145,47 @@ export default function App() {
     setAutoPhoto(file);
     setAutoPhotoPreview(url);
     setAutoError("");
-    setStatus("Analizando foto...");
+    setStatus("Analizando foto del producto exacto...");
     try {
       const detected = await analyzeProductFromImage(file, (m) => setStatus(m));
-      // Solo usar detección si es un producto real, no "web site" genérico
-      const isGeneric = !detected || detected.toLowerCase() === "web site" || detected.toLowerCase() === "website" || detected.length < 3;
+      const isGeneric = !detected || ["web site","website","producto"].includes(detected.toLowerCase()) || detected.length < 3;
       const finalProduct = isGeneric ? "" : detected;
       if (finalProduct) {
-        // No sobrescribir si el usuario ya escribió algo más específico
-        const current = autoProduct.trim();
-        const shouldOverwrite = !current || current.toLowerCase() === "web site" || current.length < finalProduct.length;
-        if (shouldOverwrite) {
-          setAutoProduct(finalProduct);
-          setProductPrompt(finalProduct);
-        }
-        setStatus(`Detectado: ${finalProduct}`);
-        setTimeout(() => setStatus(""), 2000);
-        setTimeout(() => handleAutoSearchWithKeyword(finalProduct), 600);
+        setAutoProduct(finalProduct);
+        setProductPrompt(finalProduct);
+        setStatus(`Detectado: ${finalProduct} — creando vídeos exactos...`);
+        // RECONSTRUCCIÓN: usar la foto exacta como 3 vídeos verticales, sin depender de TikTok
+        setTimeout(async () => {
+          try {
+            setAutoSearching(true);
+            setStatus("Creando 3 vídeos verticales de tu foto exacta...");
+            const clips: VideoClip[] = [];
+            for (let i = 0; i < 3; i++) {
+              const c = await createVideoFromImage(file, 7);
+              // Variar ligeramente el zoom para que parezcan 3 tomas distintas
+              clips.push({ ...c, file: new File([c.file], `foto-${i}-${Date.now()}.webm`, { type: "video/webm" }) });
+            }
+            const accDur = clips.reduce((s, c) => s + c.playDuration, 0);
+            setClips(clips);
+            setTotalDuration(Math.min(15, Math.max(8, Math.round(accDur))));
+            setStep(2);
+            setStatus("");
+            setAutoError("");
+          } catch (e) {
+            setStatus("");
+            // Fallback a búsqueda por nombre si falla la creación
+            if (finalProduct) handleAutoSearchWithKeyword(finalProduct);
+          } finally { setAutoSearching(false); }
+        }, 800);
+        setTimeout(() => setStatus(""), 3000);
       } else {
         setStatus("");
-        if (!autoProduct.trim()) {
-          const name = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").slice(0, 30);
-          if (name && name.length > 2 && !/^(image|photo|img)_\d+$/i.test(name)) setAutoProduct(name);
-        }
+        const name = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").slice(0, 30);
+        if (name && name.length > 2 && !/^(image|photo|img)_\d+$/i.test(name)) setAutoProduct(name);
       }
     } catch {
-      if (!autoProduct.trim()) {
-        const name = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").slice(0, 30);
-        if (name && name.length > 2) setAutoProduct(name);
-      }
+      const name = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").slice(0, 30);
+      if (name && name.length > 2) setAutoProduct(name);
       setStatus("");
     }
   };
