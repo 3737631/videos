@@ -283,24 +283,7 @@ export default function App() {
               {tiktokLoading && <div className="text-xs text-zinc-400 flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin"/>Descargando sin marca...</div>}
             </div>
 
-            <div className="border-2 border-dashed border-zinc-700 bg-zinc-950/50 rounded-3xl p-6 flex flex-col items-center text-center space-y-3">
-              <div className="w-14 h-14 bg-zinc-800 rounded-full flex items-center justify-center"><Link2 className="w-7 h-7 text-cyan-400"/></div>
-              <h3 className="font-bold text-sm">O pega enlaces de Compartir manualmente</h3>
-              <p className="text-xs text-zinc-500">Si el bot no pudo, pega 1-5 enlaces de TikTok</p>
-              <div className="w-full flex gap-2">
-                <input value={tiktokDraft} onChange={e=>setTiktokDraft(e.target.value)} onKeyDown={e=>{if(e.key==="Enter") handleAddLink()}} placeholder="https://www.tiktok.com/@user/video/..." className="flex-1 bg-zinc-900 border border-zinc-800 rounded-full px-4 py-3 text-xs outline-none text-center"/>
-                <button onClick={handleAddLink} className="px-6 py-3 bg-white text-black rounded-full font-bold text-sm">Añadir</button>
-              </div>
-              {tiktokLinks.length>0 && <div className="w-full space-y-2 max-h-[140px] overflow-y-auto">{tiktokLinks.map((l,i)=><div key={i} className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded-full px-3 py-2 text-xs"><span className="flex-1 truncate text-left">{l}</span><button onClick={()=>setTiktokLinks(p=>p.filter((_,k)=>k!==i))} className="w-6 h-6 bg-zinc-800 rounded-full">✕</button></div>)}</div>}
-              <button onClick={handleDownload} disabled={tiktokLoading || tiktokLinks.length===0} className="w-full py-3 bg-white text-black rounded-full font-bold text-sm disabled:opacity-40">Descargar sin marca ↓</button>
-              {tiktokError && <div className="w-full rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">{tiktokError}</div>}
-            </div>
 
-            <div className="border border-zinc-800 rounded-3xl p-6 flex flex-col items-center text-center space-y-3">
-              <h3 className="font-bold text-sm">O sube tus vídeos</h3>
-              <input ref={fileInput} type="file" accept="video/*" multiple className="hidden" onChange={e=>handleUpload(e.target.files)}/>
-              <button onClick={()=>fileInput.current?.click()} className="w-full py-3 bg-zinc-800 rounded-full font-bold text-sm">Seleccionar vídeos</button>
-            </div>
           </div>
         )}
 
@@ -338,15 +321,17 @@ export default function App() {
         <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur flex flex-col p-2 sm:p-4">
           <div className="flex-1 bg-zinc-950 border border-zinc-800 rounded-2xl overflow-hidden flex flex-col max-w-5xl w-full mx-auto">
             <div className="flex items-center justify-between px-3 py-2 bg-zinc-900 border-b border-zinc-800">
-              <span className="text-xs font-bold">TikTok — &quot;{overlayQuery}&quot; — por encima</span>
+              <span className="text-xs font-bold">{overlayQuery}</span>
               <button onClick={()=>setOverlayOpen(false)} className="w-8 h-8 bg-zinc-800 rounded-full flex items-center justify-center">✕</button>
             </div>
-            <div className="flex-1 relative bg-white">
-              <iframe src={`${API_BASE}/api/feed?q=${encodeURIComponent(overlayQuery)}`} className="w-full h-full border-0" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" title="TikTok"/>
-              <div className="absolute bottom-3 left-3 right-3 bg-zinc-950/95 border border-zinc-800 rounded-2xl p-3 flex gap-2">
-                <span className="flex-1 text-xs text-zinc-400">Pulsa solo la lupa, ignora Abrir app — bot copiará Compartir solo</span>
-                <button onClick={handleAutoPaste} className="px-4 py-2 bg-[#fe2c55] rounded-full text-white text-xs font-bold">📋 Pegar auto</button>
-                <button onClick={()=>setOverlayOpen(false)} className="px-4 py-2 bg-white text-black rounded-full text-xs font-bold">Listo</button>
+            <div className="flex-1 relative bg-zinc-950">
+              <iframe src={`${API_BASE}/api/feed?q=${encodeURIComponent(overlayQuery)}`} className="w-full h-full border-0" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" title="Feed"/>
+              <div className="absolute bottom-3 left-3 right-3 bg-zinc-900 border border-zinc-800 rounded-2xl p-3 flex gap-2">
+                <button onClick={async()=>{
+                  if (clips.length>0) { setOverlayOpen(false); setMode("voice"); setTimeout(()=>processVideo(),400); }
+                  else if (tiktokLinks.length>0) { await handleDownload(); setOverlayOpen(false); if(clips.length>0){ setMode("voice"); setTimeout(()=>processVideo(),600);} }
+                  else { setOverlayOpen(false); }
+                }} className="flex-1 py-2 bg-white text-black rounded-full text-xs font-bold">Listo → Crear viral</button>
               </div>
             </div>
           </div>
