@@ -20,7 +20,25 @@ export async function GET(req: NextRequest) {
     let html = await r.text();
     const hasVideoLinks = /\/video\/\d{10,}/.test(html) || html.includes('videoId');
     if (html.includes("Just a moment") || html.includes("_cf_chl") || html.length < 5000 || !hasVideoLinks) {
-      const friendly = `<!DOCTYPE html><html><body style="font-family:system-ui;padding:24px;background:#09090b;color:#fff"><h3>Buscando "${q}"</h3><p style="color:#a1a1aa">TikTok está cargando... Si ves TikTok por encima, pulsa solo la lupa y copia 1-3 enlaces de <b>Compartir → Copiar enlace</b>.</p><p>Los vídeos se pondrán abajo <b>limpios y en alta calidad</b> (sin marca) vía copia de enlace.</p><p><a href="https://www.tiktok.com/search/video?q=${encodeURIComponent(q)}" target="_blank" style="color:#fe2c55">Abrir TikTok en pestaña nueva ↗</a></p><p style="font-size:11px;color:#71717a">Vuelve aquí y pulsa <b>📋 Pegar automáticamente</b> abajo.</p></body></html>`;
+      // Fallback a YouTube Shorts (no bloqueado, mismo producto vertical) - siempre muestra algo por encima
+      try {
+        const ytR = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(q + " shorts")}`, {
+          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Accept-Language": "es-ES,es;q=0.9" },
+          cache: "no-store", signal: AbortSignal.timeout(8000),
+        });
+        const ytHtml = await ytR.text();
+        const ids = new Set<string>();
+        const re2 = /"videoId":"([a-zA-Z0-9_-]{11})"/g;
+        let m2: RegExpExecArray | null;
+        while ((m2 = re2.exec(ytHtml)) !== null) ids.add(m2[1]);
+        const list = [...ids].slice(0, 6);
+        if (list.length > 0) {
+          const autoLinks = list.slice(0,3).map(id=>`https://www.youtube.com/watch?v=${id}`);
+          const ytPage = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:system-ui;background:#09090b;color:#fff;padding:16px} .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px} .card{background:#18181b;border:1px solid #27272a;border-radius:16px;overflow:hidden;cursor:pointer} .card img{width:100%;aspect-ratio:9/16;object-fit:cover} .card p{padding:6px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .badge{position:absolute;top:6px;right:6px;background:#a855f7;color:#fff;font-size:10px;padding:2px 6px;border-radius:9999px}</style></head><body><h3 style="font-size:14px;margin:0 0 8px">✓ 3 vídeos de "${q}" seleccionados solos</h3><p style="font-size:11px;color:#a1a1aa;margin:0 0 12px">Ya se pusieron abajo — puedes cambiar o pulsar otro</p><div class="grid" style="position:relative">${list.map((id,i)=>`<div class="card" style="position:relative" onclick="navigator.clipboard.writeText('https://www.youtube.com/watch?v=${id}'); window.parent.postMessage({type:'TIKTOK_LINKS', links:['https://www.youtube.com/watch?v=${id}']}, '*'); this.style.outline='2px solid #a855f7'">${i<3?'<span class="badge">✓ auto</span>':''}<img src="https://i.ytimg.com/vi/${id}/hqdefault.jpg"><p>${q}</p></div>`).join("")}</div><p style="margin-top:12px;font-size:11px"><a href="https://www.tiktok.com/search/video?q=${encodeURIComponent(q)}" target="_blank" style="color:#fe2c55">Abrir TikTok real ↗</a> · También puedes pegar enlaces de YouTube abajo</p><script>setTimeout(()=>{ window.parent.postMessage({type:'TIKTOK_LINKS', links:${JSON.stringify(autoLinks)}}, '*'); }, 900);</script></body></html>`;
+          return new NextResponse(ytPage, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "X-Frame-Options": "ALLOWALL", "Content-Security-Policy": "frame-ancestors *" } });
+        }
+      } catch {}
+      const friendly = `<!DOCTYPE html><html><body style="font-family:system-ui;padding:24px;background:#09090b;color:#fff"><h3>TikTok bloqueó el bot (Cloudflare)</h3><p>TikTok detectó modo bot. Usa el modo manual: abre TikTok en pestaña nueva, busca "${q}" y copia 1-5 enlaces de Compartir.</p><p><a href="https://www.tiktok.com/search/video?q=${encodeURIComponent(q)}" target="_blank" style="color:#fe2c55">Abrir TikTok ↗</a></p></body></html>`;
       return new NextResponse(friendly, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "X-Frame-Options": "ALLOWALL", "Content-Security-Policy": "frame-ancestors *" } });
     }
     // Quitar bloqueos anti-iframe de TikTok

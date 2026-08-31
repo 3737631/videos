@@ -34,14 +34,6 @@ export default function App() {
   const [overlayQuery, setOverlayQuery] = useState("");
 
   useEffect(() => { return () => { sharedAudioCtxRef.current?.close().catch(()=>{}); }; }, []);
-  useEffect(() => {
-    if (!overlayOpen) return;
-    const t = setTimeout(() => {
-      setOverlayOpen(false);
-      setStatus("");
-    }, 6000);
-    return () => clearTimeout(t);
-  }, [overlayOpen]);
 
   // Bot: escucha enlaces Compartir del iframe - coge 3 que coincidan y los pone solos abajo
   useEffect(() => {
@@ -52,8 +44,57 @@ export default function App() {
         setTiktokLinks(prev => [...new Set([...prev, ...links])].slice(0,5));
         const isYT = links.some(u=>u.includes("youtube.com") || u.includes("youtu.be"));
         if (isYT) {
-          setTiktokError("Has pegado YouTube — pega solo enlaces de TikTok (tiktok.com/@user/video/...) para vídeos limpios en alta calidad");
-          setTiktokLoading(false); setStatus("");
+          // YouTube Shorts: crear clips desde thumbnails y ponerlos solos abajo
+          try {
+            setTiktokLoading(true); setStatus("Cogidos 3 vídeos de YouTube Shorts que coinciden, preparando...");
+            const ytClips: VideoClip[] = [];
+            for (const u of links.slice(0,3)) {
+              const id = (u.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/) || [])[1] || "";
+              const thumb = id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : "";
+              // Crear vídeo desde thumbnail con canvas
+              try {
+                const imgRes = await fetch(thumb, { cache: "no-store" });
+                const blob = await imgRes.blob();
+                const file = new File([blob], `yt-${id}.jpg`, { type: blob.type });
+                // Reusar createVideoFromImageUrl
+                const img = new Image(); const url = URL.createObjectURL(blob);
+                img.src = url;
+                await new Promise<void>((res, rej)=>{ img.onload=()=>res(); img.onerror=()=>rej(new Error()); setTimeout(()=>rej(new Error()),3000); });
+                const canvas = document.createElement("canvas"); canvas.width=720; canvas.height=1280;
+                const ctx = canvas.getContext("2d",{alpha:false})!;
+                const scale=Math.max(canvas.width/img.width, canvas.height/img.height);
+                const w=img.width*scale, h=img.height*scale;
+                ctx.drawImage(img,(canvas.width-w)/2,(canvas.height-h)/2,w,h);
+                URL.revokeObjectURL(url);
+                const stream=(canvas as HTMLCanvasElement & {captureStream:(fps:number)=>MediaStream}).captureStream(30);
+                const rec=new MediaRecorder(stream,{mimeType: MediaRecorder.isTypeSupported("video/webm;codecs=vp9")?"video/webm;codecs=vp9":"video/webm"});
+                const chunks:BlobPart[]=[]; rec.ondataavailable=e=>{if(e.data.size>0) chunks.push(e.data)};
+                const videoUrl=await new Promise<string>((res,rej)=>{
+                  rec.onstop=()=>{ const b=new Blob(chunks,{type:"video/webm"}); const u=URL.createObjectURL(b); res(u); };
+                  rec.onerror=()=>rej(new Error()); rec.start();
+                  let s=performance.now(); const draw=()=>{
+                    if(performance.now()-s>=7000){ rec.stop(); stream.getTracks().forEach(t=>t.stop()); return; }
+                    const p=(performance.now()-s)/7000; const sc=1+p*0.05;
+                    ctx.clearRect(0,0,canvas.width,canvas.height);
+                    ctx.drawImage(img,(canvas.width-w*sc)/2,(canvas.height-h*sc)/2,w*sc,h*sc);
+                    requestAnimationFrame(draw);
+                  }; draw(); setTimeout(()=>{try{if(rec.state==="recording") rec.stop()}catch{}},7500);
+                });
+                const vb=await fetch(videoUrl).then(r=>r.blob());
+                const vf=new File([vb],`yt-${id}.webm`,{type:"video/webm"});
+                ytClips.push({ file: vf, url: videoUrl, startOffset:0, playDuration:7 });
+              } catch {}
+            }
+            if (ytClips.length>0) {
+              for (const c of clips) try{URL.revokeObjectURL(c.url)}catch{}
+              setClips(ytClips);
+              setTotalDuration(10);
+              setOverlayOpen(false);
+              setStep(2);
+              setTiktokError("");
+            }
+          } catch {}
+          finally { setTiktokLoading(false); setStatus(""); }
           return;
         }
         // TikTok: descargar sin marca
@@ -235,7 +276,7 @@ export default function App() {
               <input ref={photoInputRef} type="file" accept="image/*" className="hidden" onChange={e=>handlePhotoSelect(e.target.files)}/>
               <button onClick={()=>photoInputRef.current?.click()} className="w-full py-2.5 bg-zinc-900 border border-zinc-800 rounded-full text-xs flex items-center justify-center gap-2"><UploadCloud className="w-4 h-4"/> {autoPhoto ? "Cambiar foto" : "Subir foto del producto"}</button>
               {autoPhotoPreview && <div className="w-full flex items-center gap-3 bg-zinc-900 border border-zinc-800 rounded-2xl p-2"><img src={autoPhotoPreview} alt="" className="w-14 h-14 rounded-xl object-cover"/><span className="flex-1 text-xs truncate text-left">{autoPhoto?.name}</span><button onClick={()=>{if(autoPhotoPreview) URL.revokeObjectURL(autoPhotoPreview); setAutoPhoto(null); setAutoPhotoPreview(null);}} className="w-7 h-7 bg-zinc-800 rounded-full">✕</button></div>}
-              <div className="w-full py-2 text-[11px] text-zinc-500 text-center">El bot abrirá TikTok por encima solo al buscar</div>
+              <button onClick={()=>openOverlay(autoProduct)} className="w-full py-2.5 bg-[#fe2c55] hover:bg-[#e0264d] rounded-full text-white text-xs font-bold">Abrir TikTok por encima ↗ — bot pulsará solo</button>
               {tiktokError && <div className="w-full rounded-2xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">{tiktokError}</div>}
               {status && <div className="text-xs text-zinc-400 flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin"/>{status}</div>}
               {tiktokLoading && <div className="text-xs text-zinc-400 flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin"/>Descargando sin marca...</div>}
@@ -293,13 +334,21 @@ export default function App() {
       </div>
 
       {overlayOpen && (
-        <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur flex items-center justify-center p-4">
-          <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-8 max-w-sm w-full flex flex-col items-center text-center space-y-4">
-            <div className="w-12 h-12 border-3 border-zinc-800 border-t-purple-500 rounded-full animate-spin"/>
-            <p className="text-sm font-bold">Buscando vídeos virales de &quot;{overlayQuery}&quot;...</p>
-            <p className="text-xs text-zinc-500">Cargando momentos virales, sin tocar nada</p>
+        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur flex flex-col p-2 sm:p-4">
+          <div className="flex-1 bg-zinc-950 border border-zinc-800 rounded-2xl overflow-hidden flex flex-col max-w-5xl w-full mx-auto">
+            <div className="flex items-center justify-between px-3 py-2 bg-zinc-900 border-b border-zinc-800">
+              <span className="text-xs font-bold">TikTok — &quot;{overlayQuery}&quot; — por encima</span>
+              <button onClick={()=>setOverlayOpen(false)} className="w-8 h-8 bg-zinc-800 rounded-full flex items-center justify-center">✕</button>
+            </div>
+            <div className="flex-1 relative bg-white">
+              <iframe src={`${API_BASE}/api/feed?q=${encodeURIComponent(overlayQuery)}`} className="w-full h-full border-0" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" title="TikTok"/>
+              <div className="absolute bottom-3 left-3 right-3 bg-zinc-950/95 border border-zinc-800 rounded-2xl p-3 flex gap-2">
+                <span className="flex-1 text-xs text-zinc-400">Pulsa solo la lupa, ignora Abrir app — bot copiará Compartir solo</span>
+                <button onClick={handleAutoPaste} className="px-4 py-2 bg-[#fe2c55] rounded-full text-white text-xs font-bold">📋 Pegar auto</button>
+                <button onClick={()=>setOverlayOpen(false)} className="px-4 py-2 bg-white text-black rounded-full text-xs font-bold">Listo</button>
+              </div>
+            </div>
           </div>
-          <iframe src={`${API_BASE}/api/feed?q=${encodeURIComponent(overlayQuery)}`} className="absolute opacity-0 pointer-events-none w-0 h-0" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" title="TikTok" aria-hidden="true"/>
         </div>
       )}
     </main>
