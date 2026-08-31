@@ -69,9 +69,9 @@ async function searchPexelsFallback(keyword: string, onStatus?: (m: string) => v
 
 async function tryFetchVariant(variant: string, count: number): Promise<TikTokSearchResult[]> {
   const encoded = encodeURIComponent(variant);
-  const base = typeof window !== "undefined" ? "/videos/api/tiktok/search/" : "/api/tiktok/search/";
-  const webBase = typeof window !== "undefined" ? "/videos/api/tiktok/search-web/" : "/api/tiktok/search-web/";
-  const botBase = typeof window !== "undefined" ? "/videos/api/tiktok/bot-search/" : "/api/tiktok/bot-search/";
+  const base = typeof window !== "undefined" ? "/videos/api/tiktok/search" : "/api/tiktok/search";
+  const webBase = typeof window !== "undefined" ? "/videos/api/tiktok/search-web" : "/api/tiktok/search-web";
+  const botBase = typeof window !== "undefined" ? "/videos/api/tiktok/bot-search" : "/api/tiktok/bot-search";
   const urls = [
     `${botBase}?q=${encoded}&count=${count}`, // Bot automático - busca y resuelve solo, sin tocar nada
     `${base}?keywords=${encoded}&count=${count}`,
@@ -146,4 +146,5 @@ export async function searchTikTokClean(keyword: string, count = 8, onStatus?: (
   if (onStatus) onStatus("TikTok saturado, usando reserva verificada...");
   return searchPexelsFallback(clean, onStatus);
 }
+
 

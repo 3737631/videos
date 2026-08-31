@@ -9,7 +9,7 @@ const nextConfig: NextConfig = {
   ...(isGithubPages ? { output: "export" as const } : {}),
   ...(basePath ? { basePath } : {}),
   images: { unoptimized: true },
-  trailingSlash: true,
+  trailingSlash: false,
 };
 
 export default nextConfig;

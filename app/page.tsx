@@ -270,7 +270,7 @@ export default function App() {
               <button onClick={()=>setOverlayOpen(false)} className="w-8 h-8 bg-zinc-800 rounded-full flex items-center justify-center">✕</button>
             </div>
             <div className="flex-1 relative bg-white">
-              <iframe src={`${API_BASE}/api/tiktok/proxy/?q=${encodeURIComponent(overlayQuery)}`} className="w-full h-full border-0" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" title="TikTok"/>
+              <iframe src={`${API_BASE}/api/tiktok/proxy?q=q=${encodeURIComponent(overlayQuery)}`} className="w-full h-full border-0" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" title="TikTok"/>
               <div className="absolute bottom-3 left-3 right-3 bg-zinc-950/95 border border-zinc-800 rounded-2xl p-3 flex gap-2">
                 <span className="flex-1 text-xs text-zinc-400">Bot copiando enlaces de Compartir solo...</span>
                 <button onClick={()=>setOverlayOpen(false)} className="px-4 py-2 bg-zinc-800 rounded-full text-xs font-bold">Cancelar</button>
@@ -283,3 +283,4 @@ export default function App() {
     </main>
   );
 }
+
