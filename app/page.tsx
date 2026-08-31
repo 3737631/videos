@@ -34,16 +34,6 @@ export default function App() {
   const [overlayQuery, setOverlayQuery] = useState("");
 
   useEffect(() => { return () => { sharedAudioCtxRef.current?.close().catch(()=>{}); }; }, []);
-  // Si el overlay lleva demasiado tiempo, ciérralo y muestra manual (no quedarse colgado)
-  useEffect(() => {
-    if (!overlayOpen) return;
-    const t = setTimeout(() => {
-      setOverlayOpen(false);
-      setStatus("");
-      setTiktokError("Tardó demasiado — pega 1-3 enlaces de TikTok (Compartir → Copiar enlace) abajo y dale Descargar sin marca");
-    }, 8000);
-    return () => clearTimeout(t);
-  }, [overlayOpen]);
 
   // Bot: escucha enlaces Compartir del iframe - coge 3 que coincidan y los pone solos abajo
   useEffect(() => {

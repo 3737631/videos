@@ -12,7 +12,6 @@ export async function GET(req: NextRequest) {
         Referer: "https://www.tiktok.com/",
       },
       cache: "no-store",
-      signal: AbortSignal.timeout(5000),
     });
     if (!r.ok) {
       const friendly = `<!DOCTYPE html><html><body style="font-family:system-ui;padding:24px;background:#09090b;color:#fff"><h3>TikTok bloqueó el bot automático</h3><p>Usa el modo manual abajo: copia 1-5 enlaces de TikTok (botón Compartir → Copiar enlace) y pégalos en la web para descargar sin marca.</p><p><a href="https://www.tiktok.com/search/video?q=${encodeURIComponent(q)}" target="_blank" style="color:#fe2c55">Abrir TikTok en pestaña nueva</a></p></body></html>`;
