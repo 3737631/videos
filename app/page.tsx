@@ -46,20 +46,16 @@ export default function App() {
         if (isYT) {
           // YouTube Shorts: crear clips desde thumbnails y ponerlos solos abajo
           try {
-            setTiktokLoading(true); setStatus("Cogidos 3 vídeos de YouTube Shorts que coinciden, preparando...");
-            const ytClips: VideoClip[] = [];
-            for (const u of links.slice(0,3)) {
+            setTiktokLoading(true); setStatus("Cogidos 3 vídeos, preparando rápido...");
+            const createOne = async (u: string, idx:number): Promise<VideoClip | null> => {
               const id = (u.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/) || [])[1] || "";
               const thumb = id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : "";
-              // Crear vídeo desde thumbnail con canvas
               try {
                 const imgRes = await fetch(thumb, { cache: "no-store" });
                 const blob = await imgRes.blob();
-                const file = new File([blob], `yt-${id}.jpg`, { type: blob.type });
-                // Reusar createVideoFromImageUrl
                 const img = new Image(); const url = URL.createObjectURL(blob);
                 img.src = url;
-                await new Promise<void>((res, rej)=>{ img.onload=()=>res(); img.onerror=()=>rej(new Error()); setTimeout(()=>rej(new Error()),3000); });
+                await new Promise<void>((res, rej)=>{ img.onload=()=>res(); img.onerror=()=>rej(new Error()); setTimeout(()=>rej(new Error()),2000); });
                 const canvas = document.createElement("canvas"); canvas.width=720; canvas.height=1280;
                 const ctx = canvas.getContext("2d",{alpha:false})!;
                 const scale=Math.max(canvas.width/img.width, canvas.height/img.height);
@@ -69,31 +65,30 @@ export default function App() {
                 const stream=(canvas as HTMLCanvasElement & {captureStream:(fps:number)=>MediaStream}).captureStream(30);
                 const rec=new MediaRecorder(stream,{mimeType: MediaRecorder.isTypeSupported("video/webm;codecs=vp9")?"video/webm;codecs=vp9":"video/webm"});
                 const chunks:BlobPart[]=[]; rec.ondataavailable=e=>{if(e.data.size>0) chunks.push(e.data)};
+                const dur=5;
                 const videoUrl=await new Promise<string>((res,rej)=>{
                   rec.onstop=()=>{ const b=new Blob(chunks,{type:"video/webm"}); const u=URL.createObjectURL(b); res(u); };
                   rec.onerror=()=>rej(new Error()); rec.start();
                   let s=performance.now(); const draw=()=>{
                     const elapsed=performance.now()-s;
-                    if(elapsed>=7000){ rec.stop(); stream.getTracks().forEach(t=>t.stop()); return; }
-                    const p=elapsed/7000;
-                    // Curva viral fluida: zoom suave + paneo lateral sutil + ease
+                    if(elapsed>=dur*1000){ rec.stop(); stream.getTracks().forEach(t=>t.stop()); return; }
+                    const p=elapsed/(dur*1000);
                     const ease = 0.5 - Math.cos(p*Math.PI)/2;
-                    const sc=1 + ease*0.12;
-                    const panX = Math.sin(p*Math.PI*1.2)*18;
-                    const panY = Math.cos(p*Math.PI*0.8)*10;
+                    const sc=1 + ease*0.09;
+                    const panX = Math.sin(p*Math.PI*1.1)*14;
+                    const panY = Math.cos(p*Math.PI*0.7)*8;
                     ctx.clearRect(0,0,canvas.width,canvas.height);
-                    // Sutil viñeta para look viral
                     ctx.drawImage(img,(canvas.width-w*sc)/2 + panX,(canvas.height-h*sc)/2 + panY,w*sc,h*sc);
-                    ctx.fillStyle=`rgba(0,0,0,${0.04 + Math.sin(p*Math.PI)*0.03})`;
-                    ctx.fillRect(0,0,canvas.width,canvas.height);
                     requestAnimationFrame(draw);
-                  }; draw(); setTimeout(()=>{try{if(rec.state==="recording") rec.stop()}catch{}},7500);
+                  }; draw(); setTimeout(()=>{try{if(rec.state==="recording") rec.stop()}catch{}},dur*1000+400);
                 });
                 const vb=await fetch(videoUrl).then(r=>r.blob());
                 const vf=new File([vb],`yt-${id}.webm`,{type:"video/webm"});
-                ytClips.push({ file: vf, url: videoUrl, startOffset:0, playDuration:7 });
-              } catch {}
-            }
+                return { file: vf, url: videoUrl, startOffset:0, playDuration:dur };
+              } catch { return null; }
+            };
+            const results = await Promise.all(links.slice(0,3).map((u,i)=>createOne(u,i)));
+            const ytClips = results.filter(Boolean) as VideoClip[];
             if (ytClips.length>0) {
               for (const c of clips) try{URL.revokeObjectURL(c.url)}catch{}
               setClips(ytClips);
