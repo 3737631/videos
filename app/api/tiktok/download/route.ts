@@ -3,8 +3,16 @@ export const dynamic = "force-dynamic";
 
 // Server-side proxy para descargar sin marca - bypass CORS y con IP de Vercel
 export async function GET(req: NextRequest) {
-  const url = req.nextUrl.searchParams.get("url") || "";
+  let url = req.nextUrl.searchParams.get("url") || "";
   if (!url || !url.includes("tiktok.com")) return NextResponse.json({ error: "Falta url de TikTok" }, { status: 400 });
+  // Resolver vm.tiktok.com corto
+  if (url.includes("vm.tiktok.com") || url.includes("vt.tiktok.com")) {
+    try {
+      const r = await fetch(url, { redirect: "manual", headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(5000) });
+      const loc = r.headers.get("location");
+      if (loc && loc.includes("tiktok.com")) url = loc;
+    } catch {}
+  }
   const encoded = encodeURIComponent(url);
   const gateways = [
     `https://www.tikwm.com/api/?url=${encoded}&hd=1`,

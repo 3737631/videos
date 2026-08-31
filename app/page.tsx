@@ -70,7 +70,7 @@ export default function App() {
     }
     const check = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/tiktok/status`, { cache: "no-store" });
+        const res = await fetch(`${API_BASE}/api/tiktok/status/`, { cache: "no-store" });
         const j = await res.json();
         if (j.connected) {
           setTiktokConnected(true);
@@ -368,7 +368,7 @@ export default function App() {
   const handleTikTokConnect = async () => {
     // Si TikTok no está configurado en Vercel, no ir a /auth (daría 500), hacer share manual directo
     try {
-      const r = await fetch(`${API_BASE}/api/tiktok/status`, { cache: "no-store" });
+      const r = await fetch(`${API_BASE}/api/tiktok/status/`, { cache: "no-store" });
       const j = await r.json();
       if (j.reason === "not_configured") {
         setTiktokPublishMsg("TikTok directo no configurado en este deployment — usando modo manual. Puedes crear y subir vídeos igual con “Compartir manual”.");
@@ -376,12 +376,12 @@ export default function App() {
         return;
       }
     } catch {}
-    window.location.assign(`${API_BASE}/api/tiktok/auth`);
+    window.location.assign(`${API_BASE}/api/tiktok/auth/`);
   };
 
   const handleTikTokLogout = async () => {
     try {
-      await fetch(`${API_BASE}/api/tiktok/logout`, { method: "POST", cache: "no-store" });
+      await fetch(`${API_BASE}/api/tiktok/logout/`, { method: "POST", cache: "no-store" });
     } catch {}
     setTiktokConnected(false);
     setTiktokUser(null);
@@ -405,7 +405,7 @@ export default function App() {
       form.append("title", productPrompt.slice(0, 150) || "Video viral con Creador Viral #fyp");
       form.append("mode", mode);
       form.append("privacy_level", "SELF_ONLY");
-      const apiRes = await fetch(`${API_BASE}/api/tiktok/publish`, { method: "POST", body: form });
+      const apiRes = await fetch(`${API_BASE}/api/tiktok/publish/`, { method: "POST", body: form });
       const j = await apiRes.json();
       if (!apiRes.ok) throw new Error(j.error || "Error al publicar");
       setTiktokPublishMsg(j.message || (mode === "publish" ? "¡Publicado en TikTok!" : "¡Guardado como borrador en TikTok!"));
@@ -1163,7 +1163,7 @@ export default function App() {
             </div>
             <div className="flex-1 relative bg-white">
               <iframe
-                src={`${API_BASE}/api/tiktok/proxy?q=${encodeURIComponent(tiktokOverlayQuery)}`}
+                src={`${API_BASE}/api/tiktok/proxy/?q=${encodeURIComponent(tiktokOverlayQuery)}`}
                 className="w-full h-full border-0"
                 sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
                 allow="fullscreen"
@@ -1181,3 +1181,4 @@ export default function App() {
     </main>
   );
 }
+
