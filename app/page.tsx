@@ -345,8 +345,59 @@ export default function App() {
               <iframe src={`${API_BASE}/api/feed?q=${encodeURIComponent(overlayQuery)}`} className="w-full h-full border-0" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" title="TikTok"/>
               <div className="absolute bottom-3 left-3 right-3 bg-zinc-950/95 border border-zinc-800 rounded-2xl p-3 flex gap-2">
                 <button onClick={async()=>{
-                  if (clips.length>0) { setOverlayOpen(false); setMode("voice"); setTimeout(()=>processVideo(),400); }
-                  else if (tiktokLinks.length>0) { await handleDownload(); setOverlayOpen(false); setMode("voice"); setTimeout(()=>{ if(clips.length>0) processVideo(); },600); }
+                  // Si ya hay clips del bot YT, ve directo a Voz
+                  if (clips.length>0) { setOverlayOpen(false); setMode("voice"); setTimeout(()=>processVideo(),400); return; }
+                  // Si hay enlaces YT seleccionados, créalos rápido y ve a Voz
+                  const ytLinks = tiktokLinks.filter(u=>u.includes("youtube.com")||u.includes("youtu.be"));
+                  if (ytLinks.length>0) {
+                    setOverlayOpen(false);
+                    // Crear clips YT rápido aquí mismo sin pasar por handleDownload
+                    try {
+                      setStatus("Creando viral con fragmentos seleccionados...");
+                      // Reusa la lógica YT del handler: crear clips y luego Voz
+                      const res = await Promise.all(ytLinks.slice(0,3).map(async (u)=>{
+                        const id=(u.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/)||[])[1]||"";
+                        const thumb=id?`https://i.ytimg.com/vi/${id}/hqdefault.jpg`:"";
+                        try{
+                          const blob=await (await fetch(thumb,{cache:"no-store"})).blob();
+                          const img=new Image(); const url=URL.createObjectURL(blob); img.src=url;
+                          await new Promise<void>((res,rej)=>{ img.onload=()=>res(); img.onerror=()=>rej(new Error()); setTimeout(()=>rej(new Error()),2000); });
+                          const canvas=document.createElement("canvas"); canvas.width=640; canvas.height=1136;
+                          const ctx=canvas.getContext("2d",{alpha:false})!;
+                          const sc=Math.max(canvas.width/img.width, canvas.height/img.height);
+                          const w=img.width*sc, h=img.height*sc;
+                          ctx.drawImage(img,(canvas.width-w)/2,(canvas.height-h)/2,w,h);
+                          URL.revokeObjectURL(url);
+                          const stream=(canvas as HTMLCanvasElement & {captureStream:(fps:number)=>MediaStream}).captureStream(24);
+                          const rec=new MediaRecorder(stream,{mimeType: MediaRecorder.isTypeSupported("video/webm;codecs=vp9")?"video/webm;codecs=vp9":"video/webm"});
+                          const chunks:BlobPart[]=[]; rec.ondataavailable=e=>{if(e.data.size>0) chunks.push(e.data)};
+                          const dur=4;
+                          const videoUrl=await new Promise<string>((res,rej)=>{
+                            rec.onstop=()=>{ const b=new Blob(chunks,{type:"video/webm"}); res(URL.createObjectURL(b)); };
+                            rec.onerror=()=>rej(new Error()); rec.start();
+                            let s=performance.now(); const draw=()=>{
+                              const e=performance.now()-s;
+                              if(e>=dur*1000){ rec.stop(); stream.getTracks().forEach(t=>t.stop()); return; }
+                              const p=e/(dur*1000);
+                              const sc2=1 + (0.5 - Math.cos(p*Math.PI)/2)*0.06;
+                              ctx.clearRect(0,0,canvas.width,canvas.height);
+                              ctx.drawImage(img,(canvas.width-w*sc2)/2,(canvas.height-h*sc2)/2,w*sc2,h*sc2);
+                              requestAnimationFrame(draw);
+                            }; draw(); setTimeout(()=>{try{if(rec.state==="recording") rec.stop()}catch{}},dur*1000+300);
+                          });
+                          const vb=await fetch(videoUrl).then(r=>r.blob());
+                          return { file: new File([vb],`yt-${id}.webm`,{type:"video/webm"}), url: videoUrl, startOffset:0, playDuration:dur } as VideoClip;
+                        } catch { return null; }
+                      }));
+                      const ytClips=res.filter(Boolean) as VideoClip[];
+                      if(ytClips.length>0){
+                        for(const c of clips) try{URL.revokeObjectURL(c.url)}catch{}
+                        setClips(ytClips); setTotalDuration(8); setMode("voice"); setTimeout(()=>processVideo(),400);
+                        return;
+                      }
+                    } catch {}
+                  }
+                  if (tiktokLinks.length>0) { await handleDownload(); setOverlayOpen(false); setMode("voice"); setTimeout(()=>processVideo(),600); }
                   else setOverlayOpen(false);
                 }} className="flex-1 py-2 bg-white text-black rounded-full text-xs font-bold">Listo → Crear viral con Voz</button>
               </div>
