@@ -44,61 +44,8 @@ export default function App() {
         setTiktokLinks(prev => [...new Set([...prev, ...links])].slice(0,5));
         const isYT = links.some(u=>u.includes("youtube.com") || u.includes("youtu.be"));
         if (isYT) {
-          // YouTube Shorts: crear clips desde thumbnails y ponerlos solos abajo
-          try {
-            setTiktokLoading(true); setStatus("Cogidos 3 vídeos, preparando rápido...");
-            const createOne = async (u: string, idx:number): Promise<VideoClip | null> => {
-              const id = (u.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/) || [])[1] || "";
-              const thumb = id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : "";
-              try {
-                const imgRes = await fetch(thumb, { cache: "no-store" });
-                const blob = await imgRes.blob();
-                const img = new Image(); const url = URL.createObjectURL(blob);
-                img.src = url;
-                await new Promise<void>((res, rej)=>{ img.onload=()=>res(); img.onerror=()=>rej(new Error()); setTimeout(()=>rej(new Error()),2000); });
-                const canvas = document.createElement("canvas"); canvas.width=720; canvas.height=1280;
-                const ctx = canvas.getContext("2d",{alpha:false})!;
-                const scale=Math.max(canvas.width/img.width, canvas.height/img.height);
-                const w=img.width*scale, h=img.height*scale;
-                ctx.drawImage(img,(canvas.width-w)/2,(canvas.height-h)/2,w,h);
-                URL.revokeObjectURL(url);
-                const stream=(canvas as HTMLCanvasElement & {captureStream:(fps:number)=>MediaStream}).captureStream(30);
-                const rec=new MediaRecorder(stream,{mimeType: MediaRecorder.isTypeSupported("video/webm;codecs=vp9")?"video/webm;codecs=vp9":"video/webm"});
-                const chunks:BlobPart[]=[]; rec.ondataavailable=e=>{if(e.data.size>0) chunks.push(e.data)};
-                const dur=5;
-                const videoUrl=await new Promise<string>((res,rej)=>{
-                  rec.onstop=()=>{ const b=new Blob(chunks,{type:"video/webm"}); const u=URL.createObjectURL(b); res(u); };
-                  rec.onerror=()=>rej(new Error()); rec.start();
-                  let s=performance.now(); const draw=()=>{
-                    const elapsed=performance.now()-s;
-                    if(elapsed>=dur*1000){ rec.stop(); stream.getTracks().forEach(t=>t.stop()); return; }
-                    const p=elapsed/(dur*1000);
-                    const ease = 0.5 - Math.cos(p*Math.PI)/2;
-                    const sc=1 + ease*0.09;
-                    const panX = Math.sin(p*Math.PI*1.1)*14;
-                    const panY = Math.cos(p*Math.PI*0.7)*8;
-                    ctx.clearRect(0,0,canvas.width,canvas.height);
-                    ctx.drawImage(img,(canvas.width-w*sc)/2 + panX,(canvas.height-h*sc)/2 + panY,w*sc,h*sc);
-                    requestAnimationFrame(draw);
-                  }; draw(); setTimeout(()=>{try{if(rec.state==="recording") rec.stop()}catch{}},dur*1000+400);
-                });
-                const vb=await fetch(videoUrl).then(r=>r.blob());
-                const vf=new File([vb],`yt-${id}.webm`,{type:"video/webm"});
-                return { file: vf, url: videoUrl, startOffset:0, playDuration:dur };
-              } catch { return null; }
-            };
-            const results = await Promise.all(links.slice(0,3).map((u,i)=>createOne(u,i)));
-            const ytClips = results.filter(Boolean) as VideoClip[];
-            if (ytClips.length>0) {
-              for (const c of clips) try{URL.revokeObjectURL(c.url)}catch{}
-              setClips(ytClips);
-              setTotalDuration(10);
-              setOverlayOpen(false);
-              setStep(2);
-              setTiktokError("");
-            }
-          } catch {}
-          finally { setTiktokLoading(false); setStatus(""); }
+          setTiktokError("Has pegado YouTube — pega solo enlaces de TikTok (tiktok.com/@user/video/...) para vídeos limpios en alta calidad");
+          setTiktokLoading(false); setStatus("");
           return;
         }
         // TikTok: descargar sin marca
