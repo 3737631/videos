@@ -145,49 +145,27 @@ export default function App() {
     setAutoPhoto(file);
     setAutoPhotoPreview(url);
     setAutoError("");
-    setStatus("Analizando foto del producto exacto...");
+    setStatus("Analizando foto para identificar el producto exacto...");
+    let product = "";
     try {
-      const detected = await analyzeProductFromImage(file, (m) => setStatus(m));
-      const isGeneric = !detected || ["web site","website","producto"].includes(detected.toLowerCase()) || detected.length < 3;
-      const finalProduct = isGeneric ? "" : detected;
-      if (finalProduct) {
-        setAutoProduct(finalProduct);
-        setProductPrompt(finalProduct);
-        setStatus(`Detectado: ${finalProduct} — creando vídeos exactos...`);
-        // RECONSTRUCCIÓN: usar la foto exacta como 3 vídeos verticales, sin depender de TikTok
-        setTimeout(async () => {
-          try {
-            setAutoSearching(true);
-            setStatus("Creando 3 vídeos verticales de tu foto exacta...");
-            const clips: VideoClip[] = [];
-            for (let i = 0; i < 3; i++) {
-              const c = await createVideoFromImage(file, 7);
-              // Variar ligeramente el zoom para que parezcan 3 tomas distintas
-              clips.push({ ...c, file: new File([c.file], `foto-${i}-${Date.now()}.webm`, { type: "video/webm" }) });
-            }
-            const accDur = clips.reduce((s, c) => s + c.playDuration, 0);
-            setClips(clips);
-            setTotalDuration(Math.min(15, Math.max(8, Math.round(accDur))));
-            setStep(2);
-            setStatus("");
-            setAutoError("");
-          } catch (e) {
-            setStatus("");
-            // Fallback a búsqueda por nombre si falla la creación
-            if (finalProduct) handleAutoSearchWithKeyword(finalProduct);
-          } finally { setAutoSearching(false); }
-        }, 800);
-        setTimeout(() => setStatus(""), 3000);
-      } else {
-        setStatus("");
-        const name = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").slice(0, 30);
-        if (name && name.length > 2 && !/^(image|photo|img)_\d+$/i.test(name)) setAutoProduct(name);
-      }
-    } catch {
+      product = await analyzeProductFromImage(file, (m) => setStatus(m));
+    } catch {}
+    const isGeneric = !product || ["web site","website","producto"].includes(product.toLowerCase()) || product.length < 3;
+    if (isGeneric) {
+      // Usar el nombre del archivo si es descriptivo, si no pedir manual
       const name = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").slice(0, 30);
-      if (name && name.length > 2) setAutoProduct(name);
-      setStatus("");
+      if (name && name.length > 2 && !/^(image|photo|img)_\d+$/i.test(name)) {
+        product = name;
+      } else {
+        setAutoError("No identifiqué el producto. Escribe su nombre (ej: tijeras con laser) y pulsa Buscar.");
+        setStatus("");
+        return;
+      }
     }
+    // Guardar producto y BUSCAR los vídeos reales en TikTok y mostrarlos en la galería de abajo
+    setAutoProduct(product);
+    setProductPrompt(product);
+    await handleAutoSearchWithKeyword(product);
   };
 
   const createVideoFromImage = async (imageFile: File, durationSec = 7): Promise<VideoClip> => {
@@ -257,52 +235,18 @@ export default function App() {
       setAutoError("No se pudo detectar el producto en la foto. Escribe el nombre manualmente (ej: tijeras con laser) y pulsa Buscar.");
       return;
     }
-    setAutoError(""); setAutoSearching(true); setStatus(`Buscando vídeos exactos de "${clean}" por imagen...`);
+    setAutoError(""); setAutoSearching(true); setStatus(`Buscando vídeos reales de "${clean}" en TikTok...`);
     try {
-      const results = await searchTikTokClean(clean, 8, (m) => setStatus(m));
-      // Verificación visual: capturar cada cover y comprobar que coincide con la foto
-      let verified = results;
-      if (autoPhoto) {
-        setStatus("Verificando que cada vídeo coincide con tu foto...");
-        const checks = await Promise.all(results.map(async r => ({ r, ok: await verifyCoverMatchesProduct(r.cover, clean) })));
-        const good = checks.filter(c => c.ok).map(c => c.r);
-        if (good.length >= 2) verified = good;
-      }
-      const final = verified.slice(0, 6);
-      // Captura del vídeo elegido antes de mostrarlo (verificación final)
-      if (autoPhoto && final.length > 0) {
-        setStatus("Haciendo captura de verificación del primer vídeo...");
-        try {
-          const testCover = final[0].cover;
-          const ok = await verifyCoverMatchesProduct(testCover, clean);
-          if (!ok) throw new Error("verificación");
-        } catch {}
-      }
+      const results = await searchTikTokClean(clean, 10, (m) => setStatus(m));
+      const final = results.slice(0, 8);
+      // Mostrar siempre los vídeos encontrados en la galería de abajo
       setAutoResults(final.map((r, i) => ({ ...r, selected: i < 3 })));
+      if (final.length === 0) setAutoError(`No se encontraron vídeos de "${clean}" en TikTok. Intenta otro nombre.`);
       setStatus("");
     } catch (e) {
-      if (autoPhoto) {
-        setStatus("TikTok sin resultados, creando vídeos con tu foto exacta...");
-        try {
-          const clips: VideoClip[] = [];
-          for (let i = 0; i < 3; i++) {
-            const c = await createVideoFromImage(autoPhoto, 7);
-            clips.push(c);
-          }
-          const accDur = clips.reduce((s, c) => s + c.playDuration, 0);
-          setClips(clips);
-          setTotalDuration(Math.min(15, Math.max(8, Math.round(accDur))));
-          if (!productPrompt.trim()) setProductPrompt(clean);
-          setStep(2);
-          setStatus("");
-          setAutoError("");
-          return;
-        } catch (err) {
-          setAutoError(`No se pudo crear vídeo de la foto: ${err instanceof Error ? err.message : String(err)}`);
-          return;
-        } finally { setAutoSearching(false); setStatus(""); }
-      }
-      setAutoError(e instanceof Error ? e.message : String(e));
+      setAutoResults([]);
+      setAutoError(e instanceof Error ? e.message : `No se pudo buscar "${clean}". Revisa el nombre e inténtalo de nuevo.`);
+      setStatus("");
     } finally { setAutoSearching(false); setStatus(""); }
   };
 
