@@ -8,9 +8,9 @@ export async function GET(req: NextRequest) {
     // YouTubei ANDROID client - no signature needed, returns direct URL
     const r = await fetch("https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "User-Agent": "com.google.android.youtube/17.31.35 (Linux; U; Android 12) gzip" },
+      headers: { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
       body: JSON.stringify({
-        context: { client: { clientName: "ANDROID", clientVersion: "17.31.35", androidSdkVersion: 31 } },
+        context: { client: { clientName: "WEB", clientVersion: "2.20240101.00.00" } },
         videoId: id,
       }),
       cache: "no-store",
