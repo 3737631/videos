@@ -22,8 +22,14 @@ export async function GET(req: NextRequest) {
       const friendly = `<!DOCTYPE html><html><body style="font-family:system-ui;padding:24px;background:#09090b;color:#fff"><h3>TikTok bloqueó el bot (Cloudflare)</h3><p>TikTok detectó modo bot. Usa el modo manual: abre TikTok en pestaña nueva, busca "${q}" y copia 1-5 enlaces de Compartir.</p><p><a href="https://www.tiktok.com/search/video?q=${encodeURIComponent(q)}" target="_blank" style="color:#fe2c55">Abrir TikTok ↗</a></p></body></html>`;
       return new NextResponse(friendly, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "X-Frame-Options": "ALLOWALL", "Content-Security-Policy": "frame-ancestors *" } });
     }
-    // Inyectar helper: proxy API, auto-cierra "Abrir app" y extrae enlaces de Compartir
+    // Quitar bloqueos anti-iframe de TikTok
+    html = html.replace(/<meta[^>]*http-equiv=["']X-Frame-Options["'][^>]*>/gi, "");
+    html = html.replace(/<meta[^>]*http-equiv=["']Content-Security-Policy["'][^>]*>/gi, "");
+    // Inyectar helper: anti-frame-busting + proxy API + auto-cierra
     const inject = `<script>
+      // Anti frame-busting
+      try { window.top = window.self; } catch(e){}
+      window.__isInIframe = true;
       (function(){
         const PROXY_API = location.origin + '/videos/api/feed2?url=';
         const origFetch = window.fetch;
