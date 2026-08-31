@@ -228,14 +228,17 @@ export default function App() {
     return full;
   };
 
-  const processVideo = async () => {
+  const processVideo = async (forceMode?: unknown) => {
+    const m = (typeof forceMode === "string" && (forceMode==="voice"||forceMode==="music") ? forceMode : null) as "voice"|"music"|null;
+    const useMode = m || mode || "voice";
+    setMode(useMode);
     setStep(4); setProgress(5); setStatus("Activando audio...");
     try {
       const AC = window.AudioContext || (window as unknown as {webkitAudioContext: typeof AudioContext}).webkitAudioContext;
       const ctx = new AC(); await ctx.resume(); sharedAudioCtxRef.current=ctx;
       let audioBuffer: AudioBuffer | null=null; let wordChunks:string[]=[]; let isFallback=false;
       setProgress(15);
-      if (mode==="voice") {
+      if (useMode==="voice") {
         setStatus(`Generando voz en ${language.toUpperCase()}...`);
         const script=generateScriptLocal(productPrompt, language, totalDuration);
         const tts=await generateSpeechAndCues(script, language, ctx, (m)=>setStatus(m));
@@ -349,7 +352,7 @@ export default function App() {
               <div className="absolute bottom-3 left-3 right-3 bg-zinc-950/95 border border-zinc-800 rounded-2xl p-3 flex gap-2">
                 <button onClick={async()=>{
                   console.log("Listo outer click", { clips: clips.length, tiktokLinks });
-                  if (clips.length>0) { console.log("Listo: clips>0 -> Voz"); setOverlayOpen(false); setMode("voice"); setTimeout(()=>processVideo(),400); return; }
+                  if (clips.length>0) { console.log("Listo: clips>0 -> Voz"); setOverlayOpen(false); setMode("voice"); setTimeout(()=>processVideo("voice"),400); return; }
                   const ytLinks = tiktokLinks.filter(u=>u.includes("youtube.com")||u.includes("youtu.be"));
                   console.log("Listo: ytLinks", ytLinks.length);
                   if (ytLinks.length>0) {
@@ -395,12 +398,12 @@ export default function App() {
                       console.log("Listo: ytClips", ytClips.length);
                       if(ytClips.length>0){
                         for(const c of clips) try{URL.revokeObjectURL(c.url)}catch{}
-                        clipsRef.current=ytClips; setClips(ytClips); setTotalDuration(8); setMode("voice"); setTimeout(()=>{ console.log("Listo: calling processVideo"); processVideo(); },400);
+                        clipsRef.current=ytClips; setClips(ytClips); setTotalDuration(8); setMode("voice"); setTimeout(()=>{ console.log("Listo: calling processVideo"); processVideo("voice"); },400);
                         return;
                       }
                     } catch(e){ console.log("Listo YT outer error", e); }
                   }
-                  if (tiktokLinks.length>0) { console.log("Listo: tiktokLinks -> handleDownload"); await handleDownload(); setOverlayOpen(false); setMode("voice"); setTimeout(()=>processVideo(),600); }
+                  if (tiktokLinks.length>0) { console.log("Listo: tiktokLinks -> handleDownload"); await handleDownload(); setOverlayOpen(false); setMode("voice"); setTimeout(()=>processVideo("voice"),600); }
                   else { console.log("Listo: no clips/links, just close"); setOverlayOpen(false); }
                 }} className="flex-1 py-2 bg-white text-black rounded-full text-xs font-bold">Listo → Crear viral con Voz</button>
               </div>
@@ -411,6 +414,7 @@ export default function App() {
     </main>
   );
 }
+
 
 
 
