@@ -45,48 +45,7 @@ export default function App() {
         setTiktokLinks(prev => [...new Set([...prev, ...links])].slice(0,5));
         const isYT = links.some(u=>u.includes("youtube.com") || u.includes("youtu.be"));
         if (isYT) {
-          try {
-            setTiktokLoading(true); setStatus("Descargando fragmentos virales reales...");
-            const createOne = async (u: string): Promise<VideoClip | null> => {
-              const id = (u.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/) || [])[1] || "";
-              if (!id) return null;
-              try {
-                const r = await fetch(`${API_BASE}/api/yt-dl?id=${id}`, { cache: "no-store" });
-                if (r.ok) {
-                  const j = await r.json() as { url?: string };
-                  const playUrl = j.url;
-                  if (playUrl) {
-                    const res = await fetch(playUrl, { cache: "no-store" });
-                    const blob = await res.blob();
-                    if (blob.size > 10000) {
-                      const file = new File([blob], `yt-${id}.mp4`, { type: blob.type || "video/mp4" });
-                      const url = URL.createObjectURL(blob);
-                      const dur = await new Promise<number>(res2=>{
-                        const v=document.createElement("video"); v.preload="metadata"; v.muted=true; v.playsInline=true; v.src=url;
-                        let done=false; const fin=(d:number)=>{ if(done) return; done=true; v.removeAttribute("src"); try{v.load()}catch{}; res2(d); };
-                        v.onloadedmetadata=()=>fin(Number.isFinite(v.duration)&&v.duration>2?v.duration:6);
-                        v.onerror=()=>fin(6); setTimeout(()=>fin(6),3000);
-                      });
-                      return { file, url, startOffset:0, playDuration: Math.min(7, Math.max(4, dur)) };
-                    }
-                  }
-                }
-              } catch {}
-              return null;
-            };
-            const res = await Promise.all(links.slice(0,3).map(createOne));
-            const ytClips = res.filter(Boolean) as VideoClip[];
-            if (ytClips.length>0) {
-              for(const c of clips) try{URL.revokeObjectURL(c.url)}catch{}
-              setClips(ytClips); setTotalDuration(Math.min(15, Math.max(8, Math.round(ytClips.reduce((s,c)=>s+c.playDuration,0))))); setOverlayOpen(false); setStep(2); setTiktokError("");
-            } else {
-              setTiktokError("No se pudieron descargar fragmentos reales");
-            }
-          } catch {}
-          finally { setTiktokLoading(false); setStatus(""); }
-          return;
-        }
-        if (false) {
+          // YouTube Shorts: crear clips desde thumbnails y ponerlos solos abajo
           try {
             setTiktokLoading(true); setStatus("Cogidos 3 vídeos de YouTube Shorts que coinciden, preparando...");
             const ytClips: VideoClip[] = [];
@@ -299,9 +258,9 @@ export default function App() {
   return (
     <main className="flex-1 bg-[#09090b] text-white flex flex-col items-center p-4 sm:p-6 py-8">
       <div className="w-full max-w-xl text-center mb-6">
-        <div className="inline-block bg-purple-500/10 border border-purple-500/30 text-purple-400 px-3 py-1 rounded-full text-xs font-bold mb-3 tracking-widest">CREADOR VIRAL — BOT TIKTOK</div>
+        <div className="inline-block bg-purple-500/10 border border-purple-500/30 text-purple-400 px-3 py-1 rounded-full text-xs font-bold mb-3 tracking-widest">CREADOR VIRAL</div>
         <h1 className="text-4xl font-black bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent">Creador Viral</h1>
-        <p className="text-xs text-zinc-500 mt-2">Bot abre TikTok por encima, pulsa solo y copia enlaces de Compartir</p>
+        <p className="text-xs text-zinc-500 mt-2">Crea vídeos virales en segundos</p>
       </div>
 
       <div className="w-full max-w-xl bg-zinc-900 border border-zinc-800 rounded-[2rem] p-5 sm:p-8 shadow-2xl">
@@ -385,13 +344,9 @@ export default function App() {
             <div className="flex-1 relative bg-white">
               <iframe src={`${API_BASE}/api/feed?q=${encodeURIComponent(overlayQuery)}`} className="w-full h-full border-0" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" title="TikTok"/>
               <div className="absolute bottom-3 left-3 right-3 bg-zinc-950/95 border border-zinc-800 rounded-2xl p-3 flex gap-2">
-                <span className="flex-1 text-xs text-zinc-400">Elige 2-3 arriba</span>
+                <span className="flex-1 text-xs text-zinc-400">Pulsa solo la lupa, ignora Abrir app — bot copiará Compartir solo</span>
                 <button onClick={handleAutoPaste} className="px-4 py-2 bg-[#fe2c55] rounded-full text-white text-xs font-bold">📋 Pegar auto</button>
-                <button onClick={async()=>{
-                  if (clips.length>0) { setOverlayOpen(false); setMode("voice"); setTimeout(()=>processVideo(),400); }
-                  else if (tiktokLinks.length>0) { await handleDownload(); setOverlayOpen(false); if(clips.length>0){ setMode("voice"); setTimeout(()=>processVideo(),600);} }
-                  else setOverlayOpen(false);
-                }} className="px-4 py-2 bg-white text-black rounded-full text-xs font-bold">Listo → Crear con Voz</button>
+                <button onClick={()=>setOverlayOpen(false)} className="px-4 py-2 bg-white text-black rounded-full text-xs font-bold">Listo</button>
               </div>
             </div>
           </div>
