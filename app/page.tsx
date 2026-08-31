@@ -72,6 +72,24 @@ export default function App() {
     setOverlayQuery(q);
     setOverlayOpen(true);
     setTiktokError("");
+    // Semi-auto legal: abre TikTok en pestaña real humana (evita X-Bogus y 404)
+    try { window.open(`https://www.tiktok.com/search/video?q=${encodeURIComponent(q)}`, "_blank"); } catch {}
+  };
+
+  const handleAutoPaste = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      const found = (text.match(/https?:\/\/[^\s]+/gi) || []).filter(u=>/tiktok\.com|vm\.tiktok/i.test(u));
+      if (found.length===0) { setTiktokError("Copia primero un enlace de TikTok (Compartir → Copiar enlace)"); return; }
+      const dedup = found.filter(u=>!tiktokLinks.includes(u)).slice(0,5 - tiktokLinks.length);
+      if (dedup.length===0) { setTiktokError("Ya añadido"); return; }
+      setTiktokLinks(prev=>[...prev, ...dedup]);
+      setTiktokError("");
+      // Auto-descargar sin tocar más
+      setTimeout(()=> handleDownload(), 400);
+    } catch {
+      setTiktokError("Da permiso de portapapeles y vuelve a pulsar");
+    }
   };
 
   const handlePhotoSelect = async (files: FileList | null) => {
@@ -263,20 +281,17 @@ export default function App() {
       </div>
 
       {overlayOpen && (
-        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur flex flex-col p-2 sm:p-4">
-          <div className="flex-1 bg-zinc-950 border border-zinc-800 rounded-2xl overflow-hidden flex flex-col max-w-5xl w-full mx-auto">
-            <div className="flex items-center justify-between px-3 py-2 bg-zinc-900 border-b border-zinc-800">
-              <span className="text-xs font-bold">TikTok — &quot;{overlayQuery}&quot; — bot pulsando solo</span>
+        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur flex flex-col p-4 items-center justify-center">
+          <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-6 max-w-md w-full space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold">TikTok — &quot;{overlayQuery}&quot;</h3>
               <button onClick={()=>setOverlayOpen(false)} className="w-8 h-8 bg-zinc-800 rounded-full flex items-center justify-center">✕</button>
             </div>
-            <div className="flex-1 relative bg-white">
-              <iframe src={`${API_BASE}/api/feed?q=${encodeURIComponent(overlayQuery)}`} className="w-full h-full border-0" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" title="TikTok"/>
-              <div className="absolute bottom-3 left-3 right-3 bg-zinc-950/95 border border-zinc-800 rounded-2xl p-3 flex gap-2">
-                <span className="flex-1 text-xs text-zinc-400">Bot copiando enlaces de Compartir solo...</span>
-                <button onClick={()=>setOverlayOpen(false)} className="px-4 py-2 bg-zinc-800 rounded-full text-xs font-bold">Cancelar</button>
-                <button onClick={()=>setOverlayOpen(false)} className="px-4 py-2 bg-white text-black rounded-full text-xs font-bold">Listo</button>
-              </div>
-            </div>
+            <p className="text-xs text-zinc-400">Se abrió TikTok en pestaña nueva (humano, sin bloqueo). Copia 1-5 enlaces con <b>Compartir → Copiar enlace</b> allí y vuelve aquí.</p>
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-xs text-zinc-300">1) En TikTok pulsa <b>Compartir</b> → <b>Copiar enlace</b> en 2-3 vídeos<br/>2) Vuelve aquí y pulsa abajo</div>
+            <button onClick={handleAutoPaste} className="w-full py-3 bg-[#fe2c55] hover:bg-[#e0264d] rounded-full text-white font-bold text-sm">📋 Pegar automáticamente lo copiado</button>
+            <button onClick={()=>setOverlayOpen(false)} className="w-full py-2 bg-zinc-800 rounded-full text-sm">Cancelar</button>
+            {tiktokError && <div className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-xl p-2">{tiktokError}</div>}
           </div>
         </div>
       )}
