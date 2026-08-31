@@ -34,6 +34,14 @@ export default function App() {
   const [overlayQuery, setOverlayQuery] = useState("");
 
   useEffect(() => { return () => { sharedAudioCtxRef.current?.close().catch(()=>{}); }; }, []);
+  useEffect(() => {
+    if (!overlayOpen) return;
+    const t = setTimeout(() => {
+      setOverlayOpen(false);
+      setStatus("");
+    }, 6000);
+    return () => clearTimeout(t);
+  }, [overlayOpen]);
 
   // Bot: escucha enlaces Compartir del iframe - coge 3 que coincidan y los pone solos abajo
   useEffect(() => {
