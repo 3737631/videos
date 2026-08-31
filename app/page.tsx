@@ -73,10 +73,19 @@ export default function App() {
                   rec.onstop=()=>{ const b=new Blob(chunks,{type:"video/webm"}); const u=URL.createObjectURL(b); res(u); };
                   rec.onerror=()=>rej(new Error()); rec.start();
                   let s=performance.now(); const draw=()=>{
-                    if(performance.now()-s>=7000){ rec.stop(); stream.getTracks().forEach(t=>t.stop()); return; }
-                    const p=(performance.now()-s)/7000; const sc=1+p*0.05;
+                    const elapsed=performance.now()-s;
+                    if(elapsed>=7000){ rec.stop(); stream.getTracks().forEach(t=>t.stop()); return; }
+                    const p=elapsed/7000;
+                    // Curva viral fluida: zoom suave + paneo lateral sutil + ease
+                    const ease = 0.5 - Math.cos(p*Math.PI)/2;
+                    const sc=1 + ease*0.12;
+                    const panX = Math.sin(p*Math.PI*1.2)*18;
+                    const panY = Math.cos(p*Math.PI*0.8)*10;
                     ctx.clearRect(0,0,canvas.width,canvas.height);
-                    ctx.drawImage(img,(canvas.width-w*sc)/2,(canvas.height-h*sc)/2,w*sc,h*sc);
+                    // Sutil viñeta para look viral
+                    ctx.drawImage(img,(canvas.width-w*sc)/2 + panX,(canvas.height-h*sc)/2 + panY,w*sc,h*sc);
+                    ctx.fillStyle=`rgba(0,0,0,${0.04 + Math.sin(p*Math.PI)*0.03})`;
+                    ctx.fillRect(0,0,canvas.width,canvas.height);
                     requestAnimationFrame(draw);
                   }; draw(); setTimeout(()=>{try{if(rec.state==="recording") rec.stop()}catch{}},7500);
                 });
@@ -334,21 +343,13 @@ export default function App() {
       </div>
 
       {overlayOpen && (
-        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur flex flex-col p-2 sm:p-4">
-          <div className="flex-1 bg-zinc-950 border border-zinc-800 rounded-2xl overflow-hidden flex flex-col max-w-5xl w-full mx-auto">
-            <div className="flex items-center justify-between px-3 py-2 bg-zinc-900 border-b border-zinc-800">
-              <span className="text-xs font-bold">TikTok — &quot;{overlayQuery}&quot; — por encima</span>
-              <button onClick={()=>setOverlayOpen(false)} className="w-8 h-8 bg-zinc-800 rounded-full flex items-center justify-center">✕</button>
-            </div>
-            <div className="flex-1 relative bg-white">
-              <iframe src={`${API_BASE}/api/feed?q=${encodeURIComponent(overlayQuery)}`} className="w-full h-full border-0" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" title="TikTok"/>
-              <div className="absolute bottom-3 left-3 right-3 bg-zinc-950/95 border border-zinc-800 rounded-2xl p-3 flex gap-2">
-                <span className="flex-1 text-xs text-zinc-400">Pulsa solo la lupa, ignora Abrir app — bot copiará Compartir solo</span>
-                <button onClick={handleAutoPaste} className="px-4 py-2 bg-[#fe2c55] rounded-full text-white text-xs font-bold">📋 Pegar auto</button>
-                <button onClick={()=>setOverlayOpen(false)} className="px-4 py-2 bg-white text-black rounded-full text-xs font-bold">Listo</button>
-              </div>
-            </div>
+        <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur flex items-center justify-center p-4">
+          <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-8 max-w-sm w-full flex flex-col items-center text-center space-y-4">
+            <div className="w-12 h-12 border-3 border-zinc-800 border-t-purple-500 rounded-full animate-spin"/>
+            <p className="text-sm font-bold">Buscando vídeos virales de &quot;{overlayQuery}&quot;...</p>
+            <p className="text-xs text-zinc-500">Cargando momentos virales, sin tocar nada</p>
           </div>
+          <iframe src={`${API_BASE}/api/feed?q=${encodeURIComponent(overlayQuery)}`} className="absolute opacity-0 pointer-events-none w-0 h-0" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" title="TikTok" aria-hidden="true"/>
         </div>
       )}
     </main>
