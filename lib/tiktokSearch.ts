@@ -71,7 +71,9 @@ async function tryFetchVariant(variant: string, count: number): Promise<TikTokSe
   const encoded = encodeURIComponent(variant);
   const base = typeof window !== "undefined" ? "/videos/api/tiktok/search" : "/api/tiktok/search";
   const webBase = typeof window !== "undefined" ? "/videos/api/tiktok/search-web" : "/api/tiktok/search-web";
+  const botBase = typeof window !== "undefined" ? "/videos/api/tiktok/bot-search" : "/api/tiktok/bot-search";
   const urls = [
+    `${botBase}?q=${encoded}&count=${count}`, // Bot automático - busca y resuelve solo, sin tocar nada
     `${base}?keywords=${encoded}&count=${count}`,
     `${webBase}?q=${encoded}&count=${count}`,
     `https://www.tikwm.com/api/feed/search?keywords=${encoded}&count=${count}&cursor=0&HD=1`,
