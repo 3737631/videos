@@ -12,6 +12,7 @@ const API_BASE = process.env.NEXT_PUBLIC_BASE_PATH ?? "/videos";
 export default function App() {
   const [step, setStep] = useState(1);
   const [clips, setClips] = useState<VideoClip[]>([]);
+  const clipsRef = useRef<VideoClip[]>([]);
   const [productPrompt, setProductPrompt] = useState("");
   const [language, setLanguage] = useState("es");
   const [totalDuration, setTotalDuration] = useState(10);
@@ -88,7 +89,7 @@ export default function App() {
             }
             if (ytClips.length>0) {
               for (const c of clips) try{URL.revokeObjectURL(c.url)}catch{}
-              setClips(ytClips);
+              clipsRef.current=ytClips; setClips(ytClips);
               setTotalDuration(10);
               setOverlayOpen(false);
               setStep(2);
@@ -240,8 +241,10 @@ export default function App() {
         const tts=await generateSpeechAndCues(script, language, ctx, (m)=>setStatus(m));
         audioBuffer=tts.audioBuffer; wordChunks=tts.wordChunks; isFallback=tts.isFallback;
       } else { setStatus("Generando música..."); audioBuffer=await generateViralMusic(totalDuration); }
+      const useClips = clips.length>0 ? clips : clipsRef.current;
+      if (useClips.length===0) throw new Error("No hay clips de vídeo.");
       setProgress(30); setStatus("Renderizando a 30 FPS...");
-      const { url, mimeType } = await renderFinalVideo({ clips, audioBuffer, audioContext: ctx, wordChunks, mode: mode!, targetDuration: totalDuration, onProgress:(p)=>setProgress(30+Math.round(p*0.7)), isFallback });
+      const { url, mimeType } = await renderFinalVideo({ clips: useClips, audioBuffer, audioContext: ctx, wordChunks, mode: mode!, targetDuration: totalDuration, onProgress:(p)=>setProgress(30+Math.round(p*0.7)), isFallback });
       setVideoMimeType(mimeType); setFinalVideo(url); setStep(5);
     } catch(e){ alert(`Error: ${e instanceof Error ? e.message : String(e)}`); setStep(3); }
   };
@@ -392,7 +395,7 @@ export default function App() {
                       console.log("Listo: ytClips", ytClips.length);
                       if(ytClips.length>0){
                         for(const c of clips) try{URL.revokeObjectURL(c.url)}catch{}
-                        setClips(ytClips); setTotalDuration(8); setMode("voice"); setTimeout(()=>{ console.log("Listo: calling processVideo"); processVideo(); },400);
+                        clipsRef.current=ytClips; setClips(ytClips); setTotalDuration(8); setMode("voice"); setTimeout(()=>{ console.log("Listo: calling processVideo"); processVideo(); },400);
                         return;
                       }
                     } catch(e){ console.log("Listo YT outer error", e); }
@@ -408,5 +411,6 @@ export default function App() {
     </main>
   );
 }
+
 
 
