@@ -338,14 +338,20 @@ export default function App() {
             </div>
             <div className="flex-1 relative bg-white">
               <iframe src={`${API_BASE}/api/feed?q=${encodeURIComponent(overlayQuery)}`} className="w-full h-full border-0" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" title="TikTok"/>
-              <div className="absolute bottom-3 left-3 right-3 bg-zinc-950/95 border border-zinc-800 rounded-2xl p-3 flex gap-2">
-                <span className="flex-1 text-xs text-zinc-400">Elige 2-3 arriba y pulsa Usar — te lleva a Voz/Música</span>
-                <button onClick={handleAutoPaste} className="px-4 py-2 bg-[#fe2c55] rounded-full text-white text-xs font-bold">📋 Pegar auto</button>
-                <button onClick={()=>{
-                  if (tiktokLinks.length>0) { handleDownload(); setOverlayOpen(false); }
-                  else if (clips.length>0) { setOverlayOpen(false); setStep(2); }
-                  else setOverlayOpen(false);
-                }} className="px-4 py-2 bg-white text-black rounded-full text-xs font-bold">Listo → Voz/Música</button>
+              <div className="absolute bottom-3 left-3 right-3 bg-zinc-950 border border-zinc-800 rounded-2xl p-3 flex gap-2 items-center">
+                <span className="flex-1 text-xs text-zinc-400">Elige 2-3 arriba</span>
+                <button onClick={async()=>{
+                  if (tiktokLinks.length>0) {
+                    await handleDownload();
+                    setOverlayOpen(false);
+                    setMode("voice");
+                    setTimeout(()=>processVideo(), 600);
+                  } else if (clips.length>0) {
+                    setOverlayOpen(false);
+                    setMode("voice");
+                    setTimeout(()=>processVideo(), 400);
+                  } else setOverlayOpen(false);
+                }} className="px-6 py-2 bg-white text-black rounded-full text-xs font-bold">Listo → Crear viral con Voz</button>
               </div>
             </div>
           </div>
