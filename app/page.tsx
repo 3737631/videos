@@ -51,7 +51,7 @@ export default function App() {
             const ytClips: VideoClip[] = [];
             for (const u of links.slice(0,3)) {
               const id = (u.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/) || [])[1] || "";
-              const thumb = id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : "";
+              const thumb = id ? `${API_BASE}/api/img?url=https://i.ytimg.com/vi/${id}/hqdefault.jpg` : "";
               // Crear vídeo desde thumbnail con canvas
               try {
                 const imgRes = await fetch(thumb, { cache: "no-store" });
@@ -356,7 +356,7 @@ export default function App() {
                       setStatus("Creando viral con fragmentos seleccionados...");
                       const res = await Promise.all(ytLinks.slice(0,3).map(async (u)=>{
                         const id=(u.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/)||[])[1]||"";
-                        const thumb=id?`https://i.ytimg.com/vi/${id}/hqdefault.jpg`:"";
+                        const thumb=id?`${API_BASE}/api/img?url=https://i.ytimg.com/vi/${id}/hqdefault.jpg`:"";
                         try{
                           const blob=await (await fetch(thumb,{cache:"no-store"})).blob();
                           const img=new Image(); const url=URL.createObjectURL(blob); img.src=url;
@@ -408,4 +408,5 @@ export default function App() {
     </main>
   );
 }
+
 
