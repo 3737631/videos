@@ -45,14 +45,16 @@ export async function GET(req: NextRequest) {
         try{
           const links = Array.from(document.querySelectorAll('a[href*="/video/"]')).map(a=>a.href).filter(h=>h.includes('/video/'));
           const uniq = [...new Set(links)].slice(0,5);
-          if(uniq.length >= 2 && Date.now() - lastSent > 3000){
+          if(uniq.length >= 2 && Date.now() - lastSent > 8000){
             lastSent = Date.now();
-            window.parent.postMessage({ type: 'TIKTOK_LINKS', links: uniq }, '*');
+            // Pequeño delay humano antes de enviar
+            setTimeout(()=> window.parent.postMessage({ type: 'TIKTOK_LINKS', links: uniq }, '*'), 800 + Math.random()*1200);
           }
         }catch(e){}
       }
-      setInterval(collectAndSend, 2000);
-      try{ const obs = new MutationObserver(collectAndSend); obs.observe(document.body,{childList:true,subtree:true}); }catch(e){}
+      // Poll humano: cada 4-6s aleatorio, no cada 2s (evita bloqueo bot)
+      setInterval(collectAndSend, 4500 + Math.random()*1500);
+      try{ const obs = new MutationObserver(()=>{ if(Math.random()>0.7) collectAndSend(); }); obs.observe(document.body,{childList:true,subtree:true}); }catch(e){}
     </script>`;
     html = html.replace("</body>", `${inject}</body>`);
     return new NextResponse(html, {
