@@ -45,49 +45,54 @@ export default function App() {
         setTiktokLinks(prev => [...new Set([...prev, ...links])].slice(0,5));
         const isYT = links.some(u=>u.includes("youtube.com") || u.includes("youtu.be"));
         if (isYT) {
+          // YouTube Shorts: crear clips desde thumbnails y ponerlos solos abajo
           try {
-            setTiktokLoading(true); setStatus("Preparando 3 vídeos seleccionados (rápido)...");
-            const createOne = async (u: string): Promise<VideoClip | null> => {
+            setTiktokLoading(true); setStatus("Cogidos 3 vídeos de YouTube Shorts que coinciden, preparando...");
+            const ytClips: VideoClip[] = [];
+            for (const u of links.slice(0,3)) {
               const id = (u.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/) || [])[1] || "";
               const thumb = id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : "";
+              // Crear vídeo desde thumbnail con canvas
               try {
-                const blob = await (await fetch(thumb, { cache: "no-store" })).blob();
-                const img = new Image(); const url = URL.createObjectURL(blob); img.src = url;
-                await new Promise<void>((res, rej)=>{ img.onload=()=>res(); img.onerror=()=>rej(new Error()); setTimeout(()=>rej(new Error()),2000); });
-                const canvas = document.createElement("canvas"); canvas.width=640; canvas.height=1136;
+                const imgRes = await fetch(thumb, { cache: "no-store" });
+                const blob = await imgRes.blob();
+                const file = new File([blob], `yt-${id}.jpg`, { type: blob.type });
+                // Reusar createVideoFromImageUrl
+                const img = new Image(); const url = URL.createObjectURL(blob);
+                img.src = url;
+                await new Promise<void>((res, rej)=>{ img.onload=()=>res(); img.onerror=()=>rej(new Error()); setTimeout(()=>rej(new Error()),3000); });
+                const canvas = document.createElement("canvas"); canvas.width=720; canvas.height=1280;
                 const ctx = canvas.getContext("2d",{alpha:false})!;
                 const scale=Math.max(canvas.width/img.width, canvas.height/img.height);
                 const w=img.width*scale, h=img.height*scale;
                 ctx.drawImage(img,(canvas.width-w)/2,(canvas.height-h)/2,w,h);
                 URL.revokeObjectURL(url);
-                const stream=(canvas as HTMLCanvasElement & {captureStream:(fps:number)=>MediaStream}).captureStream(24);
+                const stream=(canvas as HTMLCanvasElement & {captureStream:(fps:number)=>MediaStream}).captureStream(30);
                 const rec=new MediaRecorder(stream,{mimeType: MediaRecorder.isTypeSupported("video/webm;codecs=vp9")?"video/webm;codecs=vp9":"video/webm"});
                 const chunks:BlobPart[]=[]; rec.ondataavailable=e=>{if(e.data.size>0) chunks.push(e.data)};
-                const dur=4;
                 const videoUrl=await new Promise<string>((res,rej)=>{
-                  rec.onstop=()=>{ const b=new Blob(chunks,{type:"video/webm"}); res(URL.createObjectURL(b)); };
+                  rec.onstop=()=>{ const b=new Blob(chunks,{type:"video/webm"}); const u=URL.createObjectURL(b); res(u); };
                   rec.onerror=()=>rej(new Error()); rec.start();
                   let s=performance.now(); const draw=()=>{
-                    const e=performance.now()-s;
-                    if(e>=dur*1000){ rec.stop(); stream.getTracks().forEach(t=>t.stop()); return; }
-                    const p=e/(dur*1000);
-                    const sc=1 + (0.5 - Math.cos(p*Math.PI)/2)*0.07;
+                    if(performance.now()-s>=7000){ rec.stop(); stream.getTracks().forEach(t=>t.stop()); return; }
+                    const p=(performance.now()-s)/7000; const sc=1+p*0.05;
                     ctx.clearRect(0,0,canvas.width,canvas.height);
                     ctx.drawImage(img,(canvas.width-w*sc)/2,(canvas.height-h*sc)/2,w*sc,h*sc);
                     requestAnimationFrame(draw);
-                  }; draw(); setTimeout(()=>{try{if(rec.state==="recording") rec.stop()}catch{}},dur*1000+300);
+                  }; draw(); setTimeout(()=>{try{if(rec.state==="recording") rec.stop()}catch{}},7500);
                 });
                 const vb=await fetch(videoUrl).then(r=>r.blob());
-                return { file: new File([vb],`yt-${id}.webm`,{type:"video/webm"}), url: videoUrl, startOffset:0, playDuration:dur };
-              } catch { return null; }
-            };
-            const res = await Promise.all(links.slice(0,3).map(createOne));
-            const ytClips = res.filter(Boolean) as VideoClip[];
+                const vf=new File([vb],`yt-${id}.webm`,{type:"video/webm"});
+                ytClips.push({ file: vf, url: videoUrl, startOffset:0, playDuration:7 });
+              } catch {}
+            }
             if (ytClips.length>0) {
-              for(const c of clips) try{URL.revokeObjectURL(c.url)}catch{}
-              setClips(ytClips); setTotalDuration(8); setOverlayOpen(false); setStep(2); setTiktokError("");
-            } else {
-              setTiktokError("No se pudieron preparar los seleccionados");
+              for (const c of clips) try{URL.revokeObjectURL(c.url)}catch{}
+              setClips(ytClips);
+              setTotalDuration(10);
+              setOverlayOpen(false);
+              setStep(2);
+              setTiktokError("");
             }
           } catch {}
           finally { setTiktokLoading(false); setStatus(""); }
@@ -338,19 +343,10 @@ export default function App() {
             </div>
             <div className="flex-1 relative bg-white">
               <iframe src={`${API_BASE}/api/feed?q=${encodeURIComponent(overlayQuery)}`} className="w-full h-full border-0" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" title="TikTok"/>
-              <div className="absolute bottom-3 left-3 right-3 bg-zinc-950 border border-zinc-800 rounded-2xl p-3 flex gap-2 items-center">
-                <span className="flex-1 text-xs text-zinc-400">Elige 2-3 arriba</span>
-                <button onClick={async()=>{
-                  if (clips.length>0) {
-                    setOverlayOpen(false);
-                    setMode("voice");
-                    setTimeout(()=>processVideo(), 400);
-                  } else if (tiktokLinks.length>0) {
-                    await handleDownload();
-                    setOverlayOpen(false);
-                    if (clips.length>0) { setMode("voice"); setTimeout(()=>processVideo(), 600); }
-                  } else setOverlayOpen(false);
-                }} className="px-6 py-2 bg-white text-black rounded-full text-xs font-bold">Listo → Crear viral con Voz</button>
+              <div className="absolute bottom-3 left-3 right-3 bg-zinc-950/95 border border-zinc-800 rounded-2xl p-3 flex gap-2">
+                <span className="flex-1 text-xs text-zinc-400">Pulsa solo la lupa, ignora Abrir app — bot copiará Compartir solo</span>
+                <button onClick={handleAutoPaste} className="px-4 py-2 bg-[#fe2c55] rounded-full text-white text-xs font-bold">📋 Pegar auto</button>
+                <button onClick={()=>setOverlayOpen(false)} className="px-4 py-2 bg-white text-black rounded-full text-xs font-bold">Listo</button>
               </div>
             </div>
           </div>
