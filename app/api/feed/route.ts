@@ -18,6 +18,38 @@ export async function GET(req: NextRequest) {
       return new NextResponse(friendly, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "X-Frame-Options": "ALLOWALL", "Content-Security-Policy": "frame-ancestors *" } });
     }
     let html = await r.text();
+    // Intentar buscar vídeos reales de TikTok vía API (si falla, cae a YT)
+    try {
+      const apiUrl = `https://www.tiktok.com/api/search/general/full/?keyword=${encodeURIComponent(q)}&offset=0&count=6`;
+      const apiR = await fetch(apiUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          Referer: "https://www.tiktok.com/search/video?q=" + encodeURIComponent(q),
+          Accept: "application/json",
+        },
+        cache: "no-store", signal: AbortSignal.timeout(6000),
+      });
+      const apiText = await apiR.text();
+      if (apiText.includes('"video"') && apiText.includes('playAddr')) {
+        const j = JSON.parse(apiText);
+        const items = (j as { data?: unknown[] })?.data as Record<string, unknown>[] | undefined;
+        if (items && items.length > 0) {
+          const vids = items.slice(0,3).map((it) => {
+            const v = (it as Record<string, unknown>).item as Record<string, unknown> | undefined;
+            const video = (v?.video as Record<string, unknown>) || it as Record<string, unknown>;
+            const play = (video.playAddr as string) || (video.downloadAddr as string) || "";
+            const cover = (video.cover as string) || "";
+            const id = String((v?.id as string) || (it as Record<string, unknown>).id || "");
+            const author = ((v?.author as Record<string, unknown>)?.uniqueId as string) || "tiktok";
+            return { id, play, cover, author };
+          }).filter(v=>v.play);
+          if (vids.length > 0) {
+            const tiktokPage = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:system-ui;background:#09090b;color:#fff;padding:16px} .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px} .card{position:relative;background:#18181b;border:1px solid #27272a;border-radius:16px;overflow:hidden;cursor:pointer} .card video,.card img{width:100%;aspect-ratio:9/16;object-fit:cover} .badge{position:absolute;top:6px;right:6px;background:#a855f7;color:#fff;font-size:10px;padding:2px 6px;border-radius:9999px}</style></head><body><h3 style="font-size:14px;margin:0 0 12px">✓ 3 vídeos virales de "${q}" — fragmentos reales</h3><div class="grid">${vids.map(v=>`<div class="card" onclick="window.parent.postMessage({type:'TIKTOK_LINKS', links:['https://www.tiktok.com/@${v.author}/video/${v.id}']}, '*'); this.style.outline='2px solid #a855f7'"><span class="badge">✓ auto</span><video src="${v.play}" poster="${v.cover}" muted loop autoplay playsinline></video></div>`).join("")}</div><script>setTimeout(()=>{ window.parent.postMessage({type:'TIKTOK_LINKS', links:${JSON.stringify(vids.map(v=>`https://www.tiktok.com/@${v.author}/video/${v.id}`))}}, '*'); }, 900);</script></body></html>`;
+            return new NextResponse(tiktokPage, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "X-Frame-Options": "ALLOWALL", "Content-Security-Policy": "frame-ancestors *" } });
+          }
+        }
+      }
+    } catch {}
     const hasVideoLinks = /\/video\/\d{10,}/.test(html) || html.includes('videoId');
     if (html.includes("Just a moment") || html.includes("_cf_chl") || html.length < 5000 || !hasVideoLinks) {
       // Fallback a YouTube Shorts (no bloqueado, mismo producto vertical) - siempre muestra algo por encima
