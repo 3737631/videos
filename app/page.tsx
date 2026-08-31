@@ -732,6 +732,75 @@ export default function App() {
               )}
               {autoError && <div className="w-full rounded-2xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300 whitespace-pre-wrap">{autoError}</div>}
               {status && autoSearching && <div className="text-xs text-zinc-400 flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin" />{status}</div>}
+              {/* Abrir TikTok real por encima - lupa del producto exacto */}
+              {(autoProduct.trim() || autoPhoto) && (
+                <div className="w-full bg-black border border-zinc-800 rounded-2xl p-3 space-y-2">
+                  <div className="text-xs font-bold flex items-center gap-2"><span className="text-base">🔍</span> ¿Quieres vídeos reales de TikTok?</div>
+                  <p className="text-[11px] text-zinc-500">Abrimos TikTok con tu producto, tú copias los enlaces y aquí los bajas sin marca al instante.</p>
+                  <button
+                    onClick={() => {
+                      const kw = (autoProduct.trim() || "producto").trim();
+                      window.open(`https://www.tiktok.com/search/video?q=${encodeURIComponent(kw)}`, "_blank");
+                    }}
+                    className="w-full py-2.5 bg-[#fe2c55] hover:bg-[#e0264d] rounded-full text-white text-xs font-bold flex items-center justify-center gap-2 transition"
+                  >
+                    Abrir TikTok — buscar &quot;{(autoProduct.trim() || "tu producto")}&quot; ↗
+                  </button>
+                  <div className="flex gap-2">
+                    <input
+                      id="tiktok-paste"
+                      placeholder="Pega aquí 1-3 enlaces de TikTok copiados (uno por línea)"
+                      className="flex-1 bg-zinc-900 border border-zinc-800 rounded-full px-3 py-2 text-xs focus:border-zinc-600 outline-none"
+                      onKeyDown={async (e) => {
+                        if (e.key === "Enter") {
+                          const v = (e.target as HTMLInputElement).value.trim();
+                          if (!v) return;
+                          const ta = document.getElementById("tiktok-paste-links") as HTMLTextAreaElement | null;
+                          if (ta) { ta.value = v; ta.dispatchEvent(new Event("change", { bubbles: true })); }
+                        }
+                      }}
+                    />
+                  </div>
+                  <textarea
+                    id="tiktok-paste-links"
+                    rows={2}
+                    placeholder="https://www.tiktok.com/@user/video/123...&#10;https://www.tiktok.com/@user/video/456..."
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl px-3 py-2 text-xs focus:border-zinc-600 outline-none resize-none"
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      const urls = raw.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean);
+                      const dedup: string[] = []; const seen = new Set<string>();
+                      for (const u of urls) { const m = u.match(/https?:\/\/[^\s]+tiktok\.com[^\s]*/i)?.[0] || u; if (!seen.has(m) && m.includes("tiktok.com")) { seen.add(m); dedup.push(m); } }
+                      if (dedup.length) setTiktokLinks(prev => { const s = new Set(prev); const add = dedup.filter(x=>!s.has(x)); return [...prev, ...add].slice(0,5); });
+                    }}
+                  />
+                  <button
+                    onClick={async () => {
+                      const ta = document.getElementById("tiktok-paste-links") as HTMLTextAreaElement | null;
+                      const raw = ta?.value?.trim() || "";
+                      if (!raw) { setTiktokError("Pega al menos un enlace de TikTok arriba"); return; }
+                      const urls = raw.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean).map(u=>u.match(/https?:\/\/[^\s]+tiktok\.com[^\s]*/i)?.[0] || u).filter(u=>u.includes("tiktok.com"));
+                      if (!urls.length) { setTiktokError("Pega enlaces válidos de tiktok.com"); return; }
+                      setTiktokLinks(urls.slice(0,5));
+                      // Dispara descarga sin marca vía servidor
+                      setTimeout(() => handleTikTokDownload(), 150);
+                    }}
+                    className="w-full py-2.5 bg-white text-black rounded-full text-xs font-bold hover:bg-zinc-100 transition"
+                  >
+                    Pegar y descargar sin marca ↓
+                  </button>
+                  {tiktokLinks.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {tiktokLinks.map((u,i) => (
+                        <span key={i} className="inline-flex items-center gap-1 bg-zinc-800 border border-zinc-700 rounded-full px-2 py-1 text-[10px] truncate max-w-[160px]">{u.slice(0,38)}… <button onClick={()=>handleRemoveLink(i)} className="w-4 h-4 bg-zinc-700 rounded-full flex items-center justify-center">✕</button></span>
+                      ))}
+                    </div>
+                  )}
+                  {tiktokError && <div className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-xl px-2 py-1">{tiktokError}</div>}
+                  {tiktokLoading && <div className="text-xs text-zinc-400 flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin" />{status}</div>}
+                </div>
+              )}
+
               {autoResults.length > 0 && (
                 <div className="w-full space-y-3">
                   <div className="grid grid-cols-3 gap-2">

@@ -41,35 +41,22 @@ async function fetchWithTimeout(url: string, ms = 8000): Promise<Response> {
 
 async function getTikTokPlayUrl(tiktokUrl: string, onStatus?: (m: string) => void): Promise<string> {
   const encoded = encodeURIComponent(tiktokUrl);
-  // Pasarela principal tikwm - CORS abierto y devuelve play sin marca
-  const gateways: { name: string; api: string; parse: (j: unknown) => string | null }[] = [
-    {
-      name: "tikwm",
-      api: `https://www.tikwm.com/api/?url=${encoded}&hd=1`,
-      parse: (j: unknown) => {
-        const jo = j as { data?: { play?: string; hdplay?: string; wmplay?: string }; code?: number };
-        if (jo?.data?.play) return jo.data.play;
-        if (jo?.data?.hdplay) return jo.data.hdplay;
-        return null;
-      },
-    },
-    {
-      name: "tikwm-cors",
-      api: `https://corsproxy.io/?${encodeURIComponent(`https://www.tikwm.com/api/?url=${encoded}&hd=1`)}`,
-      parse: (j: unknown) => {
-        const jo = j as { data?: { play?: string; hdplay?: string } };
-        if (jo?.data?.play) return jo.data.play;
-        if (jo?.data?.hdplay) return jo.data.hdplay;
-        // corsproxy devuelve texto, intentar parsear
-        try {
-          const parsed = typeof j === "string" ? JSON.parse(j as string) : j;
-          const p = parsed as { data?: { play?: string } };
-          return p?.data?.play || null;
-        } catch { return null; }
-      },
-    },
+  const base = typeof window !== "undefined" ? "/videos/api/tiktok/download" : "/api/tiktok/download";
+  // 1) Pasar por nuestro servidor en Vercel (bypass CORS + IP limpia) — lo más fiable
+  try {
+    if (onStatus) onStatus("Resolviendo sin marca...");
+    const r = await fetchWithTimeout(`${base}?url=${encoded}`, 9000);
+    if (r.ok) {
+      const j = await r.json() as { play?: string; hdplay?: string };
+      if (j.play && j.play.startsWith("http")) return j.play;
+      if (j.hdplay && j.hdplay.startsWith("http")) return j.hdplay;
+    }
+  } catch {}
+  // 2) Fallback directo cliente a tikwm (si Vercel falla por Cloudflare)
+  const gateways: { name: string; api: string }[] = [
+    { name: "tikwm", api: `https://www.tikwm.com/api/?url=${encoded}&hd=1` },
+    { name: "tikwm-cors", api: `https://corsproxy.io/?${encodeURIComponent(`https://www.tikwm.com/api/?url=${encoded}&hd=1`)}` },
   ];
-
   for (const gw of gateways) {
     try {
       if (onStatus) onStatus(`Probando ${gw.name}...`);
@@ -78,11 +65,10 @@ async function getTikTokPlayUrl(tiktokUrl: string, onStatus?: (m: string) => voi
       const text = await res.text();
       let json: unknown;
       try { json = JSON.parse(text); } catch { continue; }
-      const play = gw.parse(json);
+      const jo = json as { data?: { play?: string; hdplay?: string } };
+      const play = jo?.data?.play || jo?.data?.hdplay;
       if (play && typeof play === "string" && play.startsWith("http")) return play;
-    } catch {
-      continue;
-    }
+    } catch { continue; }
   }
   throw new Error("No se pudo obtener el vídeo sin marca. Verifica que el enlace sea público.");
 }
