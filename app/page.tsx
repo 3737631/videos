@@ -45,7 +45,48 @@ export default function App() {
         setTiktokLinks(prev => [...new Set([...prev, ...links])].slice(0,5));
         const isYT = links.some(u=>u.includes("youtube.com") || u.includes("youtu.be"));
         if (isYT) {
-          // YouTube Shorts: crear clips desde thumbnails y ponerlos solos abajo
+          try {
+            setTiktokLoading(true); setStatus("Descargando fragmentos virales reales...");
+            const createOne = async (u: string): Promise<VideoClip | null> => {
+              const id = (u.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/) || [])[1] || "";
+              if (!id) return null;
+              try {
+                const r = await fetch(`${API_BASE}/api/yt-dl?id=${id}`, { cache: "no-store" });
+                if (r.ok) {
+                  const j = await r.json() as { url?: string };
+                  const playUrl = j.url;
+                  if (playUrl) {
+                    const res = await fetch(playUrl, { cache: "no-store" });
+                    const blob = await res.blob();
+                    if (blob.size > 10000) {
+                      const file = new File([blob], `yt-${id}.mp4`, { type: blob.type || "video/mp4" });
+                      const url = URL.createObjectURL(blob);
+                      const dur = await new Promise<number>(res2=>{
+                        const v=document.createElement("video"); v.preload="metadata"; v.muted=true; v.playsInline=true; v.src=url;
+                        let done=false; const fin=(d:number)=>{ if(done) return; done=true; v.removeAttribute("src"); try{v.load()}catch{}; res2(d); };
+                        v.onloadedmetadata=()=>fin(Number.isFinite(v.duration)&&v.duration>2?v.duration:6);
+                        v.onerror=()=>fin(6); setTimeout(()=>fin(6),3000);
+                      });
+                      return { file, url, startOffset:0, playDuration: Math.min(7, Math.max(4, dur)) };
+                    }
+                  }
+                }
+              } catch {}
+              return null;
+            };
+            const res = await Promise.all(links.slice(0,3).map(createOne));
+            const ytClips = res.filter(Boolean) as VideoClip[];
+            if (ytClips.length>0) {
+              for(const c of clips) try{URL.revokeObjectURL(c.url)}catch{}
+              setClips(ytClips); setTotalDuration(Math.min(15, Math.max(8, Math.round(ytClips.reduce((s,c)=>s+c.playDuration,0))))); setOverlayOpen(false); setStep(2); setTiktokError("");
+            } else {
+              setTiktokError("No se pudieron descargar fragmentos reales");
+            }
+          } catch {}
+          finally { setTiktokLoading(false); setStatus(""); }
+          return;
+        }
+        if (false) {
           try {
             setTiktokLoading(true); setStatus("Cogidos 3 vídeos de YouTube Shorts que coinciden, preparando...");
             const ytClips: VideoClip[] = [];
