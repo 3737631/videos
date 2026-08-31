@@ -1,17 +1,3 @@
 {
-  "buildCommand": "npm run build",
-  "outputDirectory": ".next",
-  "framework": "nextjs",
-  "functions": {
-    "app/api/tiktok/**/*.ts": {
-      "maxDuration": 60
-    }
-  },
-  "rewrites": [
-    { "source": "/tiktok-mAJGjdz5SFGMKuf3eh9uMF0Pw7YvKFZa.txt", "destination": "/videos/tiktok-mAJGjdz5SFGMKuf3eh9uMF0Pw7YvKFZa.txt" },
-    { "source": "/tiktokmAJGjdz5SFGMKuf3eh9uMF0Pw7YvKFZa.txt", "destination": "/videos/tiktokmAJGjdz5SFGMKuf3eh9uMF0Pw7YvKFZa.txt" },
-    { "source": "/tiktok-EXDbtJYfWerm49ZGkY7oU83bS5uFXiwS.txt", "destination": "/videos/tiktok-EXDbtJYfWerm49ZGkY7oU83bS5uFXiwS.txt" },
-    { "source": "/tiktokEXDbtJYfWerm49ZGkY7oU83bS5uFXiwS.txt", "destination": "/videos/tiktokEXDbtJYfWerm49ZGkY7oU83bS5uFXiwS.txt" },
-    { "source": "/tiktok-developers-site-verification", "destination": "/videos/tiktok-EXDbtJYfWerm49ZGkY7oU83bS5uFXiwS.txt" }
-  ]
+  "redirects": [{ "source": "/", "destination": "/videos", "permanent": false }]
 }
