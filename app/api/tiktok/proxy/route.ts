@@ -14,15 +14,32 @@ export async function GET(req: NextRequest) {
       cache: "no-store",
     });
     let html = await r.text();
-    // Inyectar helper: auto-cierra "Abrir app", enfoca buscador y extrae enlaces de Compartir para mandarlos al padre
+    // Inyectar helper: proxy API, auto-cierra "Abrir app" y extrae enlaces de Compartir
     const inject = `<script>
-      // Cerrar Abrir app y enfocar lupa
+      (function(){
+        const PROXY_API = location.origin + '/videos/api/tiktok/proxy-api?url=';
+        const origFetch = window.fetch;
+        window.fetch = function(input, init){
+          try{
+            const url = typeof input === 'string' ? input : input.url || '';
+            if(url.includes('tiktok.com/api/')){
+              const proxied = PROXY_API + encodeURIComponent(url);
+              return origFetch.call(this, proxied, init);
+            }
+          }catch(e){}
+          return origFetch.apply(this, arguments);
+        };
+        const origOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url){
+          try{ if(typeof url === 'string' && url.includes('tiktok.com/api/')) arguments[1] = PROXY_API + encodeURIComponent(url); }catch(e){}
+          return origOpen.apply(this, arguments);
+        };
+      })();
       setTimeout(()=>{ try{
         document.querySelectorAll('a,button').forEach(el=>{ if(/Abrir app/i.test(el.textContent||'')) el.style.display='none'; });
         const si = document.querySelector('input[type="search"], input[placeholder*="Buscar"]');
         if(si) si.focus();
       }catch(e){} },1200);
-      // Bot que copia enlaces de Compartir solo
       let lastSent = 0;
       function collectAndSend(){
         try{
@@ -35,10 +52,7 @@ export async function GET(req: NextRequest) {
         }catch(e){}
       }
       setInterval(collectAndSend, 2000);
-      // También observar cambios DOM
       try{ const obs = new MutationObserver(collectAndSend); obs.observe(document.body,{childList:true,subtree:true}); }catch(e){}
-      // Escuchar click en lupa para forzar búsqueda
-      setTimeout(()=>{ const btn = document.querySelector('button[type="submit"], [data-e2e="search-button"]'); if(btn) btn.addEventListener('click', ()=> setTimeout(collectAndSend,1500)); },1000);
     </script>`;
     html = html.replace("</body>", `${inject}</body>`);
     return new NextResponse(html, {
