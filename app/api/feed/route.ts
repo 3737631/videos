@@ -2,105 +2,42 @@ import { NextRequest, NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q") || "";
-  const target = `https://www.tiktok.com/search/video?q=${encodeURIComponent(q)}`;
-  try {
-    const r = await fetch(target, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "es-ES,es;q=0.9",
-        Referer: "https://www.tiktok.com/",
-      },
-      cache: "no-store",
-    });
-    if (!r.ok) {
-      const friendly = `<!DOCTYPE html><html><body style="font-family:system-ui;padding:24px;background:#09090b;color:#fff"><h3>TikTok bloqueó el bot automático</h3><p>Usa el modo manual abajo: copia 1-5 enlaces de TikTok (botón Compartir → Copiar enlace) y pégalos en la web para descargar sin marca.</p><p><a href="https://www.tiktok.com/search/video?q=${encodeURIComponent(q)}" target="_blank" style="color:#fe2c55">Abrir TikTok en pestaña nueva</a></p></body></html>`;
-      return new NextResponse(friendly, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "X-Frame-Options": "ALLOWALL", "Content-Security-Policy": "frame-ancestors *" } });
-    }
-    let html = await r.text();
-    const hasVideoLinks = /\/video\/\d{10,}/.test(html) || html.includes('videoId');
-    if (html.includes("Just a moment") || html.includes("_cf_chl") || html.length < 5000 || !hasVideoLinks) {
-      // Fallback a YouTube Shorts (no bloqueado, mismo producto vertical) - siempre muestra algo por encima
-      try {
-        const ytR = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(q + " shorts")}`, {
-          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Accept-Language": "es-ES,es;q=0.9" },
-          cache: "no-store", signal: AbortSignal.timeout(8000),
+  // Página por encima que busca TikTok real vía cliente (tikwm desde tu IP, sin marca, HQ) - sin capturas
+  const page = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;background:#09090b;color:#fff;font-family:system-ui} body{padding:16px} .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px} .card{position:relative;background:#18181b;border:1px solid #27272a;border-radius:16px;overflow:hidden;cursor:pointer} .card video{width:100%;aspect-ratio:9/16;object-fit:cover;display:block;background:#000} .check{position:absolute;top:6px;right:6px;width:20px;height:20px;border-radius:9999px;border:2px solid rgba(255,255,255,0.6);background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;z-index:2} .card.selected{border-color:#a855f7} .card.selected .check{background:#a855f7;border-color:#a855f7}</style></head><body><h3 style="font-size:14px;margin:0 0 4px">Buscando "${q}" — fragmentos reales sin marca</h3><p style="font-size:11px;color:#a1a1aa;margin:0 0 12px" id="status">Cargando vídeos limpios en alta calidad...</p><div class="grid" id="grid"><div style="padding:20px;text-align:center;color:#71717a">Buscando...</div></div><script>
+    const q="${q.replace(/"/g,'\\"')}";
+    const grid=document.getElementById('grid');
+    const status=document.getElementById('status');
+    const selected=new Map();
+    function toggle(el,id,url){ if(selected.has(id)){selected.delete(id); el.classList.remove('selected'); el.querySelector('.check').textContent='';} else { if(selected.size>=3) return; selected.set(id,url); el.classList.add('selected'); el.querySelector('.check').textContent='✓'; } }
+    function useSelected(){ if(selected.size===0) return; window.parent.postMessage({type:'TIKTOK_LINKS', links:[...selected.values()]}, '*'); }
+    async function load(){
+      try{
+        const r=await fetch('https://www.tikwm.com/api/feed/search?keywords='+encodeURIComponent(q)+'&count=6&cursor=0&HD=1', {cache:'no-store'});
+        const j=await r.json();
+        const vids=j?.data?.videos || [];
+        if(!vids.length) throw new Error('no vids');
+        grid.innerHTML='';
+        vids.slice(0,6).forEach(v=>{
+          const id=v.video_id || v.id || '';
+          const play=v.play || v.hdplay || '';
+          const cover=v.cover || v.origin_cover || '';
+          const url='https://www.tiktok.com/@'+(v.author?.unique_id||'tiktok')+'/video/'+id;
+          const card=document.createElement('div'); card.className='card'; card.onclick=()=>toggle(card, id, url);
+          card.innerHTML='<div class="check"></div><video src="'+play+'" poster="'+cover+'" muted loop playsinline preload="metadata"></video>';
+          grid.appendChild(card);
         });
-        const ytHtml = await ytR.text();
-        const ids = new Set<string>();
-        const re2 = /"videoId":"([a-zA-Z0-9_-]{11})"/g;
-        let m2: RegExpExecArray | null;
-        while ((m2 = re2.exec(ytHtml)) !== null) ids.add(m2[1]);
-        const list = [...ids].slice(0, 6);
-        if (list.length > 0) {
-          const ytPage = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;background:#09090b;color:#fff;font-family:system-ui} body{padding:16px} .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px} .card{position:relative;background:#18181b;border:1px solid #27272a;border-radius:16px;overflow:hidden;cursor:pointer;transition:transform 0.15s,border-color 0.15s} .card:hover{transform:scale(1.02);border-color:#52525b} .card.selected{border-color:#a855f7;transform:scale(1.02)} .card img{width:100%;aspect-ratio:9/16;object-fit:cover;display:block} .card p{padding:6px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0;color:#e4e4e7} .check{position:absolute;top:6px;right:6px;width:20px;height:20px;border-radius:9999px;border:2px solid rgba(255,255,255,0.6);background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff} .card.selected .check{background:#a855f7;border-color:#a855f7}</style></head><body><h3 style="font-size:14px;margin:0 0 12px">Toca 2-3 vídeos de "${q}"</h3><div class="grid" id="grid">${list.map(id=>`<div class="card" data-id="${id}" onclick="toggle(this,'${id}')"><div class="check"></div><img src="https://i.ytimg.com/vi/${id}/hqdefault.jpg" loading="eager"><p>${q}</p></div>`).join("")}</div><script>
-            const selected=new Set();
-            function toggle(el,id){ if(selected.has(id)){selected.delete(id); el.classList.remove('selected'); el.querySelector('.check').textContent='';} else { if(selected.size>=3) return; selected.add(id); el.classList.add('selected'); el.querySelector('.check').textContent='✓'; window.parent.postMessage({type:'TIKTOK_LINKS', links:[...selected].map(i=>'https://www.youtube.com/watch?v='+i)}, '*'); } }
-          </script></body></html>`;
-          return new NextResponse(ytPage, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "X-Frame-Options": "ALLOWALL", "Content-Security-Policy": "frame-ancestors *" } });
-        }
-      } catch {}
-      const friendly = `<!DOCTYPE html><html><body style="font-family:system-ui;padding:24px;background:#09090b;color:#fff"><h3>TikTok bloqueó el bot (Cloudflare)</h3><p>TikTok detectó modo bot. Usa el modo manual: abre TikTok en pestaña nueva, busca "${q}" y copia 1-5 enlaces de Compartir.</p><p><a href="https://www.tiktok.com/search/video?q=${encodeURIComponent(q)}" target="_blank" style="color:#fe2c55">Abrir TikTok ↗</a></p></body></html>`;
-      return new NextResponse(friendly, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "X-Frame-Options": "ALLOWALL", "Content-Security-Policy": "frame-ancestors *" } });
-    }
-    // Quitar bloqueos anti-iframe de TikTok
-    html = html.replace(/<meta[^>]*http-equiv=["']X-Frame-Options["'][^>]*>/gi, "");
-    html = html.replace(/<meta[^>]*http-equiv=["']Content-Security-Policy["'][^>]*>/gi, "");
-    // Inyectar helper: anti-frame-busting + proxy API + auto-cierra
-    const inject = `<script>
-      // Anti frame-busting
-      try { window.top = window.self; } catch(e){}
-      window.__isInIframe = true;
-      (function(){
-        const PROXY_API = location.origin + '/videos/api/feed2?url=';
-        const origFetch = window.fetch;
-        window.fetch = function(input, init){
-          try{
-            const url = typeof input === 'string' ? input : input.url || '';
-            if(url.includes('tiktok.com/api/')){
-              const proxied = PROXY_API + encodeURIComponent(url);
-              return origFetch.call(this, proxied, init);
-            }
-          }catch(e){}
-          return origFetch.apply(this, arguments);
-        };
-        const origOpen = XMLHttpRequest.prototype.open;
-        XMLHttpRequest.prototype.open = function(method, url){
-          try{ if(typeof url === 'string' && url.includes('tiktok.com/api/')) arguments[1] = PROXY_API + encodeURIComponent(url); }catch(e){}
-          return origOpen.apply(this, arguments);
-        };
-      })();
-      setTimeout(()=>{ try{
-        document.querySelectorAll('a,button').forEach(el=>{ if(/Abrir app/i.test(el.textContent||'')) el.style.display='none'; });
-        const si = document.querySelector('input[type="search"], input[placeholder*="Buscar"]');
-        if(si) si.focus();
-      }catch(e){} },1200);
-      let lastSent = 0;
-      function collectAndSend(){
-        try{
-          const links = Array.from(document.querySelectorAll('a[href*="/video/"]')).map(a=>a.href).filter(h=>h.includes('/video/'));
-          const uniq = [...new Set(links)].slice(0,5);
-          if(uniq.length >= 2 && Date.now() - lastSent > 8000){
-            lastSent = Date.now();
-            // Pequeño delay humano antes de enviar
-            setTimeout(()=> window.parent.postMessage({ type: 'TIKTOK_LINKS', links: uniq }, '*'), 800 + Math.random()*1200);
-          }
-        }catch(e){}
+        status.textContent='Toca 2-3 para seleccionar — fragmentos reales sin marca, HD';
+        const bar=document.createElement('div'); bar.style.cssText='margin-top:16px;display:flex;gap:8px';
+        bar.innerHTML='<button onclick="useSelected()" style="flex:1;padding:11px;background:#fff;color:#000;border:none;border-radius:9999px;font-weight:700;font-size:13px;cursor:pointer">Usar seleccionados</button><button onclick="window.parent.postMessage({type:\\'CLOSE_OVERLAY\\'}, \\'*\\')" style="padding:11px 16px;background:#27272a;color:#fff;border:1px solid #3f3f46;border-radius:9999px;font-size:13px">Cerrar</button>';
+        document.body.appendChild(bar);
+        // Auto-seleccionar 2 que coinciden y ponerlos solos si el usuario no toca
+        setTimeout(()=>{ const first=[...grid.querySelectorAll('.card')].slice(0,2); first.forEach(c=>c.click()); if(selected.size>0) useSelected(); }, 1200);
+      }catch(e){
+        status.textContent='TikTok bloqueó — pega enlaces manualmente abajo';
+        grid.innerHTML='<p style="color:#a1a1aa;font-size:12px">Copia 1-3 enlaces de TikTok (Compartir → Copiar enlace) y pégalos abajo con 📋 Pegar auto</p>';
       }
-      // Poll humano: cada 4-6s aleatorio, no cada 2s (evita bloqueo bot)
-      setInterval(collectAndSend, 4500 + Math.random()*1500);
-      try{ const obs = new MutationObserver(()=>{ if(Math.random()>0.7) collectAndSend(); }); obs.observe(document.body,{childList:true,subtree:true}); }catch(e){}
-    </script>`;
-    html = html.replace("</body>", `${inject}</body>`);
-    return new NextResponse(html, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-        "X-Frame-Options": "ALLOWALL",
-        "Content-Security-Policy": "frame-ancestors *",
-      },
-    });
-  } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
-  }
+    }
+    load();
+  </script></body></html>`;
+  return new NextResponse(page, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "X-Frame-Options": "ALLOWALL", "Content-Security-Policy": "frame-ancestors *" } });
 }
