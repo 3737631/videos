@@ -146,6 +146,34 @@ export default function App() {
     setTiktokOverlayQuery(kw);
     setTiktokOverlayOpen(true);
   };
+  // Bot que escucha enlaces de Compartir del iframe y los descarga solo
+  useEffect(() => {
+    const handler = async (e: MessageEvent) => {
+      if (e.data?.type === "TIKTOK_LINKS" && Array.isArray(e.data.links) && e.data.links.length > 0) {
+        const links: string[] = e.data.links.slice(0,5);
+        setTiktokLinks(prev => {
+          const s = new Set(prev);
+          const add = links.filter(u => !s.has(u));
+          return [...prev, ...add].slice(0,5);
+        });
+        // Auto-descargar sin marca en cuanto llegan
+        setTimeout(async () => {
+          try {
+            const joined = links.join("\n");
+            const { clips: tkClips } = await fetchTikTokClips(joined, (m)=>setStatus(m));
+            const accDur = tkClips.reduce((s,c)=>s+c.playDuration,0);
+            setClips(tkClips);
+            setTotalDuration(Math.min(15, Math.max(8, Math.round(accDur))));
+            setTiktokOverlayOpen(false);
+            setStep(2);
+            setStatus("");
+          } catch {}
+        }, 500);
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, []);
   const handlePhotoSelect = async (files: FileList | null) => {
     if (!files || !files.length) return;
     const file = files[0];

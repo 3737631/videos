@@ -14,18 +14,31 @@ export async function GET(req: NextRequest) {
       cache: "no-store",
     });
     let html = await r.text();
-    // Inyectar base para que recursos carguen y quitar X-Frame-Options ya lo hacemos con headers
-    // Añadir pequeño helper: si detecta popup "Abrir app" lo cierra solo y enfoca buscador
+    // Inyectar helper: auto-cierra "Abrir app", enfoca buscador y extrae enlaces de Compartir para mandarlos al padre
     const inject = `<script>
+      // Cerrar Abrir app y enfocar lupa
       setTimeout(()=>{ try{
-        const closeBtn = document.querySelector('[data-e2e="modal-close-inner-button"], [aria-label="Close"], button:has-text("Abrir app")');
-        if(closeBtn) closeBtn.click();
-        // Click en lupa si existe
-        const searchInput = document.querySelector('input[type="search"], input[placeholder*="Buscar"]');
-        if(searchInput){ searchInput.focus(); }
+        document.querySelectorAll('a,button').forEach(el=>{ if(/Abrir app/i.test(el.textContent||'')) el.style.display='none'; });
+        const si = document.querySelector('input[type="search"], input[placeholder*="Buscar"]');
+        if(si) si.focus();
       }catch(e){} },1200);
-      // Cerrar banner Abrir app
-      setTimeout(()=>{ document.querySelectorAll('a,button').forEach(el=>{ if(/Abrir app/i.test(el.textContent||'')) el.style.display='none'; }); },1500);
+      // Bot que copia enlaces de Compartir solo
+      let lastSent = 0;
+      function collectAndSend(){
+        try{
+          const links = Array.from(document.querySelectorAll('a[href*="/video/"]')).map(a=>a.href).filter(h=>h.includes('/video/'));
+          const uniq = [...new Set(links)].slice(0,5);
+          if(uniq.length >= 2 && Date.now() - lastSent > 3000){
+            lastSent = Date.now();
+            window.parent.postMessage({ type: 'TIKTOK_LINKS', links: uniq }, '*');
+          }
+        }catch(e){}
+      }
+      setInterval(collectAndSend, 2000);
+      // También observar cambios DOM
+      try{ const obs = new MutationObserver(collectAndSend); obs.observe(document.body,{childList:true,subtree:true}); }catch(e){}
+      // Escuchar click en lupa para forzar búsqueda
+      setTimeout(()=>{ const btn = document.querySelector('button[type="submit"], [data-e2e="search-button"]'); if(btn) btn.addEventListener('click', ()=> setTimeout(collectAndSend,1500)); },1000);
     </script>`;
     html = html.replace("</body>", `${inject}</body>`);
     return new NextResponse(html, {

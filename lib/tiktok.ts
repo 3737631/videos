@@ -42,9 +42,25 @@ async function fetchWithTimeout(url: string, ms = 8000): Promise<Response> {
 async function getTikTokPlayUrl(tiktokUrl: string, onStatus?: (m: string) => void): Promise<string> {
   const encoded = encodeURIComponent(tiktokUrl);
   const base = typeof window !== "undefined" ? "/videos/api/tiktok/download" : "/api/tiktok/download";
-  // 1) Pasar por nuestro servidor en Vercel (bypass CORS + IP limpia) — lo más fiable
+  // 1) Intento directo cliente a tikwm (IP del humano, no la de Vercel que está bloqueada)
+  const gatewaysDirect: { name: string; api: string }[] = [
+    { name: "tikwm", api: `https://www.tikwm.com/api/?url=${encoded}&hd=1` },
+  ];
+  for (const gw of gatewaysDirect) {
+    try {
+      if (onStatus) onStatus(`Resolviendo sin marca...`);
+      const res = await fetchWithTimeout(gw.api, 8000);
+      if (!res.ok) continue;
+      const text = await res.text();
+      if (text.includes("Just a moment") || text.includes("_cf_chl")) continue;
+      const jo = JSON.parse(text) as { data?: { play?: string; hdplay?: string } };
+      const play = jo?.data?.play || jo?.data?.hdplay;
+      if (play && typeof play === "string" && play.startsWith("http")) return play;
+    } catch { continue; }
+  }
+  // 2) Fallback vía servidor Vercel y corsproxy (si cliente falla por CORS)
   try {
-    if (onStatus) onStatus("Resolviendo sin marca...");
+    if (onStatus) onStatus("Probando vía servidor...");
     const r = await fetchWithTimeout(`${base}?url=${encoded}`, 9000);
     if (r.ok) {
       const j = await r.json() as { play?: string; hdplay?: string };
@@ -52,10 +68,8 @@ async function getTikTokPlayUrl(tiktokUrl: string, onStatus?: (m: string) => voi
       if (j.hdplay && j.hdplay.startsWith("http")) return j.hdplay;
     }
   } catch {}
-  // 2) Fallback directo cliente a tikwm (si Vercel falla por Cloudflare)
   const gateways: { name: string; api: string }[] = [
-    { name: "tikwm", api: `https://www.tikwm.com/api/?url=${encoded}&hd=1` },
-    { name: "tikwm-cors", api: `https://corsproxy.io/?${encodeURIComponent(`https://www.tikwm.com/api/?url=${encoded}&hd=1`)}` },
+    { name: "tikwm-cors", api: `https://proxy.cors.sh/https://www.tikwm.com/api/?url=${encoded}&hd=1` },
   ];
   for (const gw of gateways) {
     try {
