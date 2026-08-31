@@ -35,9 +35,10 @@ export default function App() {
 
   useEffect(() => { return () => { sharedAudioCtxRef.current?.close().catch(()=>{}); }; }, []);
 
-  // Bot: escucha enlaces Compartir del iframe - coge 3 que coincidan y los pone solos abajo
+  // Bot: escucha enlaces del iframe - manual, limpio, ético
   useEffect(() => {
     const h = async (e: MessageEvent) => {
+      if (e.data?.type === "CLOSE_OVERLAY") { setOverlayOpen(false); return; }
       if (e.data?.type === "TIKTOK_LINKS" && Array.isArray(e.data.links)) {
         const links: string[] = [...new Set(e.data.links as string[])].slice(0,5);
         if (links.length === 0) return;
@@ -276,7 +277,7 @@ export default function App() {
               <input ref={photoInputRef} type="file" accept="image/*" className="hidden" onChange={e=>handlePhotoSelect(e.target.files)}/>
               <button onClick={()=>photoInputRef.current?.click()} className="w-full py-2.5 bg-zinc-900 border border-zinc-800 rounded-full text-xs flex items-center justify-center gap-2"><UploadCloud className="w-4 h-4"/> {autoPhoto ? "Cambiar foto" : "Subir foto del producto"}</button>
               {autoPhotoPreview && <div className="w-full flex items-center gap-3 bg-zinc-900 border border-zinc-800 rounded-2xl p-2"><img src={autoPhotoPreview} alt="" className="w-14 h-14 rounded-xl object-cover"/><span className="flex-1 text-xs truncate text-left">{autoPhoto?.name}</span><button onClick={()=>{if(autoPhotoPreview) URL.revokeObjectURL(autoPhotoPreview); setAutoPhoto(null); setAutoPhotoPreview(null);}} className="w-7 h-7 bg-zinc-800 rounded-full">✕</button></div>}
-              <button onClick={()=>openOverlay(autoProduct)} className="w-full py-2.5 bg-[#fe2c55] hover:bg-[#e0264d] rounded-full text-white text-xs font-bold">Abrir TikTok por encima ↗ — bot pulsará solo</button>
+              <div className="w-full py-1 text-[11px] text-zinc-500 text-center">Toca Buscar para elegir vídeos manualmente por encima</div>
               {tiktokError && <div className="w-full rounded-2xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">{tiktokError}</div>}
               {status && <div className="text-xs text-zinc-400 flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin"/>{status}</div>}
               {tiktokLoading && <div className="text-xs text-zinc-400 flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin"/>Descargando sin marca...</div>}
