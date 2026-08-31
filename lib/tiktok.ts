@@ -41,7 +41,7 @@ async function fetchWithTimeout(url: string, ms = 8000): Promise<Response> {
 
 async function getTikTokPlayUrl(tiktokUrl: string, onStatus?: (m: string) => void): Promise<string> {
   const encoded = encodeURIComponent(tiktokUrl);
-  const base = typeof window !== "undefined" ? "/videos/api/tiktok/download" : "/api/tiktok/download";
+  const base = typeof window !== "undefined" ? "/videos/api/dl" : "/api/dl";
   // 1) Intento directo cliente a tikwm (IP del humano, no la de Vercel que está bloqueada)
   const gatewaysDirect: { name: string; api: string }[] = [
     { name: "tikwm", api: `https://www.tikwm.com/api/?url=${encoded}&hd=1` },
