@@ -42,6 +42,8 @@ export default function App() {
   const [tiktokPublishing, setTiktokPublishing] = useState(false);
   const [tiktokPublishMsg, setTiktokPublishMsg] = useState("");
   const [autoUpload, setAutoUpload] = useState(false);
+  const [tiktokOverlayOpen, setTiktokOverlayOpen] = useState(false);
+  const [tiktokOverlayQuery, setTiktokOverlayQuery] = useState("");
 
   // Asegurar limpieza estricta en desmontajes
   useEffect(() => {
@@ -129,6 +131,10 @@ export default function App() {
   const handleAutoSearch = async () => {
     const kw = autoProduct.trim() || productPrompt.trim();
     if (!kw || kw.length < 2) { setAutoError("Escribe el nombre del producto"); return; }
+    // Automático por encima: abrir TikTok en overlay pequeño, sin redirigir
+    setTiktokOverlayQuery(kw);
+    setTiktokOverlayOpen(true);
+    // También lanzar búsqueda interna en paralelo
     await handleAutoSearchWithKeyword(kw);
   };
 
@@ -136,6 +142,10 @@ export default function App() {
     setAutoResults(prev => prev.map((r, i) => i === idx ? { ...r, selected: !r.selected } : r));
   };
 
+  const openTikTokOverlay = (kw: string) => {
+    setTiktokOverlayQuery(kw);
+    setTiktokOverlayOpen(true);
+  };
   const handlePhotoSelect = async (files: FileList | null) => {
     if (!files || !files.length) return;
     const file = files[0];
@@ -162,9 +172,11 @@ export default function App() {
         return;
       }
     }
-    // Guardar producto y BUSCAR los vídeos reales en TikTok y mostrarlos en la galería de abajo
+    // Guardar producto y abrir overlay TikTok automático por encima + buscar
     setAutoProduct(product);
     setProductPrompt(product);
+    setTiktokOverlayQuery(product);
+    setTiktokOverlayOpen(true);
     await handleAutoSearchWithKeyword(product);
   };
 
@@ -738,10 +750,7 @@ export default function App() {
                   <div className="text-xs font-bold flex items-center gap-2"><span className="text-base">🔍</span> ¿Quieres vídeos reales de TikTok?</div>
                   <p className="text-[11px] text-zinc-500">Abrimos TikTok con tu producto, tú copias los enlaces y aquí los bajas sin marca al instante.</p>
                   <button
-                    onClick={() => {
-                      const kw = (autoProduct.trim() || "producto").trim();
-                      window.open(`https://www.tiktok.com/search/video?q=${encodeURIComponent(kw)}`, "_blank");
-                    }}
+                    onClick={() => openTikTokOverlay((autoProduct.trim() || "producto").trim())}
                     className="w-full py-2.5 bg-[#fe2c55] hover:bg-[#e0264d] rounded-full text-white text-xs font-bold flex items-center justify-center gap-2 transition"
                   >
                     Abrir TikTok — buscar &quot;{(autoProduct.trim() || "tu producto")}&quot; ↗
@@ -1110,6 +1119,37 @@ export default function App() {
         )}
 
       </div>
+      {/* TikTok overlay por encima - automático, no redirige, con X */}
+      {tiktokOverlayOpen && (
+        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex flex-col p-2 sm:p-4">
+          <div className="flex-1 bg-zinc-950 border border-zinc-800 rounded-2xl overflow-hidden flex flex-col max-w-5xl w-full mx-auto shadow-2xl">
+            <div className="flex items-center justify-between px-3 py-2 bg-zinc-900 border-b border-zinc-800">
+              <div className="flex items-center gap-2 text-xs font-bold text-white">
+                <span className="w-2 h-2 bg-[#fe2c55] rounded-full animate-pulse" /> TikTok — &quot;{tiktokOverlayQuery}&quot;
+                <span className="hidden sm:inline text-zinc-500 font-normal">— pincha solo en la lupa, ignora &quot;Abrir app&quot;</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => window.open(`https://www.tiktok.com/search/video?q=${encodeURIComponent(tiktokOverlayQuery)}`, "_blank")} className="hidden sm:flex px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded-full text-xs font-medium">Abrir en pestaña ↗</button>
+                <button onClick={() => setTiktokOverlayOpen(false)} className="w-8 h-8 bg-zinc-800 hover:bg-zinc-700 rounded-full flex items-center justify-center text-white">✕</button>
+              </div>
+            </div>
+            <div className="flex-1 relative bg-white">
+              <iframe
+                src={`${API_BASE}/api/tiktok/proxy?q=${encodeURIComponent(tiktokOverlayQuery)}`}
+                className="w-full h-full border-0"
+                sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+                allow="fullscreen"
+                title="TikTok búsqueda"
+              />
+              <div className="absolute bottom-3 left-3 right-3 bg-zinc-950/95 backdrop-blur border border-zinc-800 rounded-2xl p-3 flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
+                <span className="text-xs text-zinc-400 flex-1">1) Pincha la lupa en TikTok 2) Copia 1-3 enlaces 3) Pégalos aquí ↓ y descarga sin marca</span>
+                <button onClick={() => setTiktokOverlayOpen(false)} className="px-4 py-2 bg-white text-black rounded-full text-xs font-bold whitespace-nowrap">Cancelar</button>
+                <button onClick={() => setTiktokOverlayOpen(false)} className="px-4 py-2 bg-[#fe2c55] text-white rounded-full text-xs font-bold whitespace-nowrap">Listo, pegar enlaces</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
