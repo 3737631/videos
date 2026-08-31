@@ -10,6 +10,10 @@ const nextConfig: NextConfig = {
   ...(basePath ? { basePath } : {}),
   images: { unoptimized: true },
   trailingSlash: false,
+  async redirects() {
+    if (isGithubPages) return [];
+    return [{ source: "/", destination: "/videos", permanent: false }];
+  },
 };
 
 export default nextConfig;
