@@ -2,30 +2,22 @@ import type { VideoClip } from "@/types";
 
 function extractTikTokUrls(input: string): string[] {
   if (!input) return [];
-  // Separa por líneas, comas o espacios
-  const raw = input
-    .split(/[\n,]+/)
-    .map(s => s.trim())
-    .filter(Boolean);
+  const raw = input.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean);
   const urls: string[] = [];
   for (const token of raw) {
-    // Si el token contiene espacios, buscar url dentro
-    const match = token.match(/https?:\/\/[^\s]+tiktok\.com[^\s]*/i) || token.match(/https?:\/\/vm\.tiktok\.com\/[^\s]+/i);
+    const match = token.match(/https?:\/\/[^\s]+(?:tiktok\.com|vm\.tiktok\.com|youtube\.com|youtu\.be)[^\s]*/i);
     if (match) urls.push(match[0]);
     else if (token.startsWith("http")) urls.push(token);
   }
-  // También buscar todas las urls si el input es un bloque grande
   if (urls.length === 0) {
     const all = input.match(/https?:\/\/[^\s]+/gi);
-    if (all) {
-      for (const u of all) if (u.includes("tiktok.com") || u.includes("vm.tiktok")) urls.push(u);
-    }
+    if (all) for (const u of all) if (/(?:tiktok\.com|vm\.tiktok|youtube\.com|youtu\.be)/i.test(u)) urls.push(u);
   }
   return [...new Set(urls)];
 }
 
 function isTikTokUrl(url: string): boolean {
-  return /tiktok\.com/i.test(url) || /vm\.tiktok/i.test(url);
+  return /(?:tiktok\.com|vm\.tiktok|youtube\.com|youtu\.be)/i.test(url);
 }
 
 async function fetchWithTimeout(url: string, ms = 8000): Promise<Response> {
@@ -40,6 +32,20 @@ async function fetchWithTimeout(url: string, ms = 8000): Promise<Response> {
 }
 
 async function getTikTokPlayUrl(tiktokUrl: string, onStatus?: (m: string) => void): Promise<string> {
+  // YT: usar herramienta YT sin marca
+  if (/youtube\.com|youtu\.be/i.test(tiktokUrl)) {
+    const id = (tiktokUrl.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/) || [])[1] || "";
+    if (id) {
+      try {
+        const baseYT = typeof window !== "undefined" ? "/videos/api/yt" : "/api/yt";
+        const r = await fetchWithTimeout(`${baseYT}?id=${id}`, 8000);
+        if (r.ok) {
+          const j = await r.json() as { url?: string };
+          if (j.url && j.url.startsWith("http")) return j.url;
+        }
+      } catch {}
+    }
+  }
   const encoded = encodeURIComponent(tiktokUrl);
   const base = typeof window !== "undefined" ? "/videos/api/dl" : "/api/dl";
   // 1) Intento directo cliente a tikwm (IP del humano, no la de Vercel que está bloqueada)

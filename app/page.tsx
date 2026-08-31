@@ -170,8 +170,8 @@ export default function App() {
   };
 
   const handleAddLink = () => {
-    const found = (tiktokDraft.match(/https?:\/\/[^\s]+/gi) || []).filter(u=>/tiktok\.com|vm\.tiktok/i.test(u));
-    if (found.length===0) { setTiktokError("Solo enlaces de TikTok"); return; }
+    const found = (tiktokDraft.match(/https?:\/\/[^\s]+/gi) || []).filter(u=>/tiktok\.com|vm\.tiktok|youtube\.com|youtu\.be/i.test(u));
+    if (found.length===0) { setTiktokError("Pega enlaces de TikTok o YouTube"); return; }
     const dedup = found.filter(u=>!tiktokLinks.includes(u));
     if (dedup.length===0) { setTiktokError("Ya añadido"); return; }
     if (tiktokLinks.length + dedup.length > 5) { setTiktokError("Máx 5"); return; }
@@ -340,4 +340,5 @@ export default function App() {
     </main>
   );
 }
+
 
