@@ -341,15 +341,14 @@ export default function App() {
               <div className="absolute bottom-3 left-3 right-3 bg-zinc-950 border border-zinc-800 rounded-2xl p-3 flex gap-2 items-center">
                 <span className="flex-1 text-xs text-zinc-400">Elige 2-3 arriba</span>
                 <button onClick={async()=>{
-                  if (tiktokLinks.length>0) {
-                    await handleDownload();
-                    setOverlayOpen(false);
-                    setMode("voice");
-                    setTimeout(()=>processVideo(), 600);
-                  } else if (clips.length>0) {
+                  if (clips.length>0) {
                     setOverlayOpen(false);
                     setMode("voice");
                     setTimeout(()=>processVideo(), 400);
+                  } else if (tiktokLinks.length>0) {
+                    await handleDownload();
+                    setOverlayOpen(false);
+                    if (clips.length>0) { setMode("voice"); setTimeout(()=>processVideo(), 600); }
                   } else setOverlayOpen(false);
                 }} className="px-6 py-2 bg-white text-black rounded-full text-xs font-bold">Listo → Crear viral con Voz</button>
               </div>
