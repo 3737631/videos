@@ -220,15 +220,25 @@ export default function App() {
             }
           }
         } catch {}
-        if (!ok) { errors.push(url+": No se pudo obtener vídeo sin marca. Verifica que sea público."); }
+        if (!ok) { errors.push(url); }
       }
-      if (clipsArr.length===0) throw new Error(errors.join(" | ") || "No se pudo descargar ningún Short");
+      if (clipsArr.length===0) {
+        // El servidor de Vercel no puede bajar YT (IP bloqueada). Guiamos a la descarga local.
+        throw new Error("YT_BLOCKED:" + errors.join(" | "));
+      }
       for(const c of clips) try{URL.revokeObjectURL(c.url)}catch{}
       clipsRef.current=clipsArr; setClips(clipsArr);
       setTotalDuration(Math.min(15, Math.max(8, Math.round(clipsArr.reduce((s,c)=>s+c.playDuration,0)))));
       if (errors.length) setYtError(`Descargados ${clipsArr.length} OK. Errores: ${errors.join(" | ").slice(0,200)}`);
       setStep(2); setStatus("");
-    } catch(e){ setYtError(e instanceof Error ? e.message : String(e)); }
+    } catch(e){
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.startsWith("YT_BLOCKED:")) {
+        setYtError("YouTube solo permite bajar desde tu PC (IP residencial), no desde el servidor. Descarga el fragmento en máxima calidad gratis con: node yt-local.mjs \"https://www.youtube.com/shorts/ID\" y súbelo en 'O sube tus vídeos'.");
+      } else {
+        setYtError(msg);
+      }
+    }
     finally { setYtLoading(false); setStatus(""); }
   };
 
