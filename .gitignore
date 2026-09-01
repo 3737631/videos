@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+yt-descargas/
+yt-full-*.mp4
+yt-*-?s.mp4
