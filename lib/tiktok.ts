@@ -38,7 +38,7 @@ async function getTikTokPlayUrl(tiktokUrl: string, onStatus?: (m: string) => voi
     if (id) {
       try {
         const baseYT = typeof window !== "undefined" ? "/videos/api/yt" : "/api/yt";
-        const r = await fetchWithTimeout(`${baseYT}?id=${id}`, 8000);
+        const r = await fetchWithTimeout(`${baseYT}?id=${id}&json=1`, 10000);
         if (r.ok) {
           const j = await r.json() as { url?: string };
           if (j.url && j.url.startsWith("http")) return j.url;

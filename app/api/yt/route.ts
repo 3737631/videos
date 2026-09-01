@@ -1,36 +1,64 @@
 import { NextRequest, NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+const ANDROID_CLIENTS = [
+  { clientName: "ANDROID", clientVersion: "21.02.13", androidSdkVersion: 30 },
+  { clientName: "ANDROID", clientVersion: "19.09.37", androidSdkVersion: 30 },
+  { clientName: "ANDROID", clientVersion: "18.31.32", androidSdkVersion: 28 },
+];
+
+async function getPlayUrl(id: string): Promise<string> {
+  for (const client of ANDROID_CLIENTS) {
+    try {
+      const r = await fetch("https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+        body: JSON.stringify({ context: { client }, videoId: id }),
+        cache: "no-store",
+        signal: AbortSignal.timeout(10000),
+      });
+      const t = await r.text();
+      if (!r.ok) continue;
+      const j = JSON.parse(t) as {
+        playabilityStatus?: { status?: string };
+        streamingData?: { formats?: { url?: string; mimeType?: string }[]; adaptiveFormats?: { url?: string; mimeType?: string; qualityLabel?: string }[] };
+      };
+      if (j.playabilityStatus && j.playabilityStatus.status !== "OK") continue;
+      const formats = [...(j.streamingData?.formats || []), ...(j.streamingData?.adaptiveFormats || [])];
+      const withUrl = formats.filter(f => f.url);
+      if (withUrl.length === 0) continue;
+      const best = withUrl.find(f => f.mimeType?.includes("mp4") && f.mimeType?.includes("audio")) || withUrl.find(f => f.mimeType?.includes("mp4")) || withUrl[0];
+      return best.url!.replace(/\\u0026/g, "&");
+    } catch { /* try next client */ }
+  }
+  throw new Error("no stream url");
+}
+
 export async function GET(req: NextRequest) {
   const id = req.nextUrl.searchParams.get("id") || req.nextUrl.searchParams.get("v") || "";
   if (!id || !/^[a-zA-Z0-9_-]{11}$/.test(id)) return NextResponse.json({ error: "bad id" }, { status: 400 });
+  const jsonMode = req.nextUrl.searchParams.get("json") === "1";
   try {
-    const r = await fetch(`https://www.youtube.com/watch?v=${id}`, {
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Accept-Language": "en-US,en;q=0.9" },
+    const url = await getPlayUrl(id);
+    if (jsonMode) return NextResponse.json({ url, id }, { headers: { "Access-Control-Allow-Origin": "*" } });
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": "https://www.youtube.com/",
+      },
       cache: "no-store",
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(45000),
     });
-    const html = await r.text();
-    const start = html.indexOf("ytInitialPlayerResponse");
-    if (start === -1) return NextResponse.json({ error: "no player" }, { status: 404 });
-    const braceStart = html.indexOf("{", start);
-    let depth = 0; let end = -1;
-    for (let i = braceStart; i < html.length; i++) {
-      const c = html[i];
-      if (c === "{") depth++;
-      else if (c === "}") { depth--; if (depth === 0) { end = i; break; } }
-    }
-    if (end === -1) return NextResponse.json({ error: "no json" }, { status: 404 });
-    const jsonStr = html.slice(braceStart, end + 1);
-    const j = JSON.parse(jsonStr) as { streamingData?: { adaptiveFormats?: { url?: string; mimeType?: string }[]; formats?: { url?: string; mimeType?: string }[] }; videoDetails?: { title?: string } };
-    const streamingData = j.streamingData as { adaptiveFormats?: { url?: string; mimeType?: string; qualityLabel?: string }[]; formats?: { url?: string; mimeType?: string }[] } | undefined;
-    const formats = [...(streamingData?.formats || []), ...(streamingData?.adaptiveFormats || [])];
-    // Prefer mp4 with audio
-    let best = formats.find(f => f.mimeType?.includes("mp4") && f.url && f.mimeType?.includes("audio")) || formats.find(f => f.mimeType?.includes("mp4") && f.url) || formats.find(f => f.url);
-    if (!best?.url) return NextResponse.json({ error: "no url" }, { status: 404 });
-    // Unescape url
-    const url = best.url.replace(/\\u0026/g, "&");
-    return NextResponse.json({ url, title: j.videoDetails?.title || id }, { headers: { "Access-Control-Allow-Origin": "*" } });
+    if (!res.ok || !res.body) return NextResponse.json({ error: "video fetch failed " + res.status }, { status: 502 });
+    const ct = res.headers.get("content-type") || "video/mp4";
+    return new NextResponse(res.body as ReadableStream, {
+      headers: { "Content-Type": ct, "Access-Control-Allow-Origin": "*", "Accept-Ranges": "bytes", "Content-Disposition": `inline; filename="yt-${id}.mp4"` },
+    });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }

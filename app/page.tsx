@@ -200,66 +200,27 @@ export default function App() {
         const id = (/(v=|shorts\/|youtu\.be\/)([A-Za-z0-9_-]{11})/.exec(url) || [])[2] || "";
         if (!id) { errors.push(url+": ID no válido"); continue; }
         let ok=false;
-        // 1) Intentar YT real via /api/yt (youtubei)
+        // YT real via /api/yt (innertube ANDROID + proxy MP4 sin marca)
         try {
           const r = await fetch(`${API_BASE}/api/yt?id=${id}`, { cache: "no-store" });
-          if (r.ok) {
-            const j = await r.json() as { url?: string };
-            if (j.url) {
-              const res=await fetch(j.url,{cache:"no-store"});
-              const blob=await res.blob();
-              if(blob.size>10000){
-                const file=new File([blob],`yt-${id}.mp4`,{type:blob.type||"video/mp4"});
-                const url2=URL.createObjectURL(blob);
-                const dur=await new Promise<number>(res2=>{
-                  const v=document.createElement("video"); v.preload="metadata"; v.muted=true; v.playsInline=true; v.src=url2;
-                  let done=false; const fin=(d:number)=>{if(done) return; done=true; v.removeAttribute("src"); try{v.load()}catch{}; res2(d);};
-                  v.onloadedmetadata=()=>fin(Number.isFinite(v.duration)&&v.duration>2?v.duration:6);
-                  v.onerror=()=>fin(6); setTimeout(()=>fin(6),3000);
-                });
-                clipsArr.push({ file, url: url2, startOffset:0, playDuration: Math.min(7,Math.max(4,dur)) });
-                ok=true; continue;
-              }
+          const ct = r.headers.get("content-type") || "";
+          if (r.ok && !ct.includes("application/json")) {
+            const blob=await r.blob();
+            if(blob.size>10000){
+              const file=new File([blob],`yt-${id}.mp4`,{type:blob.type||"video/mp4"});
+              const url2=URL.createObjectURL(blob);
+              const dur=await new Promise<number>(res2=>{
+                const v=document.createElement("video"); v.preload="metadata"; v.muted=true; v.playsInline=true; v.src=url2;
+                let done=false; const fin=(d:number)=>{if(done) return; done=true; v.removeAttribute("src"); try{v.load()}catch{}; res2(d);};
+                v.onloadedmetadata=()=>fin(Number.isFinite(v.duration)&&v.duration>2?v.duration:6);
+                v.onerror=()=>fin(6); setTimeout(()=>fin(6),3000);
+              });
+              clipsArr.push({ file, url: url2, startOffset:0, playDuration: Math.min(7,Math.max(4,dur)) });
+              ok=true;
             }
           }
         } catch {}
-        // 2) Fallback: cliente directo watch page (sin Vercel)
-        if(!ok){
-          try {
-            const htmlRes = await fetch(`https://www.youtube.com/watch?v=${id}`, { cache: "no-store" });
-            const html = await htmlRes.text();
-            const start = html.indexOf("ytInitialPlayerResponse");
-            if (start !== -1) {
-              const braceStart = html.indexOf("{", start);
-              let depth=0, end=-1;
-              for(let i=braceStart;i<html.length;i++){ const c=html[i]; if(c==="{") depth++; else if(c==="}"){depth--; if(depth===0){end=i; break;}} }
-              if(end!==-1){
-                const j = JSON.parse(html.slice(braceStart, end+1));
-                const sd = (j as {streamingData?:{adaptiveFormats?:{url?:string;mimeType?:string}[];formats?:{url?:string;mimeType?:string}[]}}).streamingData;
-                const fmts=[...(sd?.formats||[]), ...(sd?.adaptiveFormats||[])];
-                const best=fmts.find(f=>f.mimeType?.includes("mp4")&&f.url) || fmts.find(f=>f.url);
-                if(best?.url){
-                  const playUrl=best.url.replace(/\u0026/g,"&");
-                  const res=await fetch(playUrl,{cache:"no-store"});
-                  const blob=await res.blob();
-                  if(blob.size>10000){
-                    const file=new File([blob],`yt-${id}.mp4`,{type:blob.type||"video/mp4"});
-                    const url2=URL.createObjectURL(blob);
-                    const dur=await new Promise<number>(res2=>{
-                      const v=document.createElement("video"); v.preload="metadata"; v.muted=true; v.playsInline=true; v.src=url2;
-                      let done=false; const fin=(d:number)=>{if(done) return; done=true; v.removeAttribute("src"); try{v.load()}catch{}; res2(d);};
-                      v.onloadedmetadata=()=>fin(Number.isFinite(v.duration)&&v.duration>2?v.duration:6);
-                      v.onerror=()=>fin(6); setTimeout(()=>fin(6),3000);
-                    });
-                    clipsArr.push({ file, url: url2, startOffset:0, playDuration: Math.min(7,Math.max(4,dur)) });
-                    continue;
-                  }
-                }
-              }
-            }
-          } catch {}
-        }
-        errors.push(url+": No se pudo obtener vídeo sin marca. Verifica que sea público.");
+        if (!ok) { errors.push(url+": No se pudo obtener vídeo sin marca. Verifica que sea público."); }
       }
       if (clipsArr.length===0) throw new Error(errors.join(" | ") || "No se pudo descargar ningún Short");
       for(const c of clips) try{URL.revokeObjectURL(c.url)}catch{}
