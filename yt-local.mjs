@@ -40,15 +40,12 @@ function sh(cmd) {
   execSync(cmd, { stdio: "inherit" });
 }
 
-console.log(`\n== Descargando "${url}" en máxima calidad ==`);
-const fullFile = path.join(outDir, `yt-full-${id}.mp4`);
-sh(`yt-dlp --js-runtimes "${jsRuntime}" --remote-components ejs:github -f "bv*+ba/b" --merge-output-format mp4 -o "${fullFile}" "${url}"`);
-
-if (!existsSync(fullFile)) { console.error("✗ No se generó el vídeo. Revisa el enlace (debe ser público)."); process.exit(1); }
-
 const clipFinal = path.join(outDir, `yt-${id}-${duration}s.mp4`);
-console.log(`\n== Recortando fragmento de ${duration}s ==`);
-sh(`ffmpeg -y -ss 0 -t ${duration} -i "${fullFile}" -c:v libx264 -preset fast -crf 23 -c:a aac -movflags +faststart "${clipFinal}"`);
+console.log(`\n== Descargando SOLO el fragmento de ${duration}s en máxima calidad ==`);
+// --download-sections pide solo el rango (0-duration) a YouTube: no baja el vídeo completo.
+sh(`yt-dlp --js-runtimes "${jsRuntime}" --remote-components ejs:github -f "bv*+ba/b" --merge-output-format mp4 --download-sections "*0-${duration}" --force-keyframes-at-cuts -o "${clipFinal}" "${url}"`);
+
+if (!existsSync(clipFinal)) { console.error("✗ No se generó el fragmento. Revisa el enlace (debe ser público)."); process.exit(1); }
 
 console.log(`\n✔ Listo para subir: ${clipFinal}`);
 console.log("   Ábrelo en la app → 'O sube tus vídeos' → Crear Vídeo con Voz.\n");
