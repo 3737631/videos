@@ -39,23 +39,27 @@ jobs:
           ls -la /tmp/warp.deb 2>/dev/null || true
           if [ -s /tmp/warp.deb ]; then
             sudo dpkg-deb -x /tmp/warp.deb /tmp/warp
-            ls /tmp/warp/usr/bin
           fi
+          WSBIN=""
+          for P in /tmp/warp/bin /tmp/warp/usr/bin; do
+            if [ -x "$P/warp-svc" ]; then WSBIN="$P"; break; fi
+          done
+          echo "WSBIN=$WSBIN"
           echo "WARP LDD warp-svc:"
-          ldd /tmp/warp/usr/bin/warp-svc 2>&1 | grep -i "not found" || echo "all libs present"
-          # En runners GH no hay systemd: arrancar el daemon manualmente con la ruta extraida
+          ldd "$WSBIN/warp-svc" 2>&1 | grep -i "not found" || echo "all libs present"
+          # En runners GH no hay systemd: arrancar el daemon manualmente desde la ruta extraida
           sudo pkill -f warp-svc || true
-          sudo /tmp/warp/usr/bin/warp-svc >/tmp/warp-svc.log 2>&1 &
+          sudo "$WSBIN/warp-svc" >/tmp/warp-svc.log 2>&1 &
           sleep 8
           echo "WARP SVC PROCS:"
           pgrep -af warp-svc | head -5 || true
           echo "WARP SVC LOG (primeras lineas):"
           tail -5 /tmp/warp-svc.log 2>/dev/null || true
-          sudo /tmp/warp/usr/bin/warp-cli --accept-tos registration new >/dev/null 2>&1 || true
-          sudo /tmp/warp/usr/bin/warp-cli --accept-tos mode proxy >/dev/null 2>&1 || true
-          sudo /tmp/warp/usr/bin/warp-cli --accept-tos connect >/dev/null 2>&1 || true
+          sudo "$WSBIN/warp-cli" --accept-tos registration new >/dev/null 2>&1 || true
+          sudo "$WSBIN/warp-cli" --accept-tos mode proxy >/dev/null 2>&1 || true
+          sudo "$WSBIN/warp-cli" --accept-tos connect >/dev/null 2>&1 || true
           echo "WARP STATUS:"
-          sudo /tmp/warp/usr/bin/warp-cli --accept-tos status 2>&1 | head -8 || true
+          sudo "$WSBIN/warp-cli" --accept-tos status 2>&1 | head -8 || true
           sleep 6
           echo "WARP SOCK:"
           sudo ss -tlnp | grep -i 40000 || true
