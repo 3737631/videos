@@ -33,6 +33,7 @@ jobs:
       - name: Try WARP + retry
         continue-on-error: true
         run: |
+          YT_URL="https://www.youtube.com/watch?v=${{ inputs.url }}"
           # Instalar warp-cli desde el pool noble de Cloudflare (sin depender de ghcr ni repos apt)
           curl -fsSL "https://pkg.cloudflareclient.com/pool/noble/main/c/cloudflare-warp/cloudflare-warp_2026.7.1377.0_amd64.deb" -o /tmp/warp.deb || true
           ls -la /tmp/warp.deb 2>/dev/null || true
@@ -56,13 +57,28 @@ jobs:
           echo "WARP EXIT TRACE:"
           timeout 20 curl -s --proxy socks5h://127.0.0.1:40000 https://1.1.1.1/cdn-cgi/trace || echo "socks dead"
           set +e
-          OUT=$(yt-dlp -v --proxy "socks5h://127.0.0.1:40000" --get-url --skip-download -f "bv*+ba/b" "https://www.youtube.com/watch?v=${{ inputs.url }}" 2>&1)
-          CODE=$?
-          echo "WARP_EXIT=$CODE"
-          echo "$OUT" > /tmp/ytdlp_out.txt
-          grep -iE "LOGIN_REQUIRED|UNPLAYABLE|Sign in|bot|not available|Precondition|ExtractorError|playability|nsig|po_token|player response|^https|\[debug\]|critical" /tmp/ytdlp_out.txt | head -40
-          echo "$OUT" | grep -E "^https" | head -1 > /tmp/url.txt
+          rm -f /tmp/urls.txt
+          try_client() {
+            CLIENT="$1"
+            if [ "$CLIENT" = "default" ]; then
+              ARGS=""
+            else
+              ARGS="--extractor-args youtube:player_client=$CLIENT"
+            fi
+            OUT=$(yt-dlp -v $ARGS --proxy "socks5h://127.0.0.1:40000" --get-url --skip-download -f "bv*+ba/b" "$YT_URL" 2>&1)
+            CODE=$?
+            URL=$(echo "$OUT" | grep -E "^https" | head -1)
+            STATUS=$(echo "$OUT" | grep -oE "playability status: [A-Z_]+" | head -1)
+            echo "CLIENT $CLIENT => exit=$CODE status=$STATUS url=${URL:0:70}"
+            echo "$URL" >> /tmp/urls.txt
+          }
+          try_client default
+          try_client android_vr
+          try_client android
+          echo "== verbose detalle primer cliente =="
+          OUT0=$(yt-dlp -v --proxy "socks5h://127.0.0.1:40000" --get-url --skip-download -f "bv*+ba/b" "$YT_URL" 2>&1)
+          echo "$OUT0" | grep -iE "\[debug\] \[youtube\]|playability|nsig|po_token|ExtractorError|player_client" | head -30
       - name: Print result
         run: |
-          echo "Result URL:"
-          cat /tmp/url.txt 2>/dev/null || echo "none"
+          echo "URLs por cliente:"
+          cat /tmp/urls.txt 2>/dev/null || echo "none"
