@@ -15,35 +15,41 @@ on:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 6
     steps:
       - name: Install yt-dlp
         run: |
           pip install -U yt-dlp
           yt-dlp --version
-      - name: Probe GET-URL
+      - name: Probe GET-URL (bare)
         id: probe
+        continue-on-error: true
         run: |
-          # Test: can the runner get a stream URL from the datacenter IP?
           set +e
           OUT=$(yt-dlp --get-url --skip-download -f "bv*+ba/b" "https://www.youtube.com/watch?v=${{ inputs.url }}" 2>&1)
           CODE=$?
-          echo "EXIT=$CODE"
-          echo "$OUT"
-          # Report final playability markers found
-          echo "MARKERS:"
-          echo "$OUT" | grep -iE "LOGIN_REQUIRED|UNPLAYABLE|Sign in|not available|Precondition|ERROR|url=" | head -40
-          # Extract a url if present
-          U=$(echo "$OUT" | grep -E "^https://.*googlevideo" | head -1)
-          echo "GOT_URL=${U:0:80}"
-          echo "url_result=$U" >> "$GITHUB_ENV"
-      - name: Actual byte probe
+          echo "BARE_EXIT=$CODE"
+          echo "$OUT" | grep -iE "LOGIN_REQUIRED|UNPLAYABLE|Sign in|not available|Precondition|GOT|^https" | head -10
+      - name: Try WARP + retry
+        continue-on-error: true
         run: |
+          sudo apt-get update -qq
+          sudo curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ focal main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+          sudo apt-get install -y -qq cloudflare-warp
+          sudo warp-cli --accept-tos register >/dev/null 2>&1 || true
+          sudo warp-cli --accept-tos mode proxy >/dev/null 2>&1 || true
+          sudo warp-cli --accept-tos connect >/dev/null 2>&1 || true
+          sleep 8
+          echo "WARP SOCK:"
+          sudo ss -tlnp | grep -i 40000 || true
           set +e
-          U="$url_result"
-          if [ -n "$U" ]; then
-            code=$(curl -s -o /dev/null -w "%{http_code}" -r 0-1023 "$U")
-            echo "RANGED_HTTP=$code"
-          else
-            echo "NO_URL"
-          fi
+          OUT=$(YTDLP_NO_WARNINGS=1 yt-dlp --proxy "socks5://127.0.0.1:40000" --get-url --skip-download -f "bv*+ba/b" "https://www.youtube.com/watch?v=${{ inputs.url }}" 2>&1)
+          CODE=$?
+          echo "WARP_EXIT=$CODE"
+          echo "$OUT" | grep -iE "LOGIN_REQUIRED|UNPLAYABLE|Sign in|not available|Precondition|^https" | head -10
+          echo "$OUT" | grep -E "^https" | head -1 > /tmp/url.txt
+      - name: Print result
+        run: |
+          echo "Result URL:"
+          cat /tmp/url.txt 2>/dev/null || echo "none"
