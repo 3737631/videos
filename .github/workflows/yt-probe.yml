@@ -45,21 +45,46 @@ jobs:
             if [ -x "$P/warp-svc" ]; then WSBIN="$P"; break; fi
           done
           echo "WSBIN=$WSBIN"
+          # Debs runtime (libtss2) que warp-svc necesita: apt (sin -f, sin GUI) con fallback directo a archive.ubuntu.com
+          sudo apt-get update -qq >/dev/null 2>&1 || true
+          sudo apt-get install -y libtss2-tctildr0t64 libtss2-esys-3.0.2-0t64 >>/tmp/warp-apt.log 2>&1 || true
+          if ldd "$WSBIN/warp-svc" 2>&1 | grep -q "not found"; then
+            echo "apt libs fallidos, bajando debs de archive.ubuntu.com"
+            mkdir -p /tmp/warp/lib
+            curl -fsSL https://archive.ubuntu.com/ubuntu/dists/noble/main/binary-amd64/Packages.gz -o /tmp/pkgs.gz
+            curl -fsSL https://archive.ubuntu.com/ubuntu/dists/noble-updates/main/binary-amd64/Packages.gz -o /tmp/pkgs2.gz
+            for PKG in libtss2-tctildr0t64 libtss2-esys-3.0.2-0t64 libtss2-mu0t64 libtss2-rc0t64 libtss2-sys1t64; do
+              FN=$(zcat /tmp/pkgs.gz /tmp/pkgs2.gz | awk -v P="$PKG" '$0=="Package: "P {f=1} f && /^Filename:/ {print $2; exit}')
+              if [ -n "$FN" ]; then
+                echo "  $PKG -> $FN"
+                curl -fsSL "https://archive.ubuntu.com/ubuntu/$FN" -o /tmp/tss.deb
+                sudo dpkg-deb -x /tmp/tss.deb /tmp/warp/lib
+              fi
+            done
+          fi
           echo "WARP LDD warp-svc:"
           ldd "$WSBIN/warp-svc" 2>&1 | grep -i "not found" || echo "all libs present"
           # En runners GH no hay systemd: arrancar el daemon manualmente desde la ruta extraida
           sudo pkill -f warp-svc || true
-          sudo "$WSBIN/warp-svc" >/tmp/warp-svc.log 2>&1 &
+          if [ -d /tmp/warp/lib/usr/lib/x86_64-linux-gnu ]; then
+            sudo env LD_LIBRARY_PATH=/tmp/warp/lib/usr/lib/x86_64-linux-gnu "$WSBIN/warp-svc" >/tmp/warp-svc.log 2>&1 &
+          else
+            sudo "$WSBIN/warp-svc" >/tmp/warp-svc.log 2>&1 &
+          fi
           sleep 8
           echo "WARP SVC PROCS:"
           pgrep -af warp-svc | head -5 || true
           echo "WARP SVC LOG (primeras lineas):"
           tail -5 /tmp/warp-svc.log 2>/dev/null || true
-          sudo "$WSBIN/warp-cli" --accept-tos registration new >/dev/null 2>&1 || true
-          sudo "$WSBIN/warp-cli" --accept-tos mode proxy >/dev/null 2>&1 || true
-          sudo "$WSBIN/warp-cli" --accept-tos connect >/dev/null 2>&1 || true
+          WCLI="$WSBIN/warp-cli"
+          if [ -d /tmp/warp/lib/usr/lib/x86_64-linux-gnu ]; then
+            WCLI="env LD_LIBRARY_PATH=/tmp/warp/lib/usr/lib/x86_64-linux-gnu $WSBIN/warp-cli"
+          fi
+          sudo $WCLI --accept-tos registration new >/dev/null 2>&1 || true
+          sudo $WCLI --accept-tos mode proxy >/dev/null 2>&1 || true
+          sudo $WCLI --accept-tos connect >/dev/null 2>&1 || true
           echo "WARP STATUS:"
-          sudo "$WSBIN/warp-cli" --accept-tos status 2>&1 | head -8 || true
+          sudo $WCLI --accept-tos status 2>&1 | head -8 || true
           sleep 6
           echo "WARP SOCK:"
           sudo ss -tlnp | grep -i 40000 || true
