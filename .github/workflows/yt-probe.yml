@@ -33,14 +33,16 @@ jobs:
       - name: Try WARP + retry
         continue-on-error: true
         run: |
-          # WARP via contenedor linuxserver/warp (expone SOCKS5 127.0.0.1:40000), sin dependencias de paquetes
-          docker run -d --name=warp --cap-add=NET_ADMIN --cap-add=SYS_MODULE \
-            --sysctl net.ipv6.conf.all.disable_ipv6=0 --sysctl net.ipv4.conf.all.src_valid_mark=1 \
-            -e PUID=1000 -e PGID=1000 -e TZ=Etc/UTC -p 40000:40000 \
-            lscr.io/linuxserver/warp || true
-          sleep 20
-          echo "WARP CONTAINER:"
-          docker ps --filter name=warp --format "{{.Status}}" || true
+          # Instalar warp-cli desde el pool noble de Cloudflare (sin depender de ghcr ni repos apt)
+          curl -fsSL "https://pkg.cloudflareclient.com/pool/noble/main/c/cloudflare-warp/cloudflare-warp_2026.7.1377.0_amd64.deb" -o /tmp/warp.deb || true
+          ls -la /tmp/warp.deb 2>/dev/null || true
+          if [ -s /tmp/warp.deb ]; then
+            sudo dpkg -i /tmp/warp.deb || sudo apt-get install -y -f
+          fi
+          sudo warp-cli --accept-tos register >/dev/null 2>&1 || true
+          sudo warp-cli --accept-tos mode proxy >/dev/null 2>&1 || true
+          sudo warp-cli --accept-tos connect >/dev/null 2>&1 || true
+          sleep 10
           echo "WARP SOCK:"
           sudo ss -tlnp | grep -i 40000 || true
           set +e
