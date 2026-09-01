@@ -50,54 +50,53 @@ export default function App() {
         setTiktokLinks(prev => [...new Set([...prev, ...links])].slice(0,5));
         const isYT = links.some(u=>u.includes("youtube.com") || u.includes("youtu.be"));
         if (isYT) {
-          // YouTube Shorts: crear clips desde thumbnails y ponerlos solos abajo
           try {
-            setTiktokLoading(true); setStatus("Cogidos 3 vídeos de YouTube Shorts que coinciden, preparando...");
-            const ytClips: VideoClip[] = [];
-            for (const u of links.slice(0,3)) {
+            setTiktokLoading(true); setStatus("Descargando fragmentos virales reales YT...");
+            const createOne = async (u: string): Promise<VideoClip | null> => {
               const id = (u.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/) || [])[1] || "";
-              const thumb = id ? `${API_BASE}/api/img?url=https://i.ytimg.com/vi/${id}/hqdefault.jpg` : "";
-              // Crear vídeo desde thumbnail con canvas
+              if (!id) return null;
+              // Fragmento real YT directo desde tu navegador (sin pasar por Vercel bloqueado)
               try {
-                const imgRes = await fetch(thumb, { cache: "no-store" });
-                const blob = await imgRes.blob();
-                const file = new File([blob], `yt-${id}.jpg`, { type: blob.type });
-                // Reusar createVideoFromImageUrl
-                const img = new Image(); const url = URL.createObjectURL(blob);
-                img.src = url;
-                await new Promise<void>((res, rej)=>{ img.onload=()=>res(); img.onerror=()=>rej(new Error()); setTimeout(()=>rej(new Error()),3000); });
-                const canvas = document.createElement("canvas"); canvas.width=720; canvas.height=1280;
-                const ctx = canvas.getContext("2d",{alpha:false})!;
-                const scale=Math.max(canvas.width/img.width, canvas.height/img.height);
-                const w=img.width*scale, h=img.height*scale;
-                ctx.drawImage(img,(canvas.width-w)/2,(canvas.height-h)/2,w,h);
-                URL.revokeObjectURL(url);
-                const stream=(canvas as HTMLCanvasElement & {captureStream:(fps:number)=>MediaStream}).captureStream(30);
-                const rec=new MediaRecorder(stream,{mimeType: MediaRecorder.isTypeSupported("video/webm;codecs=vp9")?"video/webm;codecs=vp9":"video/webm"});
-                const chunks:BlobPart[]=[]; rec.ondataavailable=e=>{if(e.data.size>0) chunks.push(e.data)};
-                const videoUrl=await new Promise<string>((res,rej)=>{
-                  rec.onstop=()=>{ const b=new Blob(chunks,{type:"video/webm"}); const u=URL.createObjectURL(b); res(u); };
-                  rec.onerror=()=>rej(new Error()); rec.start();
-                  let s=performance.now(); const draw=()=>{
-                    if(performance.now()-s>=7000){ rec.stop(); stream.getTracks().forEach(t=>t.stop()); return; }
-                    const p=(performance.now()-s)/7000; const sc=1+p*0.05;
-                    ctx.clearRect(0,0,canvas.width,canvas.height);
-                    ctx.drawImage(img,(canvas.width-w*sc)/2,(canvas.height-h*sc)/2,w*sc,h*sc);
-                    requestAnimationFrame(draw);
-                  }; draw(); setTimeout(()=>{try{if(rec.state==="recording") rec.stop()}catch{}},7500);
-                });
-                const vb=await fetch(videoUrl).then(r=>r.blob());
-                const vf=new File([vb],`yt-${id}.webm`,{type:"video/webm"});
-                ytClips.push({ file: vf, url: videoUrl, startOffset:0, playDuration:7 });
+                const htmlRes = await fetch(`https://www.youtube.com/watch?v=${id}`, { cache: "no-store" });
+                const html = await htmlRes.text();
+                const start = html.indexOf("ytInitialPlayerResponse");
+                if (start !== -1) {
+                  const braceStart = html.indexOf("{", start);
+                  let depth=0, end=-1;
+                  for(let i=braceStart;i<html.length;i++){ const c=html[i]; if(c==="{") depth++; else if(c==="}"){depth--; if(depth===0){end=i; break;}} }
+                  if(end!==-1){
+                    const j = JSON.parse(html.slice(braceStart, end+1));
+                    const sd = (j as {streamingData?:{adaptiveFormats?:{url?:string;mimeType?:string}[];formats?:{url?:string;mimeType?:string}[]}}).streamingData;
+                    const fmts=[...(sd?.formats||[]), ...(sd?.adaptiveFormats||[])];
+                    const best=fmts.find(f=>f.mimeType?.includes("mp4")&&f.url) || fmts.find(f=>f.url);
+                    if(best?.url){
+                      const playUrl=best.url.replace(/\\u0026/g,"&");
+                      const res=await fetch(playUrl,{cache:"no-store"});
+                      const blob=await res.blob();
+                      if(blob.size>10000){
+                        const file=new File([blob],`yt-${id}.mp4`,{type:blob.type||"video/mp4"});
+                        const url=URL.createObjectURL(blob);
+                        const dur=await new Promise<number>(res2=>{
+                          const v=document.createElement("video"); v.preload="metadata"; v.muted=true; v.playsInline=true; v.src=url;
+                          let done=false; const fin=(d:number)=>{if(done) return; done=true; v.removeAttribute("src"); try{v.load()}catch{}; res2(d);};
+                          v.onloadedmetadata=()=>fin(Number.isFinite(v.duration)&&v.duration>2?v.duration:6);
+                          v.onerror=()=>fin(6); setTimeout(()=>fin(6),3000);
+                        });
+                        return { file, url, startOffset:0, playDuration: Math.min(7, Math.max(4, dur)) };
+                      }
+                    }
+                  }
+                }
               } catch {}
-            }
+              return null;
+            };
+            const res = await Promise.all(links.slice(0,3).map(createOne));
+            const ytClips = res.filter(Boolean) as VideoClip[];
             if (ytClips.length>0) {
-              for (const c of clips) try{URL.revokeObjectURL(c.url)}catch{}
-              clipsRef.current=ytClips; setClips(ytClips);
-              setTotalDuration(10);
-              setOverlayOpen(false);
-              setStep(2);
-              setTiktokError("");
+              for(const c of clips) try{URL.revokeObjectURL(c.url)}catch{}
+              clipsRef.current=ytClips; setClips(ytClips); setTotalDuration(Math.min(15, Math.max(8, Math.round(ytClips.reduce((s,c)=>s+c.playDuration,0))))); setOverlayOpen(false); setStep(2); setTiktokError("");
+            } else {
+              setTiktokError("No se pudieron obtener fragmentos reales YT — prueba con otro producto o pega enlaces de TikTok");
             }
           } catch {}
           finally { setTiktokLoading(false); setStatus(""); }
