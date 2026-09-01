@@ -42,28 +42,28 @@ async function postPlayer(id: string, client: { clientName: string; clientVersio
     signal: AbortSignal.timeout(10000),
   });
   const t = await r.text();
-  if (!r.ok) throw new Error(`player http ${r.status}`);
+  if (!r.ok) throw new Error(`player http ${r.status}: ${t.slice(0,200)}`);
   return JSON.parse(t);
 }
 
 async function getPlayUrl(id: string): Promise<string> {
   const env = await getWatchCookies();
-  let lastErr = "";
+  const attempts: string[] = [];
   for (const client of ANDROID_CLIENTS) {
     try {
       const j = await postPlayer(id, client, env) as {
         playabilityStatus?: { status?: string; reason?: string };
         streamingData?: { formats?: { url?: string; mimeType?: string }[]; adaptiveFormats?: { url?: string; mimeType?: string; qualityLabel?: string }[] };
       };
-      if (j.playabilityStatus && j.playabilityStatus.status !== "OK") { lastErr = `playability ${j.playabilityStatus.status}: ${j.playabilityStatus.reason || ""}`; continue; }
+      if (j.playabilityStatus && j.playabilityStatus.status !== "OK") { attempts.push(`${client.clientVersion}:play${j.playabilityStatus.status}`); continue; }
       const formats = [...(j.streamingData?.formats || []), ...(j.streamingData?.adaptiveFormats || [])];
       const withUrl = formats.filter(f => f.url);
-      if (withUrl.length === 0) { lastErr = "no url in formats"; continue; }
+      if (withUrl.length === 0) { attempts.push(`${client.clientVersion}:nourl`); continue; }
       const best = withUrl.find(f => f.mimeType?.includes("mp4") && f.mimeType?.includes("audio")) || withUrl.find(f => f.mimeType?.includes("mp4")) || withUrl[0];
       return best.url!.replace(/\\u0026/g, "&");
-    } catch (e) { lastErr = `req ${client.clientVersion}: ${(e as Error).message}`; }
+    } catch (e) { attempts.push(`${client.clientVersion}:${(e as Error).message}`); }
   }
-  throw new Error(`no stream url (${lastErr})`);
+  throw new Error("no stream url [" + attempts.join(" | ") + "]");
 }
 
 export async function GET(req: NextRequest) {
