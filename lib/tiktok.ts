@@ -34,7 +34,7 @@ async function fetchWithTimeout(url: string, ms = 8000): Promise<Response> {
 async function getTikTokPlayUrl(tiktokUrl: string, onStatus?: (m: string) => void): Promise<string> {
   // YT: usar herramienta YT sin marca
   if (/youtube\.com|youtu\.be/i.test(tiktokUrl)) {
-    const id = (tiktokUrl.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/) || [])[1] || "";
+    const id = (/(?:v=|shorts\/|youtu\.be\/)([A-Za-z0-9_-]{11})/.exec(tiktokUrl) || [])[1] || "";
     if (id) {
       try {
         const baseYT = typeof window !== "undefined" ? "/videos/api/yt" : "/api/yt";
@@ -182,4 +182,10 @@ export async function fetchTikTokClips(
 
   return { clips, errors };
 }
+
+
+
+
+
+
 
