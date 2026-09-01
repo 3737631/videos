@@ -1,0 +1,49 @@
+name: yt-dlp probe
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: YouTube URL/ID to probe
+        required: true
+        default: "9FDVvWR91ww"
+    workflow_call:
+      inputs:
+        url:
+          type: string
+          required: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Install yt-dlp
+        run: |
+          pip install -U yt-dlp
+          yt-dlp --version
+      - name: Probe GET-URL
+        id: probe
+        run: |
+          # Test: can the runner get a stream URL from the datacenter IP?
+          set +e
+          OUT=$(yt-dlp --get-url --skip-download -f "bv*+ba/b" "https://www.youtube.com/watch?v=${{ inputs.url }}" 2>&1)
+          CODE=$?
+          echo "EXIT=$CODE"
+          echo "$OUT"
+          # Report final playability markers found
+          echo "MARKERS:"
+          echo "$OUT" | grep -iE "LOGIN_REQUIRED|UNPLAYABLE|Sign in|not available|Precondition|ERROR|url=" | head -40
+          # Extract a url if present
+          U=$(echo "$OUT" | grep -E "^https://.*googlevideo" | head -1)
+          echo "GOT_URL=${U:0:80}"
+          echo "url_result=$U" >> "$GITHUB_ENV"
+      - name: Actual byte probe
+        run: |
+          set +e
+          U="$url_result"
+          if [ -n "$U" ]; then
+            code=$(curl -s -o /dev/null -w "%{http_code}" -r 0-1023 "$U")
+            echo "RANGED_HTTP=$code"
+          else
+            echo "NO_URL"
+          fi
