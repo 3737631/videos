@@ -15,7 +15,7 @@ on:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 10
     steps:
       - name: Install yt-dlp
         run: |
@@ -70,7 +70,7 @@ jobs:
             URL=$(echo "$OUT" | grep -E "^https" | head -1)
             STATUS=$(echo "$OUT" | grep -oE "playability status: [A-Z_]+" | head -1)
             echo "CLIENT $CLIENT => exit=$CODE status=$STATUS url=${URL:0:70}"
-            echo "$URL" >> /tmp/urls.txt
+            if [ -n "$URL" ]; then echo "$CLIENT|$URL" >> /tmp/urls.txt; fi
           }
           try_client default
           try_client android_vr
@@ -78,6 +78,14 @@ jobs:
           echo "== verbose detalle primer cliente =="
           OUT0=$(yt-dlp -v --proxy "socks5h://127.0.0.1:40000" --get-url --skip-download -f "bv*+ba/b" "$YT_URL" 2>&1)
           echo "$OUT0" | grep -iE "\[debug\] \[youtube\]|playability|nsig|po_token|ExtractorError|player_client" | head -30
+          LINE=$(head -1 /tmp/urls.txt 2>/dev/null || true)
+          if [ -n "$LINE" ]; then
+            CL="${LINE%%|*}"
+            URL="${LINE#*|}"
+            echo "YT_RESULT url=$URL client=$CL"
+          else
+            echo "YT_RESULT none"
+          fi
       - name: Print result
         run: |
           echo "URLs por cliente:"
