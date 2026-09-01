@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
-export const runtime = "nodejs";
+export const runtime = "edge";
 
 const ANDROID_CLIENTS = [
   { clientName: "ANDROID", clientVersion: "21.02.13", androidSdkVersion: 30 },
