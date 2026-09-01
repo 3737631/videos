@@ -4,54 +4,32 @@ export const runtime = "nodejs";
 
 const ANDROID_CLIENTS = [
   { clientName: "ANDROID", clientVersion: "21.02.13", androidSdkVersion: 30 },
+  { clientName: "ANDROID", clientVersion: "20.11.37", androidSdkVersion: 30 },
   { clientName: "ANDROID", clientVersion: "19.09.37", androidSdkVersion: 30 },
-  { clientName: "ANDROID", clientVersion: "18.31.32", androidSdkVersion: 28 },
 ];
 
-async function getWatchCookies(): Promise<{ cookie: string; visitorId: string }> {
-  try {
-    const r = await fetch(`https://www.youtube.com/`, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-      cache: "no-store",
-      signal: AbortSignal.timeout(8000),
-    });
-    const setCookies = (r.headers as unknown as { getSetCookie?: () => string[] }).getSetCookie?.() || [];
-    const cookie = setCookies.map((c: string) => c.split(";")[0]).join("; ");
-    const visitorId = r.headers.get("x-goog-visitor-id") || "";
-    return { cookie, visitorId };
-  } catch { return { cookie: "", visitorId: "" }; }
-}
-
-async function postPlayer(id: string, client: { clientName: string; clientVersion: string; androidSdkVersion?: number }, env: { cookie: string; visitorId: string }) {
+async function postPlayer(id: string, client: { clientName: string; clientVersion: string; androidSdkVersion?: number }) {
   const r = await fetch("https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
       "Accept-Language": "en-US,en;q=0.9",
-      "Referer": "https://www.youtube.com/",
-      "Origin": "https://www.youtube.com",
-      ...(env.cookie ? { "Cookie": env.cookie } : {}),
-      ...(env.visitorId ? { "X-Goog-Visitor-Id": env.visitorId } : {}),
     },
     body: JSON.stringify({ context: { client }, videoId: id }),
     cache: "no-store",
     signal: AbortSignal.timeout(10000),
   });
   const t = await r.text();
-  if (!r.ok) throw new Error(`player http ${r.status}: ${t.slice(0,200)}`);
+  if (!r.ok) throw new Error(`player http ${r.status}: ${t.slice(0,160)}`);
   return JSON.parse(t);
 }
 
 async function getPlayUrl(id: string): Promise<string> {
-  const env = await getWatchCookies();
   const attempts: string[] = [];
   for (const client of ANDROID_CLIENTS) {
     try {
-      const j = await postPlayer(id, client, env) as {
+      const j = await postPlayer(id, client) as {
         playabilityStatus?: { status?: string; reason?: string };
         streamingData?: { formats?: { url?: string; mimeType?: string }[]; adaptiveFormats?: { url?: string; mimeType?: string; qualityLabel?: string }[] };
       };
