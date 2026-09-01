@@ -196,6 +196,19 @@ export default function App() {
       clearMemory(); if(finalVideo) { try{URL.revokeObjectURL(finalVideo)}catch{}; setFinalVideo(null); }
       const clipsArr: VideoClip[] = [];
       const errors: string[] = [];
+      const makeClip = async (blob: Blob, id: string): Promise<boolean> => {
+        if (blob.size < 10000) return false;
+        const file = new File([blob], `yt-${id}.mp4`, { type: blob.type || "video/mp4" });
+        const url2 = URL.createObjectURL(blob);
+        const dur = await new Promise<number>(res2 => {
+          const v = document.createElement("video"); v.preload = "metadata"; v.muted = true; v.playsInline = true; v.src = url2;
+          let done = false; const fin = (d: number) => { if (done) return; done = true; v.removeAttribute("src"); try { v.load() } catch {} res2(d); };
+          v.onloadedmetadata = () => fin(Number.isFinite(v.duration) && v.duration > 2 ? v.duration : 6);
+          v.onerror = () => fin(6); setTimeout(() => fin(6), 3000);
+        });
+        clipsArr.push({ file, url: url2, startOffset: 0, playDuration: Math.min(7, Math.max(4, dur)) });
+        return true;
+      };
       for (const url of ytLinks) {
         const id = (/(v=|shorts\/|youtu\.be\/)([A-Za-z0-9_-]{11})/.exec(url) || [])[2] || "";
         if (!id) { errors.push(url+": ID no válido"); continue; }
@@ -206,24 +219,40 @@ export default function App() {
           const ct = r.headers.get("content-type") || "";
           if (r.ok && !ct.includes("application/json")) {
             const blob=await r.blob();
-            if(blob.size>10000){
-              const file=new File([blob],`yt-${id}.mp4`,{type:blob.type||"video/mp4"});
-              const url2=URL.createObjectURL(blob);
-              const dur=await new Promise<number>(res2=>{
-                const v=document.createElement("video"); v.preload="metadata"; v.muted=true; v.playsInline=true; v.src=url2;
-                let done=false; const fin=(d:number)=>{if(done) return; done=true; v.removeAttribute("src"); try{v.load()}catch{}; res2(d);};
-                v.onloadedmetadata=()=>fin(Number.isFinite(v.duration)&&v.duration>2?v.duration:6);
-                v.onerror=()=>fin(6); setTimeout(()=>fin(6),3000);
-              });
-              clipsArr.push({ file, url: url2, startOffset:0, playDuration: Math.min(7,Math.max(4,dur)) });
-              ok=true;
-            }
+            ok = await makeClip(blob, id);
           }
         } catch {}
-        if (!ok) { errors.push(url); }
+        // Fallback: servidor remoto vía GitHub Actions + WARP (IP no marcada)
+        if (!ok) {
+          let ghErr = "";
+          try {
+            setStatus(`Resolviendo ${id} vía GitHub Actions (WARP)... puede tardar 2-4 min`);
+            const s = await fetch(`${API_BASE}/api/yt-gh?start=1&id=${id}`, { cache: "no-store" });
+            const sj = await s.json();
+            if (sj.runId) {
+              let gotUrl = "";
+              for (let i = 0; i < 45; i++) {
+                await new Promise(r2 => setTimeout(r2, 8000));
+                const p = await fetch(`${API_BASE}/api/yt-gh?run=${sj.runId}`, { cache: "no-store" });
+                const pj = await p.json();
+                if (pj.status === "completed") { gotUrl = pj.url || ""; break; }
+                if (pj.conclusion && pj.conclusion !== "success") { break; }
+              }
+              if (gotUrl) {
+                setStatus(`Descargando ${id} vía GitHub Actions...`);
+                const r2 = await fetch(`${API_BASE}/api/yt-gh?run=${sj.runId}&dl=1&id=${id}`, { cache: "no-store" });
+                const ct2 = r2.headers.get("content-type") || "";
+                if (r2.ok && !ct2.includes("application/json")) {
+                  ok = await makeClip(await r2.blob(), id);
+                }
+              } else { ghErr = "sin URL (workflow no obtuvo stream)"; }
+            } else { ghErr = (sj.error || "sin run") as string; }
+          } catch (e) { ghErr = String(e); }
+          if (!ok) errors.push(ghErr ? `${url} (${ghErr.slice(0, 80)})` : url);
+        }
       }
       if (clipsArr.length===0) {
-        // El servidor de Vercel no puede bajar YT (IP bloqueada). Guiamos a la descarga local.
+        // Ni directo ni GitHub Actions+WARP pudieron resolver el stream.
         throw new Error("YT_BLOCKED:" + errors.join(" | "));
       }
       for(const c of clips) try{URL.revokeObjectURL(c.url)}catch{}
@@ -234,7 +263,7 @@ export default function App() {
     } catch(e){
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.startsWith("YT_BLOCKED:")) {
-        setYtError("YouTube solo permite bajar desde tu PC (IP residencial), no desde el servidor. Descarga el fragmento en máxima calidad gratis con: node yt-local.mjs \"https://www.youtube.com/shorts/ID\" y súbelo en 'O sube tus vídeos'.");
+        setYtError("YouTube ha bloqueado el servidor y el respaldo remoto (GitHub Actions+WARP) no obtuvo el vídeo. Descarga el fragmento gratis con: node yt-local.mjs \"https://www.youtube.com/shorts/ID\" y súbelo en 'O sube tus vídeos'.");
       } else {
         setYtError(msg);
       }

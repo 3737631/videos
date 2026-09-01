@@ -34,23 +34,28 @@ jobs:
         continue-on-error: true
         run: |
           YT_URL="https://www.youtube.com/watch?v=${{ inputs.url }}"
-          # Instalar warp-cli desde el pool noble de Cloudflare (sin depender de ghcr ni repos apt)
+          # Descargar warp desde el pool noble de Cloudflare SIN instalar deps GUI (apt falla por mirrors)
           curl -fsSL "https://pkg.cloudflareclient.com/pool/noble/main/c/cloudflare-warp/cloudflare-warp_2026.7.1377.0_amd64.deb" -o /tmp/warp.deb || true
           ls -la /tmp/warp.deb 2>/dev/null || true
           if [ -s /tmp/warp.deb ]; then
-            sudo dpkg -i /tmp/warp.deb || sudo apt-get install -y -f
+            sudo dpkg-deb -x /tmp/warp.deb /tmp/warp
+            ls /tmp/warp/usr/bin
           fi
-          # En runners GH no hay systemd: arrancar el daemon manualmente
+          echo "WARP LDD warp-svc:"
+          ldd /tmp/warp/usr/bin/warp-svc 2>&1 | grep -i "not found" || echo "all libs present"
+          # En runners GH no hay systemd: arrancar el daemon manualmente con la ruta extraida
           sudo pkill -f warp-svc || true
-          sudo /usr/bin/warp-svc >/tmp/warp-svc.log 2>&1 &
+          sudo /tmp/warp/usr/bin/warp-svc >/tmp/warp-svc.log 2>&1 &
           sleep 8
           echo "WARP SVC PROCS:"
           pgrep -af warp-svc | head -5 || true
-          sudo warp-cli --accept-tos registration new >/dev/null 2>&1 || true
-          sudo warp-cli --accept-tos mode proxy >/dev/null 2>&1 || true
-          sudo warp-cli --accept-tos connect >/dev/null 2>&1 || true
+          echo "WARP SVC LOG (primeras lineas):"
+          tail -5 /tmp/warp-svc.log 2>/dev/null || true
+          sudo /tmp/warp/usr/bin/warp-cli --accept-tos registration new >/dev/null 2>&1 || true
+          sudo /tmp/warp/usr/bin/warp-cli --accept-tos mode proxy >/dev/null 2>&1 || true
+          sudo /tmp/warp/usr/bin/warp-cli --accept-tos connect >/dev/null 2>&1 || true
           echo "WARP STATUS:"
-          sudo warp-cli --accept-tos status 2>&1 | head -8 || true
+          sudo /tmp/warp/usr/bin/warp-cli --accept-tos status 2>&1 | head -8 || true
           sleep 6
           echo "WARP SOCK:"
           sudo ss -tlnp | grep -i 40000 || true

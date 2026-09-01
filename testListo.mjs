@@ -1,0 +1,34 @@
+import { chromium } from "playwright";
+const url = "https://viralcreator.vercel.app/videos";
+await new Promise(r=>setTimeout(r, 30000));
+const browser = await chromium.launch({ headless: false });
+const page = await browser.newPage();
+page.on("console", m=>console.log("B:", m.text()));
+await page.goto(url, { waitUntil: "networkidle" });
+await page.locator('input[placeholder*="tijeras"]').fill("tijeras con laser");
+await page.locator('button:has-text("Buscar")').click();
+console.log("Click Buscar");
+await page.waitForTimeout(4000);
+const frame = page.frameLocator('iframe[title="TikTok"]');
+try {
+  await frame.locator('.card').first().waitFor({ timeout: 10000 });
+  console.log("Cards found");
+  await frame.locator('.card').first().click();
+  console.log("Click first card");
+  await page.waitForTimeout(500);
+  await frame.locator('.card').nth(1).click();
+  console.log("Click second");
+  await page.waitForTimeout(500);
+} catch(e){ console.log("Frame card error", e.message); }
+const listo = page.locator('button:has-text("Listo")');
+console.log("Listo visible", await listo.isVisible().catch(()=>false));
+await listo.click();
+console.log("Click Listo");
+await page.waitForTimeout(4000);
+console.log("Step after Listo, URL:", page.url());
+console.log("Content has Elige modo:", (await page.content()).includes("Elige modo"));
+console.log("Content has Cargando:", (await page.content()).includes("Cargando"));
+await page.screenshot({ path: "C:/Users/Paquito/AppData/Local/Temp/opencode/listo.png", fullPage: true });
+console.log("screenshot listo");
+await page.waitForTimeout(3000);
+await browser.close();
