@@ -49,15 +49,18 @@ jobs:
           sudo warp-cli --accept-tos mode proxy >/dev/null 2>&1 || true
           sudo warp-cli --accept-tos connect >/dev/null 2>&1 || true
           echo "WARP STATUS:"
-          sudo warp-cli status 2>&1 | head -8 || true
+          sudo warp-cli --accept-tos status 2>&1 | head -8 || true
           sleep 6
           echo "WARP SOCK:"
           sudo ss -tlnp | grep -i 40000 || true
+          echo "WARP EXIT TRACE:"
+          timeout 20 curl -s --proxy socks5h://127.0.0.1:40000 https://1.1.1.1/cdn-cgi/trace || echo "socks dead"
           set +e
-          OUT=$(yt-dlp --proxy "socks5://127.0.0.1:40000" --get-url --skip-download -f "bv*+ba/b" "https://www.youtube.com/watch?v=${{ inputs.url }}" 2>&1)
+          OUT=$(yt-dlp -v --proxy "socks5h://127.0.0.1:40000" --get-url --skip-download -f "bv*+ba/b" "https://www.youtube.com/watch?v=${{ inputs.url }}" 2>&1)
           CODE=$?
           echo "WARP_EXIT=$CODE"
-          echo "$OUT" | grep -iE "LOGIN_REQUIRED|UNPLAYABLE|Sign in|not available|Precondition|^https" | head -10
+          echo "$OUT" > /tmp/ytdlp_out.txt
+          grep -iE "LOGIN_REQUIRED|UNPLAYABLE|Sign in|bot|not available|Precondition|ExtractorError|playability|nsig|po_token|player response|^https|\[debug\]|critical" /tmp/ytdlp_out.txt | head -40
           echo "$OUT" | grep -E "^https" | head -1 > /tmp/url.txt
       - name: Print result
         run: |
