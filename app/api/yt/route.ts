@@ -7,7 +7,7 @@ export const runtime = "edge";
 // descifrado de firma, con TODA la calidad. Requiere visitorData + contentCheckOk.
 const CLIENTS = [
   { name: "ANDROID_VR", version: "1.65.10", make: "Oculus", model: "Quest 3", sdk: 32, os: "12L" },
-  { name: "ANDROID_VR", version: "1.60.19", make: "Oculus", model: "Quest 3", sdk: 32, os: "12L" },
+  { name: "ANDROID", version: "20.11.37", sdk: 30 },
   { name: "ANDROID", version: "21.02.13", sdk: 30 },
   { name: "ANDROID", version: "19.09.37", sdk: 30 },
   { name: "IOS", version: "19.29.1" },
@@ -41,9 +41,11 @@ async function postPlayer(id: string, vd: string, c: (typeof CLIENTS)[number]) {
   if (c.model) client.deviceModel = c.model;
   if (c.os) client.osVersion = c.os;
   if (vd) client.visitorData = vd;
+  const headers: Record<string, string> = { "Content-Type": "application/json", "User-Agent": UA[c.name] || ANDROID_UA, "Accept-Language": "en-US,en;q=0.9" };
+  if (vd) headers["X-Goog-Visitor-Id"] = vd;
   const r = await fetch(`https://${PLAYER}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "User-Agent": UA[c.name] || ANDROID_UA, "Accept-Language": "en-US,en;q=0.9" },
+    headers,
     body: JSON.stringify({ context: { client }, videoId: id, contentCheckOk: true, racyCheckOk: true }),
     cache: "no-store",
     signal: AbortSignal.timeout(10000),
@@ -73,23 +75,25 @@ function pickBest(withUrl: Format[]): { priority: string; url: string } | null {
 }
 
 async function getPlay(id: string) {
-  const vd = await visitorData();
   const attempts: string[] = [];
-  for (const c of CLIENTS) {
-    try {
-      const j = await postPlayer(id, vd, c) as {
-        playabilityStatus?: { status?: string; reason?: string };
-        streamingData?: { formats?: Format[]; adaptiveFormats?: Format[] };
-      };
-      const ps = j.playabilityStatus?.status || "?";
-      if (ps !== "OK") { attempts.push(`${c.name}@${c.version}:play${ps}`); continue; }
-      const formats = [...(j.streamingData?.formats || []), ...(j.streamingData?.adaptiveFormats || [])];
-      const withUrl = formats.filter(f => f.url);
-      if (withUrl.length === 0) { attempts.push(`${c.name}@${c.version}:nourl`); continue; }
-      const best = pickBest(withUrl);
-      if (!best) { attempts.push(`${c.name}@${c.version}:nobest`); continue; }
-      return { url: best.url, quality: best.priority, client: `${c.name}@${c.version}`, attempts };
-    } catch (e) { attempts.push(`${c.name}@${c.version}:${(e as Error).message}`); }
+  for (let pass = 0; pass < 2; pass++) {
+    for (const c of CLIENTS) {
+      try {
+        const vd = await visitorData();
+        const j = await postPlayer(id, vd, c) as {
+          playabilityStatus?: { status?: string; reason?: string };
+          streamingData?: { formats?: Format[]; adaptiveFormats?: Format[] };
+        };
+        const ps = j.playabilityStatus?.status || "?";
+        if (ps !== "OK") { attempts.push(`${c.name}@${c.version}:play${ps}`); continue; }
+        const formats = [...(j.streamingData?.formats || []), ...(j.streamingData?.adaptiveFormats || [])];
+        const withUrl = formats.filter(f => f.url);
+        if (withUrl.length === 0) { attempts.push(`${c.name}@${c.version}:nourl`); continue; }
+        const best = pickBest(withUrl);
+        if (!best) { attempts.push(`${c.name}@${c.version}:nobest`); continue; }
+        return { url: best.url, quality: best.priority, client: `${c.name}@${c.version}`, attempts };
+      } catch (e) { attempts.push(`${c.name}@${c.version}:${(e as Error).message}`); }
+    }
   }
   throw new Error("no stream url [" + attempts.join(" | ") + "]");
 }
