@@ -80,17 +80,26 @@ jobs:
           if [ -d /tmp/warp/lib/usr/lib/x86_64-linux-gnu ]; then
             WCLI="env LD_LIBRARY_PATH=/tmp/warp/lib/usr/lib/x86_64-linux-gnu $WSBIN/warp-cli"
           fi
-          sudo $WCLI --accept-tos registration new >/dev/null 2>&1 || true
-          sudo $WCLI --accept-tos mode proxy >/dev/null 2>&1 || true
-          sudo $WCLI --accept-tos connect >/dev/null 2>&1 || true
-          echo "WARP STATUS:"
-          sudo $WCLI --accept-tos status 2>&1 | head -8 || true
-          sleep 6
-          echo "WARP SOCK:"
-          sudo ss -tlnp | grep -i 40000 || true
-          echo "WARP EXIT TRACE:"
-          timeout 20 curl -s --proxy socks5h://127.0.0.1:40000 https://1.1.1.1/cdn-cgi/trace || echo "socks dead"
           set +e
+          sudo $WCLI --accept-tos delete >/dev/null 2>&1 || true
+          warp_up() {
+            for i in 1 2 3; do
+              sudo $WCLI --accept-tos registration new >/dev/null 2>&1 && break
+              sleep 4
+            done
+            sudo $WCLI --accept-tos mode proxy >/dev/null 2>&1 || true
+            sudo $WCLI --accept-tos connect >/dev/null 2>&1 || true
+            for i in $(seq 1 15); do
+              ST=$(sudo $WCLI --accept-tos status 2>/dev/null | grep -iE "Status update" | head -1)
+              echo "$ST" | grep -qi "connected" && break
+              sleep 3
+            done
+            sudo $WCLI --accept-tos status 2>&1 | head -6 || true
+            echo "WARP SOCK:"
+            sudo ss -tlnp | grep -i 40000 || true
+            echo "WARP EXIT TRACE:"
+            timeout 15 curl -s --proxy socks5h://127.0.0.1:40000 https://1.1.1.1/cdn-cgi/trace || echo "socks dead"
+          }
           rm -f /tmp/urls.txt
           try_client() {
             CLIENT="$1"
@@ -106,9 +115,21 @@ jobs:
             echo "CLIENT $CLIENT => exit=$CODE status=$STATUS url=${URL:0:70}"
             if [ -n "$URL" ]; then echo "$CLIENT|$URL" >> /tmp/urls.txt; fi
           }
-          try_client default
-          try_client android_vr
-          try_client android
+          # Reintentos: cada intento re-registra/rota IP de salida de WARP
+          for ATTEMPT in 1 2 3; do
+            echo "=== WARP ATTEMPT $ATTEMPT ==="
+            if [ "$ATTEMPT" -gt 1 ]; then
+              sudo $WCLI --accept-tos disconnect >/dev/null 2>&1 || true
+            fi
+            warp_up
+            sleep 3
+            try_client default
+            try_client android_vr
+            try_client android
+            if [ -s /tmp/urls.txt ]; then break; fi
+            echo "intento $ATTEMPT sin URL; roto IP de salida re-registrando WARP"
+            sudo $WCLI --accept-tos delete >/dev/null 2>&1 || true
+          done
           echo "== verbose detalle primer cliente =="
           OUT0=$(yt-dlp -v --proxy "socks5h://127.0.0.1:40000" --get-url --skip-download -f "bv*+ba/b" "$YT_URL" 2>&1)
           echo "$OUT0" | grep -iE "\[debug\] \[youtube\]|playability|nsig|po_token|ExtractorError|player_client" | head -30

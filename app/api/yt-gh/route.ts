@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import AdmZip from "adm-zip";
 
 // Fallback para IP bloqueada (datacenter Vercel): lanza un workflow de GitHub
 // Actions (yt-probe.yml) que resuelve el stream por WARP (IP no marcada) y
@@ -36,6 +37,23 @@ function pickUrlLine(logText: string): { url: string; client: string } | null {
   const m = /YT_RESULT url=(https:\/\/[^\s]+) client=(\S+)/.exec(logText);
   if (m) return { url: m[1], client: m[2] };
   return null;
+}
+
+// Los logs del run vienen en ZIP (por job/paso); jobs/{id}/logs trunca a ~26KB.
+async function runLogText(runId: string): Promise<string> {
+  const r = await fetch(`${API}/actions/runs/${runId}/logs`, {
+    headers: { ...ghHeaders(), Accept: "application/vnd.github+json" },
+    cache: "no-store",
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!r.ok) throw new Error(`run logs ${r.status}`);
+  const buf = Buffer.from(await r.arrayBuffer());
+  const zip = new AdmZip(buf);
+  return zip
+    .getEntries()
+    .filter((e) => !e.isDirectory && /\d+_.*\.txt$/.test(e.entryName))
+    .map((e) => e.getData().toString("utf8"))
+    .join("\n");
 }
 
 // start=1&id=<videoId>: despacha el workflow y devuelve {runId}
@@ -81,7 +99,7 @@ async function status(req: NextRequest, runId: string) {
   if (req.nextUrl.searchParams.get("dl") === "1") {
     if (!done) return NextResponse.json({ status: "running" });
     if (j.conclusion !== "success" || !job) return NextResponse.json({ status: "failed", message: `run ${j.conclusion}` }, { status: 502 });
-    const log = await ghGet(`/actions/jobs/${job.id}/logs`);
+    const log = await runLogText(runId);
     const hit = pickUrlLine(typeof log === "string" ? log : JSON.stringify(log));
     if (!hit) return NextResponse.json({ status: "failed", message: "YT_RESULT no encontrado (estrategia WARP no obtuvo stream)" }, { status: 502 });
     const res = await fetch(hit.url, {
@@ -106,7 +124,7 @@ async function status(req: NextRequest, runId: string) {
   if (j.conclusion !== "success") {
     return NextResponse.json({ runId: Number(runId), status: "completed", conclusion: j.conclusion });
   }
-  const log = await ghGet(`/actions/jobs/${job.id}/logs`);
+  const log = await runLogText(runId);
   const hit = pickUrlLine(typeof log === "string" ? log : JSON.stringify(log));
   if (!hit) return NextResponse.json({ runId: Number(runId), status: "completed", conclusion: "success", url: null, error: "no YT_RESULT" });
   return NextResponse.json({ runId: Number(runId), status: "completed", conclusion: "success", url: hit.url, client: hit.client });
