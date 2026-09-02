@@ -136,8 +136,13 @@ jobs:
             # Clip: primeras MB del video via WARP (misma IP). Con curl+rango por el SOCKS:
             # ffmpeg no respeta el proxy y sale por IP del runner -> 403. YT mp4 son progresivos.
             echo "CLIP DL:"
-            timeout 60 curl -s --proxy "socks5h://127.0.0.1:40000" -r 0-25165823 "$URL" -o /tmp/clip.mp4
+            # -L: googlevideo a veces responde 302 (rebind de IP); sin -L quedaba 0 bytes.
+            timeout 75 curl -sL --max-redirs 4 --retry 2 --retry-all-errors --connect-timeout 15 --proxy "socks5h://127.0.0.1:40000" -r 0-25165823 "$URL" -o /tmp/clip.mp4 || true
             ls -la /tmp/clip.* 2>/dev/null || echo "clip no descargado"
+            if [ -f /tmp/clip.mp4 ]; then
+              SZ=$(stat -c %s /tmp/clip.mp4)
+              if [ "$SZ" -lt 102400 ]; then echo "clip demasiado pequeno ($SZ bytes); separado"; rm -f /tmp/clip.mp4; fi
+            fi
           else
             echo "YT_RESULT none"
           fi
