@@ -1,0 +1,155 @@
+name: yt-dlp probe
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: YouTube URL/ID to probe
+        required: true
+        default: "9FDVvWR91ww"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install yt-dlp
+        run: |
+          pip install -U yt-dlp
+          yt-dlp --version
+      - name: Probe GET-URL (bare)
+        id: probe
+        continue-on-error: true
+        run: |
+          set +e
+          OUT=$(yt-dlp --get-url --skip-download -f "bv*+ba/b" "https://www.youtube.com/watch?v=${{ inputs.url }}" 2>&1)
+          CODE=$?
+          echo "BARE_EXIT=$CODE"
+          echo "$OUT" | grep -iE "LOGIN_REQUIRED|UNPLAYABLE|Sign in|not available|Precondition|GOT|^https" | head -10
+      - name: Try WARP + retry
+        continue-on-error: true
+        run: |
+          YT_URL="https://www.youtube.com/watch?v=${{ inputs.url }}"
+          # Descargar warp desde el pool noble de Cloudflare SIN instalar deps GUI (apt falla por mirrors)
+          curl -fsSL "https://pkg.cloudflareclient.com/pool/noble/main/c/cloudflare-warp/cloudflare-warp_2026.7.1377.0_amd64.deb" -o /tmp/warp.deb || true
+          ls -la /tmp/warp.deb 2>/dev/null || true
+          if [ -s /tmp/warp.deb ]; then
+            sudo dpkg-deb -x /tmp/warp.deb /tmp/warp
+          fi
+          WSBIN=""
+          for P in /tmp/warp/bin /tmp/warp/usr/bin; do
+            if [ -x "$P/warp-svc" ]; then WSBIN="$P"; break; fi
+          done
+          echo "WSBIN=$WSBIN"
+          # Debs runtime (libtss2) que warp-svc necesita: apt (sin -f, sin GUI) con fallback directo a archive.ubuntu.com
+          sudo apt-get update -qq >/dev/null 2>&1 || true
+          sudo apt-get install -y libtss2-tctildr0t64 libtss2-esys-3.0.2-0t64 >>/tmp/warp-apt.log 2>&1 || true
+          if ldd "$WSBIN/warp-svc" 2>&1 | grep -q "not found"; then
+            echo "apt libs fallidos, bajando debs de archive.ubuntu.com"
+            mkdir -p /tmp/warp/lib
+            curl -fsSL https://archive.ubuntu.com/ubuntu/dists/noble/main/binary-amd64/Packages.gz -o /tmp/pkgs.gz
+            curl -fsSL https://archive.ubuntu.com/ubuntu/dists/noble-updates/main/binary-amd64/Packages.gz -o /tmp/pkgs2.gz
+            for PKG in libtss2-tctildr0t64 libtss2-esys-3.0.2-0t64 libtss2-mu0t64 libtss2-rc0t64 libtss2-sys1t64; do
+              FN=$(zcat /tmp/pkgs.gz /tmp/pkgs2.gz | awk -v P="$PKG" '$0=="Package: "P {f=1} f && /^Filename:/ {print $2; exit}')
+              if [ -n "$FN" ]; then
+                echo "  $PKG -> $FN"
+                curl -fsSL "https://archive.ubuntu.com/ubuntu/$FN" -o /tmp/tss.deb
+                sudo dpkg-deb -x /tmp/tss.deb /tmp/warp/lib
+              fi
+            done
+          fi
+          echo "WARP LDD warp-svc:"
+          ldd "$WSBIN/warp-svc" 2>&1 | grep -i "not found" || echo "all libs present"
+          # En runners GH no hay systemd: arrancar el daemon manualmente desde la ruta extraida
+          sudo pkill -f warp-svc || true
+          if [ -d /tmp/warp/lib/usr/lib/x86_64-linux-gnu ]; then
+            sudo env LD_LIBRARY_PATH=/tmp/warp/lib/usr/lib/x86_64-linux-gnu "$WSBIN/warp-svc" >/tmp/warp-svc.log 2>&1 &
+          else
+            sudo "$WSBIN/warp-svc" >/tmp/warp-svc.log 2>&1 &
+          fi
+          sleep 8
+          echo "WARP SVC PROCS:"
+          pgrep -af warp-svc | head -5 || true
+          echo "WARP SVC LOG (primeras lineas):"
+          tail -5 /tmp/warp-svc.log 2>/dev/null || true
+          WCLI="$WSBIN/warp-cli"
+          if [ -d /tmp/warp/lib/usr/lib/x86_64-linux-gnu ]; then
+            WCLI="env LD_LIBRARY_PATH=/tmp/warp/lib/usr/lib/x86_64-linux-gnu $WSBIN/warp-cli"
+          fi
+          set +e
+          sudo $WCLI --accept-tos delete >/dev/null 2>&1 || true
+          warp_up() {
+            for i in 1 2 3; do
+              sudo $WCLI --accept-tos registration new >/dev/null 2>&1 && break
+              sleep 4
+            done
+            sudo $WCLI --accept-tos mode proxy >/dev/null 2>&1 || true
+            sudo $WCLI --accept-tos connect >/dev/null 2>&1 || true
+            for i in $(seq 1 15); do
+              ST=$(sudo $WCLI --accept-tos status 2>/dev/null | grep -iE "Status update" | head -1)
+              echo "$ST" | grep -qi "connected" && break
+              sleep 3
+            done
+            sudo $WCLI --accept-tos status 2>&1 | head -6 || true
+            echo "WARP SOCK:"
+            sudo ss -tlnp | grep -i 40000 || true
+            echo "WARP EXIT TRACE:"
+            timeout 15 curl -s --proxy socks5h://127.0.0.1:40000 https://1.1.1.1/cdn-cgi/trace || echo "socks dead"
+          }
+          rm -f /tmp/urls.txt
+          try_client() {
+            CLIENT="$1"
+            if [ "$CLIENT" = "default" ]; then
+              ARGS=""
+            else
+              ARGS="--extractor-args youtube:player_client=$CLIENT"
+            fi
+            OUT=$(yt-dlp -v $ARGS --force-ipv4 --proxy "socks5h://127.0.0.1:40000" --get-url --skip-download -f "bv*+ba/b" "$YT_URL" 2>&1)
+            CODE=$?
+            URL=$(echo "$OUT" | grep -E "^https" | head -1)
+            STATUS=$(echo "$OUT" | grep -oE "playability status: [A-Z_]+" | head -1)
+            echo "CLIENT $CLIENT => exit=$CODE status=$STATUS url=${URL:0:70}"
+            if [ -n "$URL" ]; then echo "$CLIENT|$URL" >> /tmp/urls.txt; fi
+          }
+          # Reintentos: cada intento re-registra/rota IP de salida de WARP
+          for ATTEMPT in 1 2 3; do
+            echo "=== WARP ATTEMPT $ATTEMPT ==="
+            if [ "$ATTEMPT" -gt 1 ]; then
+              sudo $WCLI --accept-tos disconnect >/dev/null 2>&1 || true
+            fi
+            warp_up
+            sleep 3
+            try_client default
+            try_client android_vr
+            try_client android
+            if [ -s /tmp/urls.txt ]; then break; fi
+            echo "intento $ATTEMPT sin URL; roto IP de salida re-registrando WARP"
+            sudo $WCLI --accept-tos delete >/dev/null 2>&1 || true
+          done
+          echo "== verbose detalle primer cliente =="
+          OUT0=$(yt-dlp -v --force-ipv4 --proxy "socks5h://127.0.0.1:40000" --get-url --skip-download -f "bv*+ba/b" "$YT_URL" 2>&1)
+          echo "$OUT0" | grep -iE "\[debug\] \[youtube\]|playability|nsig|po_token|ExtractorError|player_client" | head -30
+          LINE=$(head -1 /tmp/urls.txt 2>/dev/null || true)
+          if [ -n "$LINE" ]; then
+            CL="${LINE%%|*}"
+            URL="${LINE#*|}"
+            echo "YT_RESULT url=$URL client=$CL"
+            # Clip: primeras MB del video via WARP (misma IP). Con curl+rango por el SOCKS:
+            # ffmpeg no respeta el proxy y sale por IP del runner -> 403. YT mp4 son progresivos.
+            echo "CLIP DL:"
+            timeout 45 curl -s --proxy "socks5h://127.0.0.1:40000" -r 0-8388607 "$URL" -o /tmp/clip.mp4
+            ls -la /tmp/clip.* 2>/dev/null || echo "clip no descargado"
+          else
+            echo "YT_RESULT none"
+          fi
+      - name: Upload clip artifact
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ytclip
+          path: /tmp/clip.*
+          if-no-files-found: ignore
+          retention-days: 1
+      - name: Print result
+        run: |
+          echo "URLs por cliente:"
+          cat /tmp/urls.txt 2>/dev/null || echo "none"
