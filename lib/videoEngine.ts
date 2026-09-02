@@ -48,7 +48,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
   canvas.height = height;
   canvas.style.cssText = CANVAS_CSS;
   document.body.appendChild(canvas);
-  const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
+  const ctx = canvas.getContext("2d", { alpha: false });
   if (!ctx) throw new Error("Canvas 2D no soportado.");
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, width, height);
@@ -56,6 +56,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
   let dest: MediaStreamAudioDestinationNode | null = null;
   let actualDuration = Math.max(1.2, audioBuffer.duration);
   let voiceDuration = actualDuration;
+  let startAudio: (() => void) | null = null;
   const dynamicCues: SubtitleCue[] = [];
 
   try {
@@ -81,7 +82,9 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
       voiceDuration = actualDuration;
     }
     source.connect(dest);
-    source.start(0);
+    // El audio NO arranca aún: se arranca junto al grabador para arrancar
+    // perfectamente sincronizados (evita negro inicial y voz empezada).
+    startAudio = () => source.start(0);
     if (mode === "voice" && wordChunks && wordChunks.length > 0) {
       const totalChars = wordChunks.reduce((acc, chunk) => acc + chunk.length, 0);
       let acc = 0;
@@ -161,7 +164,6 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
     };
     recorder.onstop = () => setTimeout(finalize, 250);
     recorder.onerror = () => reject(new Error("Error grabador MediaRecorder"));
-    recorder.start(100);
 
     // Precarga todos los clips a la vez para que el cambio sea instantáneo y no trabe
     const preloadAll = async () => {
@@ -238,6 +240,10 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
         }
       };
       drawOnce();
+      // El grabador arranca SOLO cuando ya hay primer frame (sin intro negra)
+      // y el audio justo en ese instante → vídeo y voz quedan sincronizados.
+      recorder.start(100);
+      try { startAudio(); } catch {}
       const drawLoop = () => {
         if (isFinished) return;
         frameId = requestAnimationFrame(drawLoop);

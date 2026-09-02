@@ -103,7 +103,7 @@ jobs:
             else
               ARGS="--extractor-args youtube:player_client=$CLIENT"
             fi
-            OUT=$(yt-dlp -v $ARGS --force-ipv4 --proxy "socks5h://127.0.0.1:40000" --get-url --skip-download -f "bv*+ba/b" "$YT_URL" 2>&1)
+            OUT=$(yt-dlp -v $ARGS --force-ipv4 --proxy "socks5h://127.0.0.1:40000" --get-url --skip-download -f "bv*[height<=720]+ba/b" "$YT_URL" 2>&1)
             CODE=$?
             URL=$(echo "$OUT" | grep -E "^https" | head -1)
             STATUS=$(echo "$OUT" | grep -oE "playability status: [A-Z_]+" | head -1)
@@ -126,7 +126,7 @@ jobs:
             sudo $WCLI --accept-tos delete >/dev/null 2>&1 || true
           done
           echo "== verbose detalle primer cliente =="
-          OUT0=$(yt-dlp -v --force-ipv4 --proxy "socks5h://127.0.0.1:40000" --get-url --skip-download -f "bv*+ba/b" "$YT_URL" 2>&1)
+          OUT0=$(yt-dlp -v --force-ipv4 --proxy "socks5h://127.0.0.1:40000" --get-url --skip-download -f "bv*[height<=720]+ba/b" "$YT_URL" 2>&1)
           echo "$OUT0" | grep -iE "\[debug\] \[youtube\]|playability|nsig|po_token|ExtractorError|player_client" | head -30
           LINE=$(head -1 /tmp/urls.txt 2>/dev/null || true)
           if [ -n "$LINE" ]; then
@@ -136,7 +136,7 @@ jobs:
             # Clip: primeras MB del video via WARP (misma IP). Con curl+rango por el SOCKS:
             # ffmpeg no respeta el proxy y sale por IP del runner -> 403. YT mp4 son progresivos.
             echo "CLIP DL:"
-            timeout 45 curl -s --proxy "socks5h://127.0.0.1:40000" -r 0-8388607 "$URL" -o /tmp/clip.mp4
+            timeout 60 curl -s --proxy "socks5h://127.0.0.1:40000" -r 0-25165823 "$URL" -o /tmp/clip.mp4
             ls -la /tmp/clip.* 2>/dev/null || echo "clip no descargado"
           else
             echo "YT_RESULT none"
