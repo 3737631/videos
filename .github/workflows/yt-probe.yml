@@ -6,11 +6,11 @@ on:
         description: YouTube URL/ID to probe
         required: true
         default: "9FDVvWR91ww"
-    workflow_call:
-      inputs:
-        url:
-          type: string
-          required: true
+  workflow_call:
+    inputs:
+      url:
+        type: string
+        required: true
 
 jobs:
   probe:
