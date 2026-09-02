@@ -1,6 +1,6 @@
 import { RenderConfig, SubtitleCue } from "@/types";
 
-const CANVAS_CSS = "position:absolute;top:0;left:0;width:270px;height:480px;opacity:0.001;pointer-events:none;z-index:-100;";
+const CANVAS_CSS = "position:absolute;top:0;left:0;width:720px;height:1280px;opacity:0.001;pointer-events:none;z-index:-100;";
 
 type ExtCanvasElement = HTMLCanvasElement & {
   captureStream(fps?: number): MediaStream;
@@ -8,11 +8,10 @@ type ExtCanvasElement = HTMLCanvasElement & {
   webkitCaptureStream(fps?: number): MediaStream;
 };
 
-function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number) {
+function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number) {
   const words = text.split(' ');
   let line = '';
   const lines: string[] = [];
-  const lineHeight = 30;
   for (let n = 0; n < words.length; n++) {
     const testLine = line + words[n] + ' ';
     const metrics = ctx.measureText(testLine);
@@ -34,8 +33,9 @@ function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, x: number,
 
 export async function renderFinalVideo(config: RenderConfig): Promise<{ url: string, mimeType: string }> {
   const { clips, audioBuffer, audioContext, mode, wordChunks, onProgress, isFallback } = config;
-  const width = 270;
-  const height = 480;
+  const width = 720;
+  const height = 1280;
+  const R = width / 270;
   const FPS = 30;
   const frameInterval = 1000 / FPS;
 
@@ -119,7 +119,7 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
   for (const m of mimes) if (MediaRecorder.isTypeSupported(m)) { selectedMime = m; break; }
   let recorder: MediaRecorder;
   try {
-    recorder = new MediaRecorder(stream, { mimeType: selectedMime, videoBitsPerSecond: 1500000 });
+    recorder = new MediaRecorder(stream, { mimeType: selectedMime, videoBitsPerSecond: 6000000, audioBitsPerSecond: 128000 });
   } catch {
     recorder = new MediaRecorder(stream);
     selectedMime = recorder.mimeType || "video/webm";
@@ -287,14 +287,14 @@ export async function renderFinalVideo(config: RenderConfig): Promise<{ url: str
           if (mode === "voice" && dynamicCues.length > 0) {
             const cue = dynamicCues.find(c => elapsed >= c.start && elapsed < c.end);
             if (cue?.text) {
-              ctx.font = '900 22px "Inter", sans-serif';
+              ctx.font = `900 ${Math.round(22 * R)}px "Inter", sans-serif`;
               ctx.textAlign = "center";
               ctx.textBaseline = "middle";
               ctx.lineJoin = "round";
-              ctx.lineWidth = 5;
+              ctx.lineWidth = 5 * R;
               ctx.strokeStyle = "#000";
               ctx.fillStyle = "#FFE600";
-              drawWrappedText(ctx, cue.text, width / 2, height * 0.72, 220);
+              drawWrappedText(ctx, cue.text, width / 2, height * 0.72, 220 * R, 30 * R);
             }
           }
         }
