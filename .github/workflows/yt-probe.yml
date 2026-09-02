@@ -140,7 +140,16 @@ jobs:
             echo "YT_RESULT url=$URL client=$CL"
             # Descargar los ~15 primeros segundos via WARP (misma IP) para el clip real
             echo "CLIP DL:"
-            timeout 90 yt-dlp --no-playlist --no-mtime --no-part --force-ipv4 --proxy "socks5h://127.0.0.1:40000" --download-sections "*0-15" -o "/tmp/clip.%(ext)s" "$URL" 2>&1 | tail -5
+            if ! command -v ffmpeg >/dev/null 2>&1; then
+              sudo apt-get update -qq >/dev/null 2>&1 || true
+              sudo apt-get install -y ffmpeg >/dev/null 2>&1 || true
+            fi
+            if command -v ffmpeg >/dev/null 2>&1; then
+              timeout 90 yt-dlp --no-playlist --no-mtime --no-part --force-ipv4 --proxy "socks5h://127.0.0.1:40000" --download-sections "*0-15" -o "/tmp/clip.%(ext)s" "$URL" 2>&1 | tail -5
+            else
+              echo "ffmpeg no instalable; descargando primeras 3MB y cortando en cliente"
+              timeout 40 curl -s --proxy "socks5h://127.0.0.1:40000" -r 0-3145727 "$URL" -o /tmp/clip.mp4
+            fi
             ls -la /tmp/clip.* 2>/dev/null || echo "clip no descargado"
           else
             echo "YT_RESULT none"
