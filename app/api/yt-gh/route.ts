@@ -127,10 +127,16 @@ async function status(req: NextRequest, runId: string) {
   // art=1: sirve el clip real descargado por el runner (artefacto ytclip) — evita el
   // 403 de googlevideo a IPs datacenter (Vercel no puede descargar, el navegador no puede por CORS).
   if (req.nextUrl.searchParams.get("art") === "1") {
-    const arts = await ghGet(`/actions/runs/${runId}/artifacts`) as { artifacts?: { id: number; name: string }[] };
-    const a = (arts.artifacts || []).find((x) => x.name === "ytclip");
+    let a: { id: number; name: string } | undefined;
+    for (let i = 0; i < 6; i++) {
+      const arts = await ghGet(`/actions/runs/${runId}/artifacts`) as { artifacts?: { id: number; name: string }[] };
+      a = (arts.artifacts || []).find((x) => x.name === "ytclip");
+      if (a) break;
+      await sleep(5000);
+    }
     if (!a) return NextResponse.json({ error: "no artifact" }, { status: 502 });
-    const r = await fetch(`${API}/actions/artifacts/${a.id}/zip`, { headers: ghHeaders(), cache: "no-store", signal: AbortSignal.timeout(60000) });
+    let r = await fetch(`${API}/actions/artifacts/${a.id}/zip`, { headers: ghHeaders(), cache: "no-store", signal: AbortSignal.timeout(60000) });
+    for (let i = 1; !r.ok && i < 4; i++) { await sleep(3000); r = await fetch(`${API}/actions/artifacts/${a.id}/zip`, { headers: ghHeaders(), cache: "no-store", signal: AbortSignal.timeout(60000) }); }
     if (!r.ok) return NextResponse.json({ error: "artifact fetch " + r.status }, { status: 502 });
     const zip = new AdmZip(Buffer.from(await r.arrayBuffer()));
     const e = zip.getEntries().find((x) => !x.isDirectory && /\.(mp4|mkv|webm)$/.test(x.entryName));

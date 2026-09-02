@@ -230,22 +230,27 @@ export default function App() {
             const s = await fetch(`${API_BASE}/api/yt-gh?start=1&id=${id}`, { cache: "no-store" });
             const sj = await s.json();
             if (sj.runId) {
-              let gotUrl = "";
+              let done = false;
               for (let i = 0; i < 45; i++) {
                 await new Promise(r2 => setTimeout(r2, 8000));
                 const p = await fetch(`${API_BASE}/api/yt-gh?run=${sj.runId}`, { cache: "no-store" });
                 const pj = await p.json();
-                if (pj.status === "completed") { gotUrl = pj.url || ""; break; }
-                if (pj.conclusion && pj.conclusion !== "success") { break; }
+                if (pj.status === "completed") { done = true; if (pj.conclusion === "success") { gotUrl = pj.url || ""; } break; }
+                if (pj.conclusion && pj.conclusion !== "success") { done = true; break; }
               }
-              if (gotUrl) {
-                setStatus(`Descargando ${id} vía GitHub Actions...`);
-                const r2 = await fetch(`${API_BASE}/api/yt-gh?run=${sj.runId}&art=1&id=${id}`, { cache: "no-store" });
-                const ct2 = r2.headers.get("content-type") || "";
-                if (r2.ok && !ct2.includes("application/json")) {
-                  ok = await makeClip(await r2.blob(), id);
+              if (done) {
+                for (let attempt = 0; attempt < 4; attempt++) {
+                  setStatus(`Descargando ${id} vía GitHub Actions...`);
+                  const r2 = await fetch(`${API_BASE}/api/yt-gh?run=${sj.runId}&art=1&id=${id}`, { cache: "no-store" });
+                  const ct2 = r2.headers.get("content-type") || "";
+                  if (r2.ok && !ct2.includes("application/json")) {
+                    ok = await makeClip(await r2.blob(), id);
+                    break;
+                  }
+                  await new Promise(r3 => setTimeout(r3, 5000));
                 }
-              } else { ghErr = "sin URL (workflow no obtuvo stream)"; }
+                if (!ok) ghErr = gotUrl ? "artefacto no disponible" : "sin stream (workflow no obtuvo vídeo)";
+              } else { ghErr = "tiempo de espera agotado (workflow >6 min)"; }
             } else { ghErr = (sj.error || "sin run") as string; }
           } catch (e) { ghErr = String(e); }
           if (!ok) errors.push(ghErr ? `${url} (${ghErr.slice(0, 80)})` : url);
