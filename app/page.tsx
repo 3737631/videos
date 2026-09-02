@@ -145,7 +145,7 @@ export default function App() {
           if (!ok) {
             let ghErr = "";
             try {
-              setStatus(`Resolviendo ${vid} vía GitHub Actions (WARP)...`);
+              setStatus(`YouTube bloqueó el servidor directo. Descargando ${vid} por vía alternativa: puede tardar 2-4 min, no cierres la página...`);
               const s = await fetch(`${API_BASE}/api/yt-gh?start=1&id=${vid}`, { cache: "no-store" });
               const sj = await s.json();
               if (sj.runId) {
@@ -158,7 +158,7 @@ export default function App() {
                   if (pj.conclusion && pj.conclusion !== "success") { done = true; break; }
                 }
                 for (let attempt = 0; attempt < 4; attempt++) {
-                  setStatus(`Descargando ${vid} vía GitHub Actions...`);
+                  setStatus(`Descargando ${vid} por vía alternativa... (2-4 min, no cierres la página)`);
                   const r2 = await fetch(`${API_BASE}/api/yt-gh?run=${sj.runId}&art=1&id=${vid}`, { cache: "no-store" });
                   const ct2 = r2.headers.get("content-type") || "";
                   if (r2.ok && !ct2.includes("application/json")) {
