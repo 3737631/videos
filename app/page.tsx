@@ -230,6 +230,7 @@ export default function App() {
             const s = await fetch(`${API_BASE}/api/yt-gh?start=1&id=${id}`, { cache: "no-store" });
             const sj = await s.json();
             if (sj.runId) {
+let gotUrl = "";
               let done = false;
               for (let i = 0; i < 45; i++) {
                 await new Promise(r2 => setTimeout(r2, 8000));
