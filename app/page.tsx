@@ -393,8 +393,8 @@ export default function App() {
                       <Link2 className="h-5 w-5 text-white" />
                     </div>
                     <div className="min-w-0">
-                      <h3 className="font-bold">Enlaces de TikTok</h3>
-                      <p className="text-xs text-zinc-400">Pega 1-5 enlaces de Compartir manualmente.</p>
+                      <h3 className="font-bold">Enlaces</h3>
+                      <p className="text-xs text-zinc-400">Pega 1-5 enlaces de TikTok o YouTube.</p>
                     </div>
                   </div>
 
