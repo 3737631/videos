@@ -1,6 +1,6 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
-import { UploadCloud, Wand2, Link2, Loader2, Download, RefreshCcw } from "lucide-react";
+import { UploadCloud, Wand2, Link2, Loader2, Download, RefreshCcw, Mic, Music2, Check, Sparkles, X } from "lucide-react";
 import { VideoClip } from "@/types";
 import { renderFinalVideo } from "@/lib/videoEngine";
 import { generateSpeechAndCues, generateViralMusic } from "@/lib/ttsEngine";
@@ -230,7 +230,7 @@ export default function App() {
             const s = await fetch(`${API_BASE}/api/yt-gh?start=1&id=${id}`, { cache: "no-store" });
             const sj = await s.json();
             if (sj.runId) {
-let gotUrl = "";
+              let gotUrl = "";
               let done = false;
               for (let i = 0; i < 45; i++) {
                 await new Promise(r2 => setTimeout(r2, 8000));
@@ -359,109 +359,317 @@ let gotUrl = "";
 
   const fileInput = useRef<HTMLInputElement>(null);
 
+  const linkChip = (link: string, onRemove: () => void) => (
+    <div key={link} className="flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs">
+      <span className="flex-1 truncate text-left text-zinc-300">{link}</span>
+      <button onClick={onRemove} aria-label="Quitar enlace" className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-zinc-300 transition-colors hover:bg-white/20 hover:text-white"><X className="h-3 w-3" /></button>
+    </div>
+  );
+
+  const fieldClass = "w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-zinc-500 outline-none transition-colors focus:border-fuchsia-500/60 focus:ring-2 focus:ring-fuchsia-500/30";
+
+  const errorBox = (msg: string) => (
+    <div role="alert" className="w-full rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-left text-xs text-rose-300">{msg}</div>
+  );
+
+  const loadingLine = (msg: string) => (
+    <div className="flex w-full items-center justify-start gap-2 text-xs text-zinc-400"><Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" />{msg}</div>
+  );
+
   return (
-    <main className="flex-1 bg-[#09090b] text-white flex flex-col items-center p-4 sm:p-6 py-8">
-      <div className="w-full max-w-xl text-center mb-6">
-        <div className="inline-block bg-purple-500/10 border border-purple-500/30 text-purple-400 px-3 py-1 rounded-full text-xs font-bold mb-3 tracking-widest">CREADOR VIRAL</div>
-        <h1 className="text-4xl font-black bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent">Creador Viral</h1>
-        <p className="text-xs text-zinc-500 mt-2">Crea vídeos virales en segundos</p>
+    <main className="relative flex flex-1 flex-col items-center overflow-hidden bg-[#08080b] px-4 pb-16 pt-10 text-white sm:px-6 sm:pt-14">
+      <div aria-hidden className="pointer-events-none absolute inset-0 -z-0">
+        <div className="absolute -top-44 left-1/2 h-[420px] w-[720px] -translate-x-1/2 rounded-full bg-purple-600/25 blur-[130px]" />
+        <div className="absolute -right-36 top-44 h-[400px] w-[400px] rounded-full bg-fuchsia-600/15 blur-[120px]" />
+        <div className="absolute -left-36 bottom-0 h-[380px] w-[380px] rounded-full bg-pink-600/15 blur-[120px]" />
       </div>
 
-      <div className="w-full max-w-xl bg-zinc-900 border border-zinc-800 rounded-[2rem] p-5 sm:p-8 shadow-2xl">
-        {step===1 && (
-          <div className="space-y-5">
-            {/* Herramienta YT Shorts independiente - arriba */}
-            <div className="border-2 border-dashed border-red-500/30 bg-red-950/10 rounded-3xl p-5 flex flex-col items-center text-center space-y-3">
-              <div className="w-10 h-10 bg-red-600 rounded-full flex items-center justify-center text-white font-black text-sm">YT</div>
-              <h3 className="font-bold text-sm">YouTube Shorts</h3>
-              <p className="text-xs text-zinc-500">Herramienta independiente — igual que TikTok pero con YT</p>
-              <div className="w-full flex gap-2">
-                <input value={ytDraft} onChange={e=>setYtDraft(e.target.value)} onKeyDown={e=>{if(e.key==="Enter") handleAddYt()}} placeholder="https://www.youtube.com/shorts/..." className="flex-1 bg-zinc-900 border border-zinc-800 rounded-full px-4 py-3 text-xs outline-none text-center"/>
-                <button onClick={handleAddYt} className="px-6 py-3 bg-red-600 text-white rounded-full font-bold text-sm">Añadir YT</button>
-              </div>
-              {ytLinks.length>0 && <div className="w-full space-y-2 max-h-[100px] overflow-y-auto">{ytLinks.map((l,i)=><div key={i} className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded-full px-3 py-2 text-xs"><span className="flex-1 truncate text-left">{l}</span><button onClick={()=>setYtLinks(p=>p.filter((_,k)=>k!==i))} className="w-6 h-6 bg-zinc-800 rounded-full">✕</button></div>)}</div>}
-              <button onClick={handleDownloadYt} disabled={ytLoading || ytLinks.length===0} className="w-full py-2.5 bg-red-600 text-white rounded-full font-bold text-sm disabled:opacity-40">Descargar YT sin marca ↓</button>
-              {ytError && <div className="w-full rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">{ytError}</div>}
-              {ytLoading && <div className="text-xs text-zinc-400 flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin"/>{status}</div>}
-            </div>
-            <div className="border-2 border-dashed border-zinc-700 bg-zinc-950/50 rounded-3xl p-6 flex flex-col items-center text-center space-y-3">
-              <div className="w-14 h-14 bg-zinc-800 rounded-full flex items-center justify-center"><Wand2 className="w-7 h-7 text-purple-400"/></div>
-              <h3 className="font-bold">Modo Automático — Bot TikTok</h3>
-              <p className="text-xs text-zinc-500">Escribe producto o sube foto y el bot abrirá TikTok solo</p>
-              <div className="w-full flex gap-2">
-                <input value={autoProduct} onChange={e=>setAutoProduct(e.target.value)} onKeyDown={e=>{if(e.key==="Enter") openOverlay(autoProduct)}} placeholder="ej: tijeras con laser" className="flex-1 bg-zinc-900 border border-zinc-800 rounded-full px-4 py-3 text-sm focus:border-zinc-600 outline-none text-center"/>
-                <button onClick={()=>openOverlay(autoProduct)} className="px-6 py-3 bg-white text-black rounded-full font-bold text-sm hover:bg-zinc-100">Buscar</button>
-              </div>
-              <input ref={photoInputRef} type="file" accept="image/*" className="hidden" onChange={e=>handlePhotoSelect(e.target.files)}/>
-              <button onClick={()=>photoInputRef.current?.click()} className="w-full py-2.5 bg-zinc-900 border border-zinc-800 rounded-full text-xs flex items-center justify-center gap-2"><UploadCloud className="w-4 h-4"/> {autoPhoto ? "Cambiar foto" : "Subir foto del producto"}</button>
-              {autoPhotoPreview && <div className="w-full flex items-center gap-3 bg-zinc-900 border border-zinc-800 rounded-2xl p-2"><img src={autoPhotoPreview} alt="" className="w-14 h-14 rounded-xl object-cover"/><span className="flex-1 text-xs truncate text-left">{autoPhoto?.name}</span><button onClick={()=>{if(autoPhotoPreview) URL.revokeObjectURL(autoPhotoPreview); setAutoPhoto(null); setAutoPhotoPreview(null);}} className="w-7 h-7 bg-zinc-800 rounded-full">✕</button></div>}
-              <div className="w-full py-1 text-[11px] text-zinc-500 text-center">Toca Buscar para elegir vídeos manualmente por encima</div>
-              {tiktokError && <div className="w-full rounded-2xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">{tiktokError}</div>}
-              {status && <div className="text-xs text-zinc-400 flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin"/>{status}</div>}
-              {tiktokLoading && <div className="text-xs text-zinc-400 flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin"/>Descargando sin marca...</div>}
-            </div>
-
-            <div className="border-2 border-dashed border-zinc-700 bg-zinc-950/50 rounded-3xl p-6 flex flex-col items-center text-center space-y-3">
-              <div className="w-14 h-14 bg-zinc-800 rounded-full flex items-center justify-center"><Link2 className="w-7 h-7 text-cyan-400"/></div>
-              <h3 className="font-bold text-sm">O pega enlaces de Compartir manualmente</h3>
-              <p className="text-xs text-zinc-500">Si el bot no pudo, pega 1-5 enlaces de TikTok</p>
-              <div className="w-full flex gap-2">
-                <input value={tiktokDraft} onChange={e=>setTiktokDraft(e.target.value)} onKeyDown={e=>{if(e.key==="Enter") handleAddLink()}} placeholder="https://www.tiktok.com/@user/video/..." className="flex-1 bg-zinc-900 border border-zinc-800 rounded-full px-4 py-3 text-xs outline-none text-center"/>
-                <button onClick={handleAddLink} className="px-6 py-3 bg-white text-black rounded-full font-bold text-sm">Añadir</button>
-              </div>
-              {tiktokLinks.length>0 && <div className="w-full space-y-2 max-h-[140px] overflow-y-auto">{tiktokLinks.map((l,i)=><div key={i} className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded-full px-3 py-2 text-xs"><span className="flex-1 truncate text-left">{l}</span><button onClick={()=>setTiktokLinks(p=>p.filter((_,k)=>k!==i))} className="w-6 h-6 bg-zinc-800 rounded-full">✕</button></div>)}</div>}
-              <button onClick={handleDownload} disabled={tiktokLoading || tiktokLinks.length===0} className="w-full py-3 bg-white text-black rounded-full font-bold text-sm disabled:opacity-40">Descargar sin marca ↓</button>
-              {tiktokError && <div className="w-full rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">{tiktokError}</div>}
-            </div>
-
-            <div className="border border-zinc-800 rounded-3xl p-6 flex flex-col items-center text-center space-y-3">
-              <h3 className="font-bold text-sm">O sube tus vídeos</h3>
-              <input ref={fileInput} type="file" accept="video/*" multiple className="hidden" onChange={e=>handleUpload(e.target.files)}/>
-              <button onClick={()=>fileInput.current?.click()} className="w-full py-3 bg-zinc-800 rounded-full font-bold text-sm">Seleccionar vídeos</button>
-            </div>
+      <div className="relative z-10 w-full max-w-3xl">
+        <header className="mb-8 text-center">
+          <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-1.5 text-[11px] font-bold uppercase tracking-[0.22em] text-fuchsia-300 shadow-[0_0_44px_-12px_rgba(217,70,239,0.6)]">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-gradient-to-r from-fuchsia-400 to-pink-500 motion-reduce:animate-none" />
+            Creador Viral
           </div>
-        )}
+          <h1 className="text-4xl font-black leading-[1.04] tracking-tight sm:text-6xl">
+            <span className="bg-gradient-to-b from-white via-white to-zinc-500 bg-clip-text text-transparent">Tus vídeos se vuelven </span>
+            <span className="bg-gradient-to-r from-fuchsia-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">virales</span>
+          </h1>
+          <p className="mx-auto mt-4 max-w-md text-sm text-zinc-400 sm:text-base">
+            Deja sin marca cualquier vídeo de TikTok o YouTube y añade voz, subtítulos o música en segundos.
+          </p>
+        </header>
 
-        {step===2 && (
-          <div className="space-y-4">
-            <h3 className="font-bold text-center">Elige modo</h3>
-            <div className="grid grid-cols-2 gap-3">
-              <button onClick={()=>setMode("voice")} className={`p-4 rounded-2xl border-2 ${mode==="voice"?"border-purple-500 bg-purple-500/10":"border-zinc-800 bg-zinc-950"}`}>🎙️ Voz</button>
-              <button onClick={()=>setMode("music")} className={`p-4 rounded-2xl border-2 ${mode==="music"?"border-purple-500 bg-purple-500/10":"border-zinc-800 bg-zinc-950"}`}>🎵 Música</button>
-            </div>
-            {mode && (
-              <div className="space-y-3">
-                <textarea value={productPrompt} onChange={e=>setProductPrompt(e.target.value)} placeholder="Describe tu producto para el guion" className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl p-3 text-sm h-20 outline-none"/>
-                <div className="flex gap-2">
-                  <select value={language} onChange={e=>setLanguage(e.target.value)} className="bg-zinc-950 border border-zinc-800 rounded-full px-3 py-2 text-sm"><option value="es">ES</option><option value="en">EN</option><option value="pt">PT</option><option value="fr">FR</option></select>
-                  <select value={totalDuration} onChange={e=>setTotalDuration(Number(e.target.value))} className="flex-1 bg-zinc-950 border border-zinc-800 rounded-full px-3 py-2 text-sm"><option value={7}>7s</option><option value={10}>10s</option><option value={15}>15s</option></select>
+        {step > 1 && (
+          <nav aria-label="Progreso" className="mb-6 flex items-center justify-center gap-2 sm:gap-3">
+            {[
+              { n: 1, label: "Tu vídeo", state: step === 1 ? "current" : "done" },
+              { n: 2, label: "Estilo", state: step === 2 ? "current" : step > 2 ? "done" : "todo" },
+              { n: 3, label: "Vídeo final", state: step === 5 ? "current" : step > 2 ? "running" : "todo" },
+            ].map((s, i) => (
+              <div key={s.n} className="flex items-center gap-2 sm:gap-3">
+                {i > 0 && <div className={`h-px w-6 sm:w-10 ${s.state === "todo" ? "bg-white/10" : "bg-gradient-to-r from-fuchsia-500 to-pink-500"}`} />}
+                <div className="flex flex-col items-center gap-1.5">
+                  <span aria-hidden className={`flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold transition-colors ${s.state === "done" ? "bg-gradient-to-br from-fuchsia-500 to-pink-500 text-white" : s.state === "current" ? "border border-fuchsia-400 text-fuchsia-300" : s.state === "running" ? "border border-white/20 text-zinc-300" : "border border-white/15 text-zinc-500"}`}>
+                    {s.state === "done" ? "✓" : s.n}
+                  </span>
+                  <span className={`text-[10px] font-semibold tracking-wide ${s.state === "todo" ? "text-zinc-600" : "text-zinc-300"}`}>{s.label}</span>
                 </div>
-                <button onClick={processVideo} className="w-full py-3 bg-white text-black rounded-full font-bold">Crear Vídeo</button>
               </div>
-            )}
-          </div>
+            ))}
+          </nav>
         )}
 
-        {step===4 && <div className="py-12 flex flex-col items-center"><div className="w-20 h-20 border-4 border-zinc-800 border-t-purple-500 rounded-full animate-spin mb-4"/><p className="text-sm">{status}</p><p className="text-xs text-zinc-500">{progress}%</p></div>}
-        {step===5 && finalVideo && (
-          <div className="flex flex-col items-center">
-            <div className="w-[260px] h-[460px] bg-black rounded-2xl overflow-hidden border-2 border-zinc-800 mb-4"><video src={finalVideo} controls autoPlay loop playsInline className="w-full h-full object-cover"/></div>
-            <div className="flex w-full gap-3"><button onClick={resetAll} className="flex-1 py-3 bg-zinc-800 rounded-xl font-bold flex items-center justify-center gap-2"><RefreshCcw className="w-4 h-4"/> Otro</button><a href={finalVideo} download={`viral.${videoMimeType.includes("mp4")?"mp4":"webm"}`} className="flex-1 py-3 bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl font-bold flex items-center justify-center gap-2"><Download className="w-4 h-4"/> Guardar</a></div>
-            <button onClick={async()=>{ try{ const r=await fetch(finalVideo); const b=await r.blob(); const f=new File([b],`viral.${videoMimeType.includes("mp4")?"mp4":"webm"}`,{type:b.type}); if((navigator as unknown as {canShare:(d:unknown)=>boolean}).canShare?.({files:[f]})) await (navigator as unknown as {share:(d:unknown)=>Promise<void>}).share({files:[f], title:"Viral"}); else window.open("https://www.tiktok.com/upload","_blank"); }catch{ window.open("https://www.tiktok.com/upload","_blank"); } }} className="w-full mt-3 py-3 bg-black border border-zinc-800 rounded-full font-bold text-sm">Compartir en TikTok ↗</button>
-          </div>
-        )}
+        <div className="relative z-10 rounded-[28px] border border-white/10 bg-[#0d0d12]/90 p-5 shadow-[0_24px_80px_-24px_rgba(168,85,247,0.25)] backdrop-blur-sm sm:p-8">
+          {step === 1 && (
+            <div className="space-y-4">
+              <div className="mb-2">
+                <h2 className="text-lg font-bold tracking-tight">1 · Elige la fuente de tu vídeo</h2>
+                <p className="mt-1 text-xs text-zinc-500">Sin marca, listo para hacerlo viral. Elige una de estas opciones.</p>
+              </div>
+
+              {/* Bot automático TikTok — card principal */}
+              <section className="rounded-3xl border border-fuchsia-500/25 bg-gradient-to-br from-fuchsia-500/[0.08] via-purple-500/[0.05] to-transparent p-5 text-left sm:p-6">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-fuchsia-500 to-purple-600 shadow-[0_8px_24px_-8px_rgba(217,70,239,0.7)]">
+                    <Wand2 className="h-5 w-5 text-white" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="font-bold">Bot TikTok — automático</h3>
+                    <p className="mt-0.5 text-xs text-zinc-400">Escribe el producto y el bot abre TikTok y copia los mejores vídeos.</p>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex gap-2">
+                  <input
+                    value={autoProduct}
+                    onChange={e=>setAutoProduct(e.target.value)}
+                    onKeyDown={e=>{if(e.key==="Enter") openOverlay(autoProduct)}}
+                    placeholder="ej: tijeras con láser"
+                    aria-label="Nombre del producto"
+                    className={fieldClass}
+                  />
+                  <button onClick={()=>openOverlay(autoProduct)} className="shrink-0 rounded-xl bg-white px-5 py-3 text-sm font-bold text-black transition hover:bg-zinc-200">
+                    Buscar
+                  </button>
+                </div>
+
+                <input ref={photoInputRef} type="file" accept="image/*" className="hidden" onChange={e=>handlePhotoSelect(e.target.files)} />
+                <button onClick={()=>photoInputRef.current?.click()} className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-black/30 py-2.5 text-xs text-zinc-300 transition-colors hover:border-white/25 hover:text-white">
+                  <UploadCloud className="h-4 w-4" /> {autoPhoto ? "Cambiar foto" : "…o sube una foto del producto"}
+                </button>
+
+                {autoPhotoPreview && (
+                  <div className="mt-3 flex items-center gap-3 rounded-2xl border border-white/10 bg-black/30 p-2">
+                    <img src={autoPhotoPreview} alt="" className="h-14 w-14 rounded-xl object-cover" />
+                    <span className="min-w-0 flex-1 truncate text-left text-xs text-zinc-300">{autoPhoto?.name}</span>
+                    <button onClick={()=>{if(autoPhotoPreview) URL.revokeObjectURL(autoPhotoPreview); setAutoPhoto(null); setAutoPhotoPreview(null);}} aria-label="Quitar foto" className="flex h-7 w-7 items-center justify-center rounded-full bg-white/10 text-zinc-300 hover:bg-white/20 hover:text-white"><X className="h-3.5 w-3.5" /></button>
+                  </div>
+                )}
+
+                <p className="mt-3 text-left text-[11px] text-zinc-500">Con la foto o el nombre detectamos vídeos relacionados automáticamente.</p>
+                {tiktokError && <div className="mt-3">{errorBox(tiktokError)}</div>}
+                {status && <div className="mt-3">{loadingLine(status)}</div>}
+                {tiktokLoading && !status && <div className="mt-3">{loadingLine("Descargando sin marca...")}</div>}
+              </section>
+
+              {/* YouTube + Enlaces manuales */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <section className="flex flex-col rounded-3xl border border-rose-500/25 bg-gradient-to-b from-rose-500/[0.06] to-transparent p-5 text-left">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#ff0033] text-sm font-black text-white">YT</div>
+                    <div className="min-w-0">
+                      <h3 className="font-bold">YouTube Shorts</h3>
+                      <p className="text-xs text-zinc-400">Pega 1-5 enlaces y sácalos sin marca.</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex gap-2">
+                    <input
+                      value={ytDraft}
+                      onChange={e=>setYtDraft(e.target.value)}
+                      onKeyDown={e=>{if(e.key==="Enter") handleAddYt()}}
+                      placeholder="https://www.youtube.com/shorts/..."
+                      aria-label="Enlace de YouTube"
+                      className={fieldClass}
+                    />
+                    <button onClick={handleAddYt} className="shrink-0 rounded-xl bg-rose-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-rose-500">
+                      + Añadir
+                    </button>
+                  </div>
+
+                  {ytLinks.length>0 && <div className="mt-3 space-y-2">{ytLinks.map((l,i)=>linkChip(l, ()=>setYtLinks(p=>p.filter((_,k)=>k!==i))))}</div>}
+                  {ytError && <div className="mt-3">{errorBox(ytError)}</div>}
+                  {ytLoading && <div className="mt-3">{loadingLine(status)}</div>}
+                  <button onClick={handleDownloadYt} disabled={ytLoading || ytLinks.length===0} className="mt-auto pt-4">
+                    <span className="flex w-full items-center justify-center gap-2 rounded-xl bg-rose-600 py-3 text-sm font-bold text-white transition hover:bg-rose-500 disabled:opacity-40 disabled:hover:bg-rose-600">
+                      <Download className="h-4 w-4" /> Descargar YT sin marca
+                    </span>
+                  </button>
+                </section>
+
+                <section className="flex flex-col rounded-3xl border border-cyan-500/20 bg-gradient-to-b from-cyan-500/[0.05] to-transparent p-5 text-left">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600">
+                      <Link2 className="h-5 w-5 text-white" />
+                    </div>
+                    <div className="min-w-0">
+                      <h3 className="font-bold">Enlaces de TikTok</h3>
+                      <p className="text-xs text-zinc-400">Pega 1-5 enlaces de Compartir manualmente.</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex gap-2">
+                    <input
+                      value={tiktokDraft}
+                      onChange={e=>setTiktokDraft(e.target.value)}
+                      onKeyDown={e=>{if(e.key==="Enter") handleAddLink()}}
+                      placeholder="https://www.tiktok.com/@user/video/..."
+                      aria-label="Enlace de TikTok"
+                      className={fieldClass}
+                    />
+                    <button onClick={handleAddLink} className="shrink-0 rounded-xl bg-cyan-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-cyan-500">
+                      + Añadir
+                    </button>
+                  </div>
+
+                  {tiktokLinks.length>0 && <div className="mt-3 space-y-2">{tiktokLinks.map((l,i)=>linkChip(l, ()=>setTiktokLinks(p=>p.filter((_,k)=>k!==i))))}</div>}
+                  {tiktokError && <div className="mt-3">{errorBox(tiktokError)}</div>}
+                  {tiktokLoading && <div className="mt-3">{loadingLine("Descargando sin marca...")}</div>}
+                  <button onClick={handleDownload} disabled={tiktokLoading || tiktokLinks.length===0} className="mt-auto pt-4">
+                    <span className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-600 py-3 text-sm font-bold text-white transition hover:bg-cyan-500 disabled:opacity-40 disabled:hover:bg-cyan-600">
+                      <Download className="h-4 w-4" /> Descargar sin marca
+                    </span>
+                  </button>
+                </section>
+              </div>
+
+              {/* Subir vídeos */}
+              <section className="rounded-3xl border border-white/10 bg-white/[0.02] p-5 text-left">
+                <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/10">
+                      <UploadCloud className="h-5 w-5 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold">O sube tus vídeos</h3>
+                      <p className="text-xs text-zinc-400">Usa clips propios que ya tengas guardados.</p>
+                    </div>
+                  </div>
+                  <input ref={fileInput} type="file" accept="video/*" multiple className="hidden" onChange={e=>handleUpload(e.target.files)} />
+                  <button onClick={()=>fileInput.current?.click()} className="rounded-xl bg-white px-5 py-2.5 text-sm font-bold text-black transition hover:bg-zinc-200">
+                    Seleccionar vídeos
+                  </button>
+                </div>
+              </section>
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-lg font-bold tracking-tight">2 · Elige el estilo</h2>
+                <p className="mt-1 text-xs text-zinc-500">Cómo quieres que se oiga tu vídeo viral.</p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <button onClick={()=>setMode("voice")} aria-pressed={mode==="voice"} className={`group relative flex flex-col items-start gap-3 rounded-3xl border p-5 text-left transition-all ${mode==="voice" ? "border-fuchsia-500/70 bg-gradient-to-br from-fuchsia-500/15 to-purple-500/5 shadow-[0_0_40px_-10px_rgba(217,70,239,0.5)]" : "border-white/10 bg-white/[0.02] hover:border-white/25"}`}>
+                  {mode==="voice" && <span className="absolute right-4 top-4 flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-br from-fuchsia-500 to-pink-500"><Check className="h-3.5 w-3.5 text-white" /></span>}
+                  <span className={`flex h-12 w-12 items-center justify-center rounded-2xl ${mode==="voice" ? "bg-gradient-to-br from-fuchsia-500 to-pink-500" : "bg-white/10 group-hover:bg-white/15"}`}><Mic className="h-6 w-6 text-white" /></span>
+                  <span className="text-base font-bold">Voz</span>
+                  <span className="text-left text-xs text-zinc-400">Narración con IA afirmativa y subtítulos en pantalla.</span>
+                </button>
+                <button onClick={()=>setMode("music")} aria-pressed={mode==="music"} className={`group relative flex flex-col items-start gap-3 rounded-3xl border p-5 text-left transition-all ${mode==="music" ? "border-fuchsia-500/70 bg-gradient-to-br from-fuchsia-500/15 to-purple-500/5 shadow-[0_0_40px_-10px_rgba(217,70,239,0.5)]" : "border-white/10 bg-white/[0.02] hover:border-white/25"}`}>
+                  {mode==="music" && <span className="absolute right-4 top-4 flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-br from-fuchsia-500 to-pink-500"><Check className="h-3.5 w-3.5 text-white" /></span>}
+                  <span className={`flex h-12 w-12 items-center justify-center rounded-2xl ${mode==="music" ? "bg-gradient-to-br from-fuchsia-500 to-pink-500" : "bg-white/10 group-hover:bg-white/15"}`}><Music2 className="h-6 w-6 text-white" /></span>
+                  <span className="text-base font-bold">Música</span>
+                  <span className="text-left text-xs text-zinc-400">Ritmo pegadizo sin texto, ideal para mostrar solo el producto.</span>
+                </button>
+              </div>
+
+              {mode && (
+                <div className="space-y-4 rounded-3xl border border-white/10 bg-black/30 p-5">
+                  <label className="block">
+                    <span className="mb-1.5 block text-xs font-semibold text-zinc-300">Describe tu producto para el guión</span>
+                    <textarea value={productPrompt} onChange={e=>setProductPrompt(e.target.value)} placeholder="ej: tijeras con láser de precisión que cortan cualquier material" className={`${fieldClass} h-20 resize-none`} />
+                  </label>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                    <label className="flex-1">
+                      <span className="mb-1.5 block text-xs font-semibold text-zinc-300">Idioma</span>
+                      <select value={language} onChange={e=>setLanguage(e.target.value)} className={`${fieldClass} appearance-none`}>
+                        <option value="es">Español</option>
+                        <option value="en">English</option>
+                        <option value="pt">Português</option>
+                        <option value="fr">Français</option>
+                      </select>
+                    </label>
+                    <label className="flex-1">
+                      <span className="mb-1.5 block text-xs font-semibold text-zinc-300">Duración</span>
+                      <select value={totalDuration} onChange={e=>setTotalDuration(Number(e.target.value))} className={`${fieldClass} appearance-none`}>
+                        <option value={7}>7 segundos</option>
+                        <option value={10}>10 segundos</option>
+                        <option value={15}>15 segundos</option>
+                      </select>
+                    </label>
+                    <button onClick={()=>processVideo()} className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-fuchsia-600 via-purple-600 to-pink-600 px-6 py-3.5 text-sm font-bold text-white shadow-[0_10px_30px_-10px_rgba(217,70,239,0.8)] transition hover:brightness-110 sm:w-auto">
+                      <Sparkles className="h-4 w-4" /> Crear vídeo
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {step === 4 && (
+            <div className="flex flex-col items-center py-14 text-center">
+              <div className="relative h-24 w-24">
+                <div className="absolute inset-0 rounded-full border-4 border-white/10" aria-hidden />
+                <div className="absolute inset-0 animate-spin rounded-full border-4 border-transparent border-t-fuchsia-500 border-r-purple-500 motion-reduce:animate-none" aria-hidden />
+                <div className="absolute inset-0 flex items-center justify-center text-lg font-black text-white">{progress}%</div>
+              </div>
+              <p className="mt-6 text-sm font-semibold text-zinc-100">{status}</p>
+              <p className="mt-1 text-xs text-zinc-500">Renderizando a 30 FPS · puede tardar unos segundos</p>
+            </div>
+          )}
+
+          {step === 5 && finalVideo && (
+            <div className="flex flex-col items-center pb-2 pt-2">
+              <div className="relative">
+                <div className="absolute -inset-5 rounded-[40px] bg-gradient-to-br from-fuchsia-500/30 via-purple-500/20 to-pink-500/30 blur-2xl" aria-hidden />
+                <div className="relative h-[460px] w-[270px] overflow-hidden rounded-[30px] border border-white/15 bg-black p-2 shadow-2xl">
+                  <div className="h-full w-full overflow-hidden rounded-[24px] bg-black">
+                    <video src={finalVideo} controls autoPlay loop playsInline className="h-full w-full object-cover" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-8 w-full max-w-md space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <button onClick={resetAll} className="flex items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.03] py-3 text-sm font-bold text-zinc-200 transition hover:border-white/30 hover:text-white">
+                    <RefreshCcw className="h-4 w-4" /> Otro
+                  </button>
+                  <a href={finalVideo} download={`viral.${videoMimeType.includes("mp4")?"mp4":"webm"}`} className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-fuchsia-600 to-pink-600 py-3 text-sm font-bold text-white shadow-[0_10px_30px_-10px_rgba(217,70,239,0.8)] transition hover:brightness-110">
+                    <Download className="h-4 w-4" /> Guardar vídeo
+                  </a>
+                </div>
+                <button onClick={async()=>{ try{ const r=await fetch(finalVideo); const b=await r.blob(); const f=new File([b],`viral.${videoMimeType.includes("mp4")?"mp4":"webm"}`,{type:b.type}); if((navigator as unknown as {canShare:(d:unknown)=>boolean}).canShare?.({files:[f]})) await (navigator as unknown as {share:(d:unknown)=>Promise<void>}).share({files:[f], title:"Viral"}); else window.open("https://www.tiktok.com/upload","_blank"); }catch{ window.open("https://www.tiktok.com/upload","_blank"); } }} className="flex w-full items-center justify-center gap-2 rounded-xl border border-[#25f4ee]/25 bg-[#25f4ee]/5 py-3 text-sm font-bold text-[#7ff8f2] transition hover:border-[#25f4ee]/50 hover:bg-[#25f4ee]/10">
+                  Abrir TikTok y publicar ↗
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {overlayOpen && (
-        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur flex flex-col p-2 sm:p-4">
-          <div className="flex-1 bg-zinc-950 border border-zinc-800 rounded-2xl overflow-hidden flex flex-col max-w-5xl w-full mx-auto">
-            <div className="flex items-center justify-between px-3 py-2 bg-zinc-900 border-b border-zinc-800">
-              <span className="text-xs font-bold">TikTok — &quot;{overlayQuery}&quot; — por encima</span>
-              <button onClick={()=>setOverlayOpen(false)} className="w-8 h-8 bg-zinc-800 rounded-full flex items-center justify-center">✕</button>
+        <div className="fixed inset-0 z-[100] flex flex-col bg-black/85 p-2 backdrop-blur-md sm:p-4">
+          <div className="mx-auto flex h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-white/10 bg-zinc-950">
+            <div className="flex items-center justify-between border-b border-white/10 bg-zinc-900/80 px-4 py-3">
+              <span className="text-xs font-bold text-zinc-200">TikTok — “{overlayQuery}” — elige los que te gusten</span>
+              <button onClick={()=>setOverlayOpen(false)} aria-label="Cerrar" className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-zinc-200 transition hover:bg-white/20 hover:text-white"><X className="h-4 w-4" /></button>
             </div>
-            <div className="flex-1 relative bg-white">
-              <iframe src={`${API_BASE}/api/feed?q=${encodeURIComponent(overlayQuery)}`} className="w-full h-full border-0" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" title="TikTok"/>
-              <div className="absolute bottom-3 left-3 right-3 bg-zinc-950/95 border border-zinc-800 rounded-2xl p-3 flex gap-2">
+            <div className="relative min-h-0 flex-1 bg-white">
+              <iframe src={`${API_BASE}/api/feed?q=${encodeURIComponent(overlayQuery)}`} className="h-full w-full border-0" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" title="TikTok"/>
+              <div className="absolute bottom-3 left-3 right-3 flex gap-2 rounded-2xl border border-white/10 bg-black/90 p-3 backdrop-blur">
                 <button onClick={async()=>{
                   console.log("Listo outer click", { clips: clips.length, tiktokLinks });
                   if (clips.length>0) { console.log("Listo: clips>0 -> Voz"); setOverlayOpen(false); setMode("voice"); setTimeout(()=>processVideo("voice"),400); return; }
@@ -517,7 +725,9 @@ let gotUrl = "";
                   }
                   if (tiktokLinks.length>0) { console.log("Listo: tiktokLinks -> handleDownload"); await handleDownload(); setOverlayOpen(false); setMode("voice"); setTimeout(()=>processVideo("voice"),600); }
                   else { console.log("Listo: no clips/links, just close"); setOverlayOpen(false); }
-                }} className="flex-1 py-2 bg-white text-black rounded-full text-xs font-bold">Listo → Crear viral con Voz</button>
+                }} className="flex-1 rounded-full bg-gradient-to-r from-fuchsia-600 to-pink-600 py-2.5 text-xs font-bold text-white transition hover:brightness-110">
+                  Listo → Crear viral con Voz
+                </button>
               </div>
             </div>
           </div>
@@ -526,83 +736,3 @@ let gotUrl = "";
     </main>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
