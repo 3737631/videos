@@ -46,8 +46,7 @@ export default function App() {
         setTiktokLinks(prev => [...new Set([...prev, ...links])].slice(0,5));
         setTiktokError("");
         return;
-      }
-    };
+      }    };
     window.addEventListener("message", h);
     return () => window.removeEventListener("message", h);
   }, [clips]);
@@ -102,8 +101,8 @@ export default function App() {
   };
 
   const handleAddLink = () => {
-    const found = (tiktokDraft.match(/https?:\/\/[^\s]+/gi) || []).filter(u=>/tiktok\.com|vm\.tiktok/i.test(u));
-    if (found.length===0) { setTiktokError("Solo enlaces de TikTok"); return; }
+    const found = (tiktokDraft.match(/https?:\/\/[^\s]+/gi) || []).filter(u=>/tiktok\.com|vm\.tiktok|youtube\.com|youtu\.be/i.test(u));
+    if (found.length===0) { setTiktokError("Solo enlaces de TikTok o YouTube"); return; }
     const dedup = found.filter(u=>!tiktokLinks.includes(u));
     if (dedup.length===0) { setTiktokError("Ya añadido"); return; }
     if (tiktokLinks.length + dedup.length > 5) { setTiktokError("Máx 5"); return; }
@@ -114,10 +113,92 @@ export default function App() {
     setTiktokError(""); setTiktokLoading(true); setStatus("Descargando sin marca...");
     try {
       clearMemory(); if(finalVideo) { try{URL.revokeObjectURL(finalVideo)}catch{}; setFinalVideo(null); }
-      const { clips: tkClips, errors } = await fetchTikTokClips(tiktokLinks.join("\n"), (m)=>setStatus(m));
-      setClips(tkClips);
-      setTotalDuration(Math.min(15, Math.max(8, Math.round(tkClips.reduce((s,c)=>s+c.playDuration,0)))));
-      if (errors.length) setTiktokError(`Descargados ${tkClips.length} OK. Errores: ${errors.join(" | ").slice(0,200)}`);
+      const ytLinks = tiktokLinks.filter(u=>/youtube\.com|youtu\.be/i.test(u));
+      const tkLinks = tiktokLinks.filter(u=>/tiktok\.com|vm\.tiktok/i.test(u));
+      const allClips: VideoClip[] = [];
+      const allErrors: string[] = [];
+      if (ytLinks.length > 0) {
+        for (const url of ytLinks) {
+          const vid = (/(?:v=|shorts\/|youtu\.be\/)([A-Za-z0-9_-]{11})/.exec(url) || [])[1] || "";
+          if (!vid) { allErrors.push(url+": ID no válido"); continue; }
+          let ok = false;
+          try {
+            setStatus(`Descargando ${vid} sin marca (directo)...`);
+            const r = await fetch(`${API_BASE}/api/yt?id=${vid}`, { cache: "no-store" });
+            const ct = r.headers.get("content-type") || "";
+            if (r.ok && !ct.includes("application/json")) {
+              const blob = await r.blob();
+              if (blob.size > 10000) {
+                const file = new File([blob], `yt-${vid}.mp4`, { type: blob.type || "video/mp4" });
+                const blobUrl = URL.createObjectURL(blob);
+                const dur = await new Promise<number>(res2 => {
+                  const v = document.createElement("video"); v.preload = "metadata"; v.muted = true; v.playsInline = true; v.src = blobUrl;
+                  let done = false; const fin = (d: number) => { if (done) return; done = true; v.removeAttribute("src"); try { v.load() } catch {} res2(d); };
+                  v.onloadedmetadata = () => fin(Number.isFinite(v.duration) && v.duration > 2 ? v.duration : 6);
+                  v.onerror = () => fin(6); setTimeout(() => fin(6), 3000);
+                });
+                allClips.push({ file, url: blobUrl, startOffset: 0, playDuration: Math.min(7, Math.max(4, dur)) });
+                ok = true;
+              }
+            }
+          } catch {}
+          if (!ok) {
+            let ghErr = "";
+            try {
+              setStatus(`Resolviendo ${vid} vía GitHub Actions (WARP)...`);
+              const s = await fetch(`${API_BASE}/api/yt-gh?start=1&id=${vid}`, { cache: "no-store" });
+              const sj = await s.json();
+              if (sj.runId) {
+                let done = false;
+                for (let i = 0; i < 45; i++) {
+                  await new Promise(r2 => setTimeout(r2, 8000));
+                  const p = await fetch(`${API_BASE}/api/yt-gh?run=${sj.runId}`, { cache: "no-store" });
+                  const pj = await p.json();
+                  if (pj.status === "completed") { done = true; if (pj.conclusion === "success") {} break; }
+                  if (pj.conclusion && pj.conclusion !== "success") { done = true; break; }
+                }
+                for (let attempt = 0; attempt < 4; attempt++) {
+                  setStatus(`Descargando ${vid} vía GitHub Actions...`);
+                  const r2 = await fetch(`${API_BASE}/api/yt-gh?run=${sj.runId}&art=1&id=${vid}`, { cache: "no-store" });
+                  const ct2 = r2.headers.get("content-type") || "";
+                  if (r2.ok && !ct2.includes("application/json")) {
+                    const blob = await r2.blob();
+                    if (blob.size > 10000) {
+                      const file = new File([blob], `yt-${vid}.mp4`, { type: blob.type || "video/mp4" });
+                      const blobUrl = URL.createObjectURL(blob);
+                      const dur = await new Promise<number>(res2 => {
+                        const v = document.createElement("video"); v.preload = "metadata"; v.muted = true; v.playsInline = true; v.src = blobUrl;
+                        let done2 = false; const fin = (d: number) => { if (done2) return; done2 = true; v.removeAttribute("src"); try { v.load() } catch {} res2(d); };
+                        v.onloadedmetadata = () => fin(Number.isFinite(v.duration) && v.duration > 2 ? v.duration : 6);
+                        v.onerror = () => fin(6); setTimeout(() => fin(6), 3000);
+                      });
+                      allClips.push({ file, url: blobUrl, startOffset: 0, playDuration: Math.min(7, Math.max(4, dur)) });
+                      ok = true; break;
+                    }
+                  }
+                  await new Promise(r3 => setTimeout(r3, 5000));
+                }
+                if (!ok) ghErr = "artefacto no disponible";
+              } else { ghErr = (sj.error || "sin run") as string; }
+            } catch (e) { ghErr = String(e); }
+            if (!ok) allErrors.push(ghErr ? `${url} (${ghErr.slice(0, 80)})` : url);
+          }
+        }
+      }
+      if (tkLinks.length > 0) {
+        const { clips: tkClips, errors: tkErrors } = await fetchTikTokClips(tkLinks.join("\n"), (m) => setStatus(m));
+        allClips.push(...tkClips);
+        allErrors.push(...tkErrors);
+      }
+      if (allClips.length === 0) {
+        if (allErrors.some(e => e.includes("YT_BLOCKED") || e.includes("GitHub"))) {
+          throw new Error("YouTube ha bloqueado el servidor. Descarga el vídeo con: node yt-local.mjs \"https://www.youtube.com/shorts/ID\" y súbelo en 'O sube tus vídeos'.");
+        }
+        throw new Error(allErrors.join("\n") || "No se pudo descargar ningún vídeo");
+      }
+      clipsRef.current = allClips; setClips(allClips);
+      setTotalDuration(Math.min(15, Math.max(8, Math.round(allClips.reduce((s,c)=>s+c.playDuration,0)))));
+      if (allErrors.length) setTiktokError(`Descargados ${allClips.length} OK. Errores: ${allErrors.join(" | ").slice(0,200)}`);
       setStep(2); setStatus("");
     } catch(e){ setTiktokError(e instanceof Error ? e.message : String(e)); }
     finally { setTiktokLoading(false); setStatus(""); }
@@ -469,11 +550,14 @@ export default function App() {
             <div className="relative min-h-0 flex-1 bg-white">
               <iframe src={`${API_BASE}/api/feed?q=${encodeURIComponent(overlayQuery)}`} className="h-full w-full border-0" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" title="TikTok"/>
               <div className="absolute bottom-3 left-3 right-3 flex gap-2 rounded-2xl border border-white/10 bg-black/90 p-3 backdrop-blur">
-                <button onClick={()=>{
-                  // Listo: solo cierra el overlay. Los enlaces seleccionados ya se
-                  // añadieron a la sección "Enlaces de TikTok" (handler TIKTOK_LINKS).
-                  // El usuario decide cuándo descargar — nunca queda pillado.
+                <button onClick={async()=>{
+                  // Listo: cierra el overlay, descarga los enlaces seleccionados y pasa a estilo
                   setOverlayOpen(false);
+                  if (tiktokLinks.length>0) {
+                    await handleDownload();
+                  } else {
+                    setTiktokError("Selecciona al menos 1 vídeo en el bot");
+                  }
                 }} className="flex-1 rounded-full bg-gradient-to-r from-fuchsia-600 to-pink-600 py-2.5 text-xs font-bold text-white transition hover:brightness-110">
                   Listo — ver mis enlaces
                 </button>
