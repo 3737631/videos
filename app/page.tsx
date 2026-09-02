@@ -240,7 +240,7 @@ export default function App() {
               }
               if (gotUrl) {
                 setStatus(`Descargando ${id} vía GitHub Actions...`);
-                const r2 = await fetch(`${API_BASE}/api/yt-gh?run=${sj.runId}&dl=1&id=${id}`, { cache: "no-store" });
+                const r2 = await fetch(`${API_BASE}/api/yt-gh?run=${sj.runId}&art=1&id=${id}`, { cache: "no-store" });
                 const ct2 = r2.headers.get("content-type") || "";
                 if (r2.ok && !ct2.includes("application/json")) {
                   ok = await makeClip(await r2.blob(), id);

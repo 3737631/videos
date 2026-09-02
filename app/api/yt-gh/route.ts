@@ -124,6 +124,23 @@ async function status(req: NextRequest, runId: string) {
   if (j.conclusion !== "success") {
     return NextResponse.json({ runId: Number(runId), status: "completed", conclusion: j.conclusion });
   }
+  // art=1: sirve el clip real descargado por el runner (artefacto ytclip) — evita el
+  // 403 de googlevideo a IPs datacenter (Vercel no puede descargar, el navegador no puede por CORS).
+  if (req.nextUrl.searchParams.get("art") === "1") {
+    const arts = await ghGet(`/actions/runs/${runId}/artifacts`) as { artifacts?: { id: number; name: string }[] };
+    const a = (arts.artifacts || []).find((x) => x.name === "ytclip");
+    if (!a) return NextResponse.json({ error: "no artifact" }, { status: 502 });
+    const r = await fetch(`${API}/actions/artifacts/${a.id}/zip`, { headers: ghHeaders(), cache: "no-store", signal: AbortSignal.timeout(60000) });
+    if (!r.ok) return NextResponse.json({ error: "artifact fetch " + r.status }, { status: 502 });
+    const zip = new AdmZip(Buffer.from(await r.arrayBuffer()));
+    const e = zip.getEntries().find((x) => !x.isDirectory && /\.(mp4|mkv|webm)$/.test(x.entryName));
+    if (!e) return NextResponse.json({ error: "clip entry missing" }, { status: 502 });
+    const id = req.nextUrl.searchParams.get("id") || "";
+    const ct = e.entryName.endsWith(".webm") ? "video/webm" : e.entryName.endsWith(".mkv") ? "video/x-matroska" : "video/mp4";
+    return new NextResponse(new Uint8Array(e.getData()), {
+      headers: { "Content-Type": ct, "Access-Control-Allow-Origin": "*", "Content-Length": String(e.header.size), "Content-Disposition": `inline; filename="yt-${id}.mp4"` },
+    });
+  }
   const log = await runLogText(runId);
   const hit = pickUrlLine(typeof log === "string" ? log : JSON.stringify(log));
   if (!hit) return NextResponse.json({ runId: Number(runId), status: "completed", conclusion: "success", url: null, error: "no YT_RESULT" });

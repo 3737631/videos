@@ -138,9 +138,21 @@ jobs:
             CL="${LINE%%|*}"
             URL="${LINE#*|}"
             echo "YT_RESULT url=$URL client=$CL"
+            # Descargar los ~15 primeros segundos via WARP (misma IP) para el clip real
+            echo "CLIP DL:"
+            timeout 90 yt-dlp --no-playlist --no-mtime --no-part --download-sections "*0-15" -o "/tmp/clip.%(ext)s" "$URL" 2>&1 | tail -5
+            ls -la /tmp/clip.* 2>/dev/null || echo "clip no descargado"
           else
             echo "YT_RESULT none"
           fi
+      - name: Upload clip artifact
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ytclip
+          path: /tmp/clip.*
+          if-no-files-found: ignore
+          retention-days: 1
       - name: Print result
         run: |
           echo "URLs por cliente:"
